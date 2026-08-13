@@ -772,6 +772,7 @@ function Sources({ founderId, company }) {
   const [err, setErr] = useState(null);
   const [urlInput, setUrlInput] = useState('');
   const [drag, setDrag] = useState(false);
+  const [roomResult, setRoomResult] = useState(null);
 
   const load = useCallback(() => {
     api.getCompanySources(founderId).then(setD).catch((e) => setErr(e.message));
@@ -786,11 +787,24 @@ function Sources({ founderId, company }) {
     finally { setBusy(null); }
   }
 
+  // A data room is a folder of files, not one deck. Ingest them all at once; each
+  // still passes the honesty gate, so the summary reports what was kept vs dropped.
+  async function uploadRoom(files) {
+    setRoomResult(null);
+    await run('room', async () => {
+      const r = await api.uploadDataRoom(founderId, Array.from(files));
+      setRoomResult(r);
+    });
+  }
+
   const onDrop = (e) => {
     e.preventDefault();
     setDrag(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) run('deck', () => api.uploadDeck(founderId, f));
+    const files = e.dataTransfer.files;
+    if (!files?.length) return;
+    // One file → treat as a deck; a folder-drop of several → the data room.
+    if (files.length === 1) run('deck', () => api.uploadDeck(founderId, files[0]));
+    else uploadRoom(files);
   };
 
   const sources = d?.sources || [];
@@ -801,15 +815,27 @@ function Sources({ founderId, company }) {
     <Block
       label={`Everything on this company${sources.length ? ` · ${sources.length}` : ''}`}
       right={
-        <label className="text-mini text-accent hover:text-accent-hover cursor-pointer">
-          {busy === 'deck' ? 'Reading the deck…' : 'Upload a deck'}
-          <input
-            type="file"
-            accept="application/pdf"
-            className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) run('deck', () => api.uploadDeck(founderId, f)); e.target.value = ''; }}
-          />
-        </label>
+        <div className="flex items-center gap-3">
+          <label className="text-mini text-accent hover:text-accent-hover cursor-pointer">
+            {busy === 'deck' ? 'Reading the deck…' : 'Upload a deck'}
+            <input
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) run('deck', () => api.uploadDeck(founderId, f)); e.target.value = ''; }}
+            />
+          </label>
+          <label className="text-mini text-accent hover:text-accent-hover cursor-pointer">
+            {busy === 'room' ? 'Reading the room…' : 'Upload a data room'}
+            <input
+              type="file"
+              accept=".pdf,.txt,.md,.markdown,.csv"
+              multiple
+              className="hidden"
+              onChange={(e) => { const fs = e.target.files; if (fs?.length) uploadRoom(fs); e.target.value = ''; }}
+            />
+          </label>
+        </div>
       }
     >
       {err && (
@@ -842,9 +868,30 @@ function Sources({ founderId, company }) {
           {busy === 'url' && <span className="text-mini text-ink-4">Reading…</span>}
         </div>
         <p className="text-micro text-ink-4 mt-1">
-          Drop a PDF, paste a URL, or press Enter. LinkedIn goes in the field on the right — it blocks crawlers.
+          Drop a PDF, drop several files for a data room, paste a URL, or press Enter. LinkedIn goes in the field on the right — it blocks crawlers.
         </p>
       </div>
+
+      {/* The data-room gate, reported. Kept vs dropped, with the reason each file
+          was dropped — a gate you can't see is indistinguishable from an extractor
+          that found nothing. */}
+      {roomResult && (
+        <div className="rounded border border-line-2 bg-ground-2 px-2 py-2 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-mini text-ink-2">
+              Data room — kept {roomResult.kept} of {roomResult.total}
+              {roomResult.dropped ? `, dropped ${roomResult.dropped}` : ''}
+            </span>
+            <div className="flex-1" />
+            <button onClick={() => setRoomResult(null)} className="text-micro text-ink-4 hover:text-ink">dismiss</button>
+          </div>
+          {roomResult.results?.filter((r) => !r.ok).map((r, i) => (
+            <p key={i} className="text-micro text-ink-4 mt-0.5 leading-relaxed">
+              <span className="text-ink-3">{r.file}</span> — {r.error}
+            </p>
+          ))}
+        </div>
+      )}
 
       {!sources.length ? (
         <Empty>Nothing yet. A deck or a URL is enough to start.</Empty>

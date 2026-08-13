@@ -60,6 +60,55 @@ router.post('/:id/sources/deck', upload.single('file'), async (req, res) => {
   res.json(r);
 });
 
+// ── POST /api/companies/:id/sources/dataroom — multi-file bulk upload ──
+// A data room arrives as a folder of files, not one deck. This is the one new input
+// the rescope adds: drop the whole room in at once. Each file is ingested through the
+// SAME honesty gate as a single upload — a PDF that's really scanned images, or a file
+// too short to be a source, is dropped with a reason rather than fabricated over. The
+// upload is the thing that can't fail; per-file extraction happens after the response.
+//
+// PDFs go through ingestDeck (pdf-parse); text/markdown files go through ingestNote
+// with the filename as the title. Anything else is reported as unsupported, not
+// silently swallowed — a gate you can't see is indistinguishable from one that found
+// nothing.
+router.post('/:id/sources/dataroom', upload.array('files', 40), async (req, res) => {
+  if (!owns(req.user.id, req.params.id)) return res.status(404).json({ error: 'not found' });
+  const files = req.files || [];
+  if (!files.length) return res.status(400).json({ error: 'no files' });
+
+  const founderId = Number(req.params.id);
+  const results = [];
+  for (const f of files) {
+    const name = f.originalname || 'file';
+    const isPdf = /\.pdf$/i.test(name) || f.mimetype === 'application/pdf';
+    const isText = /\.(txt|md|markdown|csv)$/i.test(name) || /^text\//.test(f.mimetype || '');
+
+    let r;
+    if (isPdf) {
+      r = await ingest.ingestDeck({ founderId, buffer: f.buffer, fileName: name, userId: req.user.id });
+    } else if (isText) {
+      // A data-room memo/one-pager: keep its words as a note, titled by the filename.
+      r = ingest.ingestNote({ founderId, text: f.buffer.toString('utf8'), title: name, userId: req.user.id });
+    } else {
+      // PPTX, images, xlsx, etc. can't be text-extracted here — say so honestly rather
+      // than storing an unreadable blob the agents would have to guess at.
+      results.push({ file: name, ok: false, error: `unsupported type — extract text and re-upload as .pdf or .txt` });
+      continue;
+    }
+
+    if (r.error) {
+      results.push({ file: name, ok: false, error: r.error, detail: r.detail });
+      continue;
+    }
+    // Analyse each new source without being asked, after the response is safe.
+    if (r.created && r.id) require('../lib/extract-signals').extractSoon(founderId, r.id, req.user.id);
+    results.push({ file: name, ok: true, kind: isPdf ? 'deck' : 'note', chars: r.chars, created: !!r.created, deduped: !r.created });
+  }
+
+  const kept = results.filter((x) => x.ok).length;
+  res.json({ total: files.length, kept, dropped: files.length - kept, results });
+});
+
 router.post('/:id/sources/note', (req, res) => {
   if (!owns(req.user.id, req.params.id)) return res.status(404).json({ error: 'not found' });
   const r = ingest.ingestNote({

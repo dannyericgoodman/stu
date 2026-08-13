@@ -335,6 +335,20 @@ export const api = {
     invalidate(`/companies/${id}`);
     return d;
   },
+  // Data room — many files at once. Same multipart caveat as uploadDeck.
+  uploadDataRoom: async (id, files) => {
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f);
+    const res = await fetch(`${API_BASE}/companies/${id}/sources/dataroom`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` },
+      body: fd,
+    });
+    const d = await res.json().catch(() => ({ error: 'Upload failed' }));
+    if (!res.ok) { const e = new Error(d.error || 'Upload failed'); e.detail = d.detail; throw e; }
+    invalidate(`/companies/${id}`);
+    return d;
+  },
   extractSignals: (id, sourceId) =>
     after(request(`/companies/${id}/sources/${sourceId}/extract`, { method: 'POST' }), `/companies/${id}`),
   deleteSource: (id, sourceId) =>
