@@ -53,16 +53,27 @@ const BANDS = [
   { key: 'pass', label: 'Pass with respect', hint: 'Pass' },
 ];
 
+const RUNNING_STATES = new Set(['processing_inputs', 'running', 'synthesizing']);
+
 export default function Read() {
   const { id } = useParams();
   const nav = useNavigate();
   const [a, setA] = useState(null);
   const [err, setErr] = useState(null);
 
-  const load = useCallback(() => {
-    api.getAssessment(id).then(setA).catch((e) => setErr(e.message));
-  }, [id]);
-  useEffect(load, [load]);
+  const load = useCallback(
+    () => api.getAssessment(id).then((d) => { setA(d); return d; }).catch((e) => { setErr(e.message); }),
+    [id],
+  );
+  // Poll while the read is still running. Runs take ~5-6 min (nine lenses on Opus), so a
+  // one-shot load would leave a stale "still reading" — or, once unlocked mid-run, the
+  // misleading "predates the engine" state — until a manual refresh.
+  useEffect(() => {
+    let timer;
+    const tick = () => load().then((d) => { if (d && RUNNING_STATES.has(d.status)) timer = setTimeout(tick, 3000); });
+    tick();
+    return () => clearTimeout(timer);
+  }, [load]);
 
   if (err) return <div className="p-4 text-small text-danger">{err}</div>;
   if (!a) return <ReadSkeleton />;
@@ -277,6 +288,11 @@ function TheRead({ assessment: a, locked }) {
     );
   }
 
+  // Still running? Say so — don't fall through to "predates the engine" (which reads as
+  // a stale, never-scored row) while the room is mid-read. Polling flips this to the real
+  // read on completion.
+  if (RUNNING_STATES.has(a.status)) return <StillReading a={a} />;
+
   const conv = parse(a.conviction_output);
 
   // ── Three states for the SCORE. The analysis renders regardless. ──
@@ -314,7 +330,7 @@ function TheRead({ assessment: a, locked }) {
       {/* Lead with the decision, then the room, then the agenda. The panel is the
           felt experience of nine investors weighing in; abstentions are shown, not
           hidden, and every claim carries whether its evidence checked out. */}
-      <Panel panel={a.panel} synthesis={parse(a.synthesis_output)} />
+      <Panel panel={a.panel} bear={a.bear} synthesis={parse(a.synthesis_output)} />
       <Agenda agenda={a.agenda} />
       <Memo a={a} />
       {conv?.calibration && (
@@ -526,13 +542,16 @@ function memoMarkdown(a) {
 
   // The room and its agenda leave the building too — a memo that names which lenses
   // spoke, what they saw, and where they split is one Danny can actually lead IC with.
-  const spoke = (a.panel || []).filter((l) => l.applies !== false && !l.error);
-  if (spoke.length) {
+  const spoke = (a.panel || []).filter((l) => l && l.applies !== false && !l.error);
+  if (spoke.length || (a.bear && !a.bear.error)) {
     L.push('## The room', '');
     for (const l of spoke) {
       L.push(`**${l.label}.** ${[l.verdict, l.read].filter(Boolean).join(' ')}`, '');
     }
-    const sat = (a.panel || []).filter((l) => l.applies === false);
+    if (a.bear && !a.bear.error) {
+      L.push(`**The Bear (adversarial risk).** ${[a.bear.kill_shot_risk, a.bear.narrative].filter(Boolean).join(' ')}`, '');
+    }
+    const sat = (a.panel || []).filter((l) => l && l.applies === false);
     if (sat.length) L.push(`*Sat out: ${sat.map((l) => l.label).join('; ')}.*`, '');
   }
 
@@ -557,6 +576,23 @@ function memoMarkdown(a) {
     L.push('---', '', `*Stu: ${a.conviction_score} — ${labelFor(a.conviction_band)}. This is an evidence-organising score, not a prediction; it has never been checked against an outcome. The judgement is mine.*`);
   }
   return L.join('\n');
+}
+
+function StillReading({ a }) {
+  const stage = a.status === 'synthesizing' ? 'Chairing the room — writing the diligence agenda' : 'Convening the room — nine lenses on the deal';
+  return (
+    <div className="p-2 space-y-3">
+      <div className="text-large font-semibold text-ink">Reading…</div>
+      <p className="text-small text-ink-2 leading-relaxed max-w-md">
+        {stage}. A full read runs the Founder Rubric plus nine investor lenses on the strong model — it takes about five minutes. This updates on its own.
+      </p>
+      <div className="space-y-1.5 pt-1">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="h-2 bg-ground-3 rounded-sm animate-pulse" style={{ width: `${[70, 90, 55, 80, 45][i]}%` }} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function PredatesEngine({ a }) {
@@ -607,15 +643,16 @@ function Held({ conv, a }) {
 // are shown honestly (never padded away), and every lens's claims carry whether
 // their evidence actually checked out against the source.
 // ══════════════════════════════════════════════════════════════════════════
-function Panel({ panel, synthesis }) {
+function Panel({ panel, bear, synthesis }) {
   if (!Array.isArray(panel) || !panel.length) return null;
-  const spoke = panel.filter((l) => l.applies !== false && !l.error);
-  const abstained = panel.filter((l) => l.applies === false && !l.error);
-  const dark = panel.filter((l) => l.error);
+  const spoke = panel.filter((l) => l && l.applies !== false && !l.error);
+  const abstained = panel.filter((l) => l && l.applies === false && !l.error);
+  const dark = panel.filter((l) => l && l.error);
+  const bearSpoke = bear && !bear.error;
 
   return (
     <div className="border-t border-line pt-3">
-      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">The room — nine lenses</div>
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">The room</div>
 
       {/* Disagreement is signal. Surface where the room splits before the cards. */}
       {synthesis?.room_disagreements?.length > 0 && (
@@ -631,6 +668,9 @@ function Panel({ panel, synthesis }) {
 
       <div className="space-y-2">
         {spoke.map((l) => <LensCard key={l.key} lens={l} />)}
+        {/* The Bear is the ninth voice in the room. It keeps its own schema (it alone
+            feeds the score), so it renders as its own card rather than a lens card. */}
+        {bearSpoke && <BearCard bear={bear} />}
       </div>
 
       {/* Honest abstention is a first-class output — a lens with nothing useful to
@@ -672,9 +712,50 @@ function LensCard({ lens: l }) {
       </div>
       {l.verdict && <p className="text-small font-medium text-ink mt-1 leading-relaxed">{l.verdict}</p>}
       {l.read && <p className="text-small text-ink-2 mt-1 leading-relaxed whitespace-pre-wrap">{l.read}</p>}
+      {/* The one lens field that reaches the score. If the Unit-Economics lens calls the
+          market structurally dead, that's the most decision-changing thing it can say —
+          surface it loudly, don't bury it in the read. */}
+      {isTrue(l.structurally_dead) && (
+        <div className="mt-1.5 rounded border border-danger/40 bg-danger/5 px-2 py-1">
+          <span className="text-mini font-semibold text-danger">Structurally dead market.</span>
+          {l.dead_market_note && <span className="text-mini text-ink-2 leading-relaxed"> {l.dead_market_note}</span>}
+        </div>
+      )}
       {l.strengths?.length > 0 && <ClaimList items={l.strengths} mark="+" />}
       {l.risks?.length > 0 && <ClaimList items={l.risks} mark="−" />}
       <Grounding lens={l} />
+    </div>
+  );
+}
+
+// The Bear renders as the ninth card. Its schema differs from the named lenses (it alone
+// feeds bear_adjustment), so it's shaped by hand: the kill shot is the verdict, the
+// narrative is the read, and its enumerated risks fill the risk list.
+function BearCard({ bear: b }) {
+  const risks = (Array.isArray(b.primary_risks) ? b.primary_risks : [])
+    .map((r) => (typeof r === 'string' ? r : [r?.risk, r?.severity && `(${r.severity})`].filter(Boolean).join(' ')))
+    .filter(Boolean);
+  const badNums = b.quote_integrity?.unsupported_numbers;
+  return (
+    <div className="rounded border border-line-2 px-3 py-2">
+      <div className="flex items-baseline gap-2">
+        <span className="text-small font-medium text-ink leading-tight">The Bear (adversarial risk)</span>
+        <div className="flex-1" />
+        <span className="text-micro text-ink-4">Risk</span>
+      </div>
+      {b.kill_shot_risk && <p className="text-small font-medium text-ink mt-1 leading-relaxed">{b.kill_shot_risk}</p>}
+      {b.narrative && <p className="text-small text-ink-2 mt-1 leading-relaxed whitespace-pre-wrap">{b.narrative}</p>}
+      {b.twelve_month_kill?.scenario && (
+        <p className="text-mini text-ink-3 mt-1 leading-relaxed">
+          <span className="text-ink-4">12-month kill{b.twelve_month_kill.probability ? ` (${b.twelve_month_kill.probability})` : ''}:</span> {b.twelve_month_kill.scenario}
+        </p>
+      )}
+      {risks.length > 0 && <ClaimList items={risks} mark="−" />}
+      {badNums?.length > 0 && (
+        <p className="text-micro text-danger mt-1.5 pt-1.5 border-t border-line leading-relaxed">
+          ⚠ Number(s) in the risk prose not found in the source: {badNums.flatMap((x) => x.numbers || []).join(', ')}
+        </p>
+      )}
     </div>
   );
 }
@@ -697,10 +778,15 @@ function ClaimList({ items, mark }) {
 // shown so Danny can trust — or distrust — the evidence behind the read. A clean
 // footer means the quotes checked out; an amber one means a quote or number didn't.
 function Grounding({ lens: l }) {
-  const gi = l.quote_integrity;
   const quotes = l.quote_verification || [];
-  const flagged = gi?.has_unverified || gi?.has_unsupported_numbers;
-  if (!gi && !quotes.length) return null;
+  const badNums = l.unsupported_numbers || [];
+  // Nothing to attest to — don't render an empty bordered strip.
+  if (!quotes.length && !badNums.length) return null;
+
+  // The footer verdict is derived from EXACTLY what's rendered below it — the per-quote
+  // marks and the number flags — so it can never say "clean" above a visible ⚠. (An
+  // earlier version read a separate quote_integrity summary that could disagree.)
+  const clean = quotes.length > 0 && quotes.every((q) => q.verification !== 'unverified') && !badNums.length;
 
   return (
     <div className="mt-1.5 pt-1.5 border-t border-line">
@@ -721,12 +807,12 @@ function Grounding({ lens: l }) {
           ))}
         </div>
       )}
-      {l.unsupported_numbers?.length > 0 && (
+      {badNums.length > 0 && (
         <p className="text-micro text-danger mt-1 leading-relaxed">
-          ⚠ Number{l.unsupported_numbers.length > 1 ? 's' : ''} not in the source: {l.unsupported_numbers.join(', ')}
+          ⚠ Number{badNums.length > 1 ? 's' : ''} not in the source: {badNums.join(', ')}
         </p>
       )}
-      {!flagged && quotes.length > 0 && (
+      {clean && (
         <p className="text-micro text-ink-4 mt-0.5">Grounded — quotes check out against the materials.</p>
       )}
     </div>
@@ -799,6 +885,8 @@ function Status({ a }) {
 
 const parse = (s) => { try { return typeof s === 'string' ? JSON.parse(s) : s; } catch { return null; } };
 const labelFor = (k) => BANDS.find((b) => b.key === k)?.label || k;
+// Mirror the server's isTrue coercion — a boolean field can arrive as the string "true".
+const isTrue = (v) => v === true || v === 'true' || v === 1 || v === '1';
 
 // 90 days. Long enough that a real thing can happen, short enough that he'll
 // still care about the answer.

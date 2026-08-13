@@ -92,6 +92,25 @@ test('PANEL: verifyPanel grounds every non-errored card and skips the dead ones'
   assert.equal(panel[2].quote_integrity, undefined, 'the abstaining card is skipped');
 });
 
+// ── The honesty gate reaches the Bear's nested risk prose ──
+
+test('PANEL: an invented number in the Bear\'s risk prose is flagged, not laundered', () => {
+  const { verifyAllAgents } = require('../agents/verify');
+  const source = 'On the call the founder said they closed four customers in six weeks.';
+  const bear = {
+    // The Bear asserts most numbers in these nested fields — the flat field list never
+    // reached them before, so an invented figure here used to sail through.
+    primary_risks: [{ risk: 'Customer concentration', detail: 'Roughly 90 percent of revenue rides on one logo.' }],
+    twelve_month_kill: { scenario: 'A competitor raises 50 million dollars and undercuts them.' },
+    narrative: 'Adversarial read of the opportunity.',
+  };
+  verifyAllAgents({ bear }, source);
+  const flagged = (bear.quote_integrity?.unsupported_numbers || []).flatMap((x) => x.numbers || []);
+  assert.ok(flagged.includes('90'), 'the invented concentration figure is caught');
+  assert.ok(flagged.includes('50'), 'the invented raise figure is caught');
+  assert.equal(bear.quote_integrity.has_unsupported_numbers, true);
+});
+
 // ── The concurrency pool that paces the room ──
 
 test('PANEL: runPool runs all thunks, preserves order, and never rejects on a throw', async () => {

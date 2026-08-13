@@ -288,6 +288,28 @@ function verifyPanel(panel, context) {
   return panel;
 }
 
+// The Bear asserts most of its numbers in nested fields that verifyAgentQuotes' flat
+// field list never reaches: primary_risks[].detail, twelve_month_kill.scenario,
+// bundling_risk.assessment, assumptions_required[]. Scan those too so an invented figure
+// in the Bear's risk prose is flagged, not laundered — the same gate every other voice gets.
+function verifyBearNumbers(bear, index) {
+  if (!bear || typeof bear !== 'object') return;
+  const proseFields = [
+    bear.twelve_month_kill?.scenario,
+    bear.bundling_risk?.assessment,
+    ...(Array.isArray(bear.primary_risks) ? bear.primary_risks.map((r) => (r && (r.detail || r.risk)) || '') : []),
+    ...(Array.isArray(bear.assumptions_required) ? bear.assumptions_required.map((a) => (a && a.assumption) || '') : []),
+    ...(Array.isArray(bear.failure_scenarios) ? bear.failure_scenarios : []),
+  ];
+  const bad = [...new Set(proseFields.flatMap((t) => unsupportedNumbers(t, index)))];
+  if (!bad.length) return;
+  // Merge into the same quote_integrity summary verifyAgentQuotes already built.
+  bear.quote_integrity = bear.quote_integrity || { total: 0, verbatim: 0, paraphrased: 0, unverified: 0, has_unverified: false };
+  const existing = bear.quote_integrity.unsupported_numbers || [];
+  bear.quote_integrity.unsupported_numbers = [...existing, { field: 'risk_prose', numbers: bad }];
+  bear.quote_integrity.has_unsupported_numbers = true;
+}
+
 /** Run verification across all agent outputs in place. */
 function verifyAllAgents(agentOutputs, context) {
   const index = buildContextIndex(context);
@@ -295,6 +317,9 @@ function verifyAllAgents(agentOutputs, context) {
     if (agentOutputs[key] && !agentOutputs[key].error) {
       verifyAgentQuotes(agentOutputs[key], index);
     }
+  }
+  if (agentOutputs.bear && !agentOutputs.bear.error) {
+    verifyBearNumbers(agentOutputs.bear, index);
   }
   if (agentOutputs.rubric && !agentOutputs.rubric.error) {
     verifyRubricQuotes(agentOutputs.rubric, index);

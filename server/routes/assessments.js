@@ -177,9 +177,12 @@ router.get('/:id', (req, res) => {
     ...assessment,
     decision: decision || null,
     // The room + its agenda, parsed server-side so the client, the 7-M builder, and
-    // the vault export all read one shape. Null on pre-panel assessments.
+    // the vault export all read one shape. Null on pre-panel assessments. `bear` is the
+    // ninth voice — it keeps its own schema (it alone feeds the score), so it rides
+    // alongside the panel rather than inside it.
     panel: parseJsonColumn(assessment.panel_output),
     agenda: parseJsonColumn(assessment.agenda_output),
+    bear: parseJsonColumn(assessment.bear_agent_output),
     memo_7m: buildMemo7M(assessment),
     defensibility: buildDefensibility(assessment),
   });
@@ -940,12 +943,15 @@ async function runAssessmentAgents(assessmentId, founderId) {
     // framework never ran unless you knew to click it.)
     //
     // It is not in the parallel batch, for a reason a live end-to-end run taught me:
-    // firing all five at once made the rubric — the one agent whose output IS the
-    // verdict — time out competing with four agents whose output is only commentary.
-    // It completes in ~60s when it isn't fighting them for the rate limit. Giving the
-    // critical path a clean shot costs ~60s of wall clock and buys the thing actually
-    // working. If the rubric dies, there is no verdict to produce, so we fail fast
-    // rather than spend four more calls on depth nobody will read.
+    // firing everything at once made the rubric — the one agent whose output IS the
+    // verdict — time out competing with the others for the rate limit. It completes in
+    // ~60s when it isn't fighting them. Giving the critical path a clean shot costs ~60s
+    // of wall clock and buys the thing actually working.
+    //
+    // If the rubric dies there is no SCORE — but the room still runs. Under the rescope
+    // the nine lenses + the bucketed agenda are a real deliverable on their own (that is
+    // exactly what an indeterminate read produces), so a dead rubric yields "no score,
+    // here is the room and the agenda", not a skipped depth layer.
     const settle = (r, name) =>
       r.status === 'fulfilled' ? r.value : { error: r.reason?.message || `${name} agent failed` };
 
@@ -958,7 +964,7 @@ async function runAssessmentAgents(assessmentId, founderId) {
     }
     const rubricOut = settle(rubricResult, 'Founder Rubric');
     if (rubricOut.error) {
-      console.error(`[Assessment ${assessmentId}] rubric agent failed (${rubricOut.error}) — skipping the depth layer, there is no verdict to explain`);
+      console.error(`[Assessment ${assessmentId}] rubric agent failed (${rubricOut.error}) — no conviction score; the room + agenda still run as the deliverable`);
     }
 
     // ── The room: nine named lenses ──
@@ -1055,7 +1061,10 @@ async function runAssessmentAgents(assessmentId, founderId) {
       movements: rubricFailed ? {} : (rubricOut?.movements || {}),
       rung: evidence.rung,
       marketRisk: {
-        structurally_dead: gurley.structurally_dead === true,
+        // Pass the RAW value — computeConviction's isTrue() coerces true/"true"/1/"1".
+        // Pre-coercing here with `=== true` would silently drop a dead-market signal the
+        // model emitted as the string "true", which is exactly the dock this feeds.
+        structurally_dead: gurley.structurally_dead,
         note: gurley.dead_market_note || null,
       },
       bearAdjustment: bearOut?.bear_adjustment ?? 0,
@@ -1091,7 +1100,26 @@ async function runAssessmentAgents(assessmentId, founderId) {
 
       // The bucketed agenda gets its own column so the UI and the vault export can
       // render it as a first-class deliverable, not buried inside the summary blob.
-      const agenda = synthesis.agenda && typeof synthesis.agenda === 'object' ? synthesis.agenda : null;
+      // NORMALIZE top_priorities into it: panelSynthesis's schema puts top_priorities as
+      // a SIBLING of agenda, but the model sometimes nests it inside. Fold it in from
+      // wherever it landed so agenda_output always carries it — otherwise the memo's
+      // Conditions section and the UI's "start here" both read agenda.top_priorities and
+      // silently get nothing.
+      const rawAgenda = synthesis.agenda && typeof synthesis.agenda === 'object' ? synthesis.agenda : null;
+      const agenda = rawAgenda
+        ? {
+            ...rawAgenda,
+            top_priorities: (Array.isArray(rawAgenda.top_priorities) && rawAgenda.top_priorities.length)
+              ? rawAgenda.top_priorities
+              : (Array.isArray(synthesis.top_priorities) ? synthesis.top_priorities : []),
+          }
+        : null;
+
+      // A synthesis that couldn't be parsed (returns {error} without throwing) has no
+      // summary and no agenda — it must not read as a clean 'complete'. Treat it like a
+      // failed voice so the header shows "partial" rather than a finished assessment.
+      const synthesisFailed = !!synthesis.error;
+      if (synthesisFailed) console.error(`[Assessment ${assessmentId}] panel synthesis failed to parse — marking partial`);
 
       db.prepare(`UPDATE opportunity_assessments SET
         synthesis_output = ?, agenda_output = ?, overall_signal = ?, status = ?, updated_at = CURRENT_TIMESTAMP
@@ -1100,8 +1128,9 @@ async function runAssessmentAgents(assessmentId, founderId) {
         JSON.stringify(synthesis),
         agenda ? JSON.stringify(agenda) : null,
         synthesis.overall_signal,
-        // A voice that died must not masquerade as a completed assessment.
-        failedVoices.length ? 'partial' : 'complete',
+        // A voice that died — or a synthesis that couldn't be read — must not masquerade
+        // as a completed assessment.
+        (failedVoices.length || synthesisFailed) ? 'partial' : 'complete',
         assessmentId
       );
     } catch (err) {

@@ -802,8 +802,10 @@ function Sources({ founderId, company }) {
     setDrag(false);
     const files = e.dataTransfer.files;
     if (!files?.length) return;
-    // One file → treat as a deck; a folder-drop of several → the data room.
-    if (files.length === 1) run('deck', () => api.uploadDeck(founderId, files[0]));
+    // Route by type, not just count: a lone PDF is a deck; a lone .txt/.md/.csv or any
+    // multi-file drop is a data room. (Routing a single non-PDF to the PDF-only deck
+    // endpoint would 400.)
+    if (files.length === 1 && /\.pdf$/i.test(files[0].name)) run('deck', () => api.uploadDeck(founderId, files[0]));
     else uploadRoom(files);
   };
 
@@ -879,15 +881,15 @@ function Sources({ founderId, company }) {
         <div className="rounded border border-line-2 bg-ground-2 px-2 py-2 mb-3">
           <div className="flex items-center gap-2">
             <span className="text-mini text-ink-2">
-              Data room — kept {roomResult.kept} of {roomResult.total}
+              Data room — kept {roomResult.kept ?? 0} of {roomResult.total ?? 0}
               {roomResult.dropped ? `, dropped ${roomResult.dropped}` : ''}
             </span>
             <div className="flex-1" />
             <button onClick={() => setRoomResult(null)} className="text-micro text-ink-4 hover:text-ink">dismiss</button>
           </div>
-          {roomResult.results?.filter((r) => !r.ok).map((r, i) => (
+          {(roomResult.results || []).filter((r) => !r.ok).map((r, i) => (
             <p key={i} className="text-micro text-ink-4 mt-0.5 leading-relaxed">
-              <span className="text-ink-3">{r.file}</span> — {r.error}
+              <span className="text-ink-3">{r.file || 'a file'}</span> — {r.error || 'could not be read'}
             </p>
           ))}
         </div>

@@ -330,6 +330,7 @@ export const api = {
       headers: { Authorization: `Bearer ${getToken()}` },
       body: fd,
     });
+    if (res.status === 401) { setToken(null); setUser(null); window.location.href = '/login'; throw new Error('Session expired'); }
     const d = await res.json().catch(() => ({ error: 'Upload failed' }));
     if (!res.ok) { const e = new Error(d.error || 'Upload failed'); e.detail = d.detail; throw e; }
     invalidate(`/companies/${id}`);
@@ -344,6 +345,7 @@ export const api = {
       headers: { Authorization: `Bearer ${getToken()}` },
       body: fd,
     });
+    if (res.status === 401) { setToken(null); setUser(null); window.location.href = '/login'; throw new Error('Session expired'); }
     const d = await res.json().catch(() => ({ error: 'Upload failed' }));
     if (!res.ok) { const e = new Error(d.error || 'Upload failed'); e.detail = d.detail; throw e; }
     invalidate(`/companies/${id}`);
