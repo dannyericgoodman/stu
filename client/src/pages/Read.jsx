@@ -78,9 +78,8 @@ export default function Read() {
   if (err) return <div className="p-4 text-small text-danger">{err}</div>;
   if (!a) return <ReadSkeleton />;
 
-  // Has Danny already ruled? If so the read is unlocked — the blind window has
-  // closed and re-hiding it would just be theatre.
-  const decided = !!a.decision;
+  const conv = parse(a.conviction_output);
+  const running = RUNNING_STATES.has(a.status);
 
   return (
     <div className="flex flex-col h-full">
@@ -99,23 +98,120 @@ export default function Read() {
         <Status a={a} />
       </div>
 
-      <div className="grid grid-cols-2 flex-1 min-h-0 divide-x divide-line-2">
-        <YourCall assessment={a} onDecided={load} />
-        <TheRead assessment={a} locked={!decided} />
+      {/* One flowing page: the experts' read is the point, shown immediately. Headline
+          facts + verdict up top; your own call is an optional annotation, not a gate. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-4xl mx-auto p-4 space-y-5">
+          <Headline a={a} conv={conv} running={running} />
+          {!running && (
+            <>
+              <YourCallInline assessment={a} onDecided={load} />
+              <ReadBody a={a} conv={conv} />
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// HEADLINE — the facts a partner asks for first: what it is, who's building it,
+// the round, the site — and the verdict. Then the deep dive below stands on its own.
+// ══════════════════════════════════════════════════════════════════════════
+function Headline({ a, conv, running }) {
+  const c = a.company || {};
+  const name = c.name || a.founder_company || a.founder_name || 'Untitled';
+  return (
+    <div>
+      <div className="flex items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-display text-ink leading-tight">{name}</h1>
+          {c.one_liner && <p className="text-regular text-ink-2 mt-1 leading-relaxed max-w-2xl">{c.one_liner}</p>}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-small">
+            {c.founder && <span className="text-ink-2 font-medium">{c.founder}{c.role ? `, ${c.role}` : ''}</span>}
+            {c.location && <span className="text-ink-3">· {c.location}</span>}
+            {c.website && <a href={extUrl(c.website)} target="_blank" rel="noreferrer" className="text-accent hover:text-accent-hover">{cleanUrl(c.website)} ↗</a>}
+            {c.linkedin && <a href={extUrl(c.linkedin)} target="_blank" rel="noreferrer" className="text-accent hover:text-accent-hover">LinkedIn ↗</a>}
+          </div>
+          <RoundRow c={c} />
+        </div>
+      </div>
+
+      {/* The verdict, front and center. */}
+      <div className="mt-4 rounded border border-line-2 bg-ground-2 p-3">
+        {running ? <StillReading a={a} />
+          : !a.conviction_output ? <PredatesEngine a={a} />
+          : !conv?.determinate ? <Held conv={conv} a={a} />
+          : <Verdict conv={conv} />}
+      </div>
+    </div>
+  );
+}
+
+// Deal facts, shown only where present — a just-typed founder has none of this yet.
+function RoundRow({ c }) {
+  const bits = [
+    c.stage,
+    c.round_size != null && `${fmtMoney(c.round_size)} round`,
+    c.valuation != null && `${fmtMoney(c.valuation)}${c.security_type ? ` ${c.security_type}` : ''} valuation`,
+    c.investment_amount != null && `${fmtMoney(c.investment_amount)} our check`,
+    c.arr != null && `${fmtMoney(c.arr)} ARR`,
+  ].filter(Boolean);
+  if (!bits.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {bits.map((b, i) => (
+        <span key={i} className="text-mini text-ink-2 bg-ground-3 rounded px-2 py-0.5">{b}</span>
+      ))}
+    </div>
+  );
+}
+
+// The deep dive — the analysis that makes the IC memo. Always visible once the read is done.
+function ReadBody({ a, conv }) {
+  return (
+    <>
+      <Defensibility parts={a.defensibility} />
+      {conv?.determinate && <Movements conv={conv} />}
+      {conv?.determinate && <Docks conv={conv} />}
+      <Panel panel={a.panel} bear={a.bear} synthesis={parse(a.synthesis_output)} />
+      <Agenda agenda={a.agenda} />
+      <Memo a={a} />
+      {conv?.calibration && (
+        <p className="text-micro text-ink-4 leading-relaxed border-t border-line pt-3">{conv.calibration}</p>
+      )}
+    </>
+  );
+}
+
+// $ formatting that tolerates both raw dollars (15000000) and shorthand millions (15).
+function fmtMoney(n) {
+  if (n == null || isNaN(Number(n))) return null;
+  const v = Number(n);
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(v % 1e9 ? 1 : 0)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(v % 1e6 ? 1 : 0)}M`;
+  if (v >= 1e3) return `$${Math.round(v / 1e3)}K`;
+  if (v > 0) return `$${v}M`; // a small figure is almost always entered in millions
+  return null;
+}
+const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
+const cleanUrl = (u) => String(u).replace(/^https?:\/\//i, '').replace(/\/$/, '');
+
+// ══════════════════════════════════════════════════════════════════════════
 // LEFT — YOUR CALL. His column. Stu never writes here.
 // ══════════════════════════════════════════════════════════════════════════
-function YourCall({ assessment: a, onDecided }) {
+// Your own call — now an OPTIONAL annotation, not a gate. Collapsed by default so the
+// experts' read is the point; expand to log your verdict + a dated prediction for the
+// decision journal. (The blind-first version hid the read until you'd recorded this; per
+// Danny that's gone — you just want the evaluation.)
+function YourCallInline({ assessment: a, onDecided }) {
   const d = a.decision;
-  const [band, setBand] = useState(d?.band || '');
-  const [rationale, setRationale] = useState(d?.rationale || '');
-  const [prediction, setPrediction] = useState(d?.prediction || '');
-  const [resolveBy, setResolveBy] = useState(d?.resolve_by || defaultResolveBy());
+  const [open, setOpen] = useState(false);
+  const [band, setBand] = useState('');
+  const [rationale, setRationale] = useState('');
+  const [prediction, setPrediction] = useState('');
+  const [resolveBy, setResolveBy] = useState(defaultResolveBy());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -124,108 +220,82 @@ function YourCall({ assessment: a, onDecided }) {
     setSaving(true);
     try {
       await api.createDecision({
-        founder_id: a.founder_id,
-        assessment_id: a.id,
+        founder_id: a.founder_id, assessment_id: a.id,
         band, rationale, prediction, resolve_by: resolveBy,
       });
       onDecided();
     } catch (e) {
-      // The server refuses a decision with no prediction and says why. Surface
-      // its sentence rather than a generic failure — the refusal IS the teaching.
+      // The server refuses a decision with no prediction and says why. Surface its
+      // sentence rather than a generic failure — the refusal IS the teaching.
       setError(e.detail ? `${e.message} ${e.detail}` : e.message);
     } finally {
       setSaving(false);
     }
   }
 
+  // Already recorded → show it (compact), with the you-vs-Stu gap.
   if (d) return <DecisionMade decision={d} stuBand={a.conviction_band} stuScore={a.conviction_score} />;
 
   return (
-    <div className="overflow-y-auto p-4 space-y-5">
-      <div>
-        <h2 className="text-large font-semibold text-ink">Your call</h2>
-        <p className="text-small text-ink-3 mt-1 max-w-md leading-relaxed">
-          Before you read Stu's. You've seen the deck and taken the call — that view is the
-          one worth recording, and it stops being yours the moment you read a number.
-        </p>
-      </div>
-
-      {/* The rubric's own separate gate, quoted from Brain/02 Frameworks:
-          "We don't invest in founders we don't want to be around, or whose vision
-          doesn't resonate." It is deliberately not part of the quality score. */}
-      <div className="rounded border border-line-2 bg-ground-2 px-3 py-2">
-        <p className="text-small text-ink-2 leading-relaxed">
-          Would you want to work with them for ten years — and would you take this call again
-          if there were no deal in it?
-        </p>
-      </div>
-
-      <div>
-        <label className="label">Your verdict</label>
-        <div className="space-y-1">
-          {BANDS.map((b) => (
-            <button
-              key={b.key}
-              onClick={() => setBand(b.key)}
-              className={`w-full flex items-baseline gap-2 px-2 h-row rounded text-left transition ${
-                band === b.key ? 'bg-ground-4 text-ink' : 'text-ink-2 hover:bg-ground-3'
-              }`}
-            >
-              <span className="text-small font-medium w-32">{b.label}</span>
-              <span className="text-mini text-ink-4">{b.hint}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <label className="label">Why — one line</label>
-        <textarea
-          className="textarea"
-          rows={3}
-          placeholder="What actually decided it?"
-          value={rationale}
-          onChange={(e) => setRationale(e.target.value)}
-        />
-      </div>
-
-      {/* ── The required prediction. This is the whole design of the metric. ──
-          A pass without a dated checkable claim is a reflex, not a decision. His
-          most common kill is a ten-second "cool but indefensible", and a bare
-          pass=+1 would pay him to fire it faster. In 12 months the prediction is
-          the only thing that can tell a good pass from a fast one. */}
-      <div>
-        <label className="label">A dated, checkable claim</label>
-        <textarea
-          className="textarea"
-          rows={2}
-          placeholder="Something that will be provably right or wrong. Not &quot;they'll do well&quot; — &quot;they'll have 3 paying customers by October.&quot;"
-          value={prediction}
-          onChange={(e) => setPrediction(e.target.value)}
-        />
-        <div className="flex items-center gap-2 mt-2">
-          <span className="text-mini text-ink-4">We find out on</span>
-          <input
-            type="date"
-            className="input w-40"
-            value={resolveBy}
-            onChange={(e) => setResolveBy(e.target.value)}
-          />
-        </div>
-      </div>
-
-      {error && <p className="text-small text-danger leading-relaxed">{error}</p>}
-
-      <button
-        onClick={submit}
-        disabled={saving || !band}
-        className="btn-primary w-full justify-center"
-      >
-        {saving ? 'Recording…' : 'Record my verdict and show me Stu’s'}
+    <div className="rounded border border-line-2">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-3 py-2 text-left">
+        <span className="text-small font-medium text-ink">{open ? '▾' : '▸'} Your call</span>
+        <span className="text-mini text-ink-4">optional — log your verdict + a dated prediction</span>
       </button>
-      <p className="text-micro text-ink-4">
-        Recorded first, so the disagreement means something. You can't un-see a score.
-      </p>
+      {open && (
+        <div className="px-3 pb-3 space-y-4 border-t border-line-2 pt-3">
+          <div className="rounded border border-line-2 bg-ground-2 px-3 py-2">
+            <p className="text-small text-ink-2 leading-relaxed">
+              Would you want to work with them for ten years — and would you take this call again
+              if there were no deal in it?
+            </p>
+          </div>
+
+          <div>
+            <label className="label">Your verdict</label>
+            <div className="grid grid-cols-2 gap-1">
+              {BANDS.map((b) => (
+                <button
+                  key={b.key}
+                  onClick={() => setBand(b.key)}
+                  className={`flex flex-col px-2 py-1.5 rounded text-left transition ${
+                    band === b.key ? 'bg-ground-4 text-ink' : 'text-ink-2 hover:bg-ground-3'
+                  }`}
+                >
+                  <span className="text-small font-medium">{b.label}</span>
+                  <span className="text-mini text-ink-4">{b.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Why — one line</label>
+            <textarea className="textarea" rows={2} placeholder="What actually decided it?"
+              value={rationale} onChange={(e) => setRationale(e.target.value)} />
+          </div>
+
+          {/* The dated prediction is the whole point of the decision journal — a pass
+              without a checkable claim is a reflex; in 12 months this is the only thing
+              that tells a good call from a fast one. The server requires it. */}
+          <div>
+            <label className="label">A dated, checkable claim</label>
+            <textarea className="textarea" rows={2}
+              placeholder="Provably right or wrong. Not &quot;they'll do well&quot; — &quot;they'll have 3 paying customers by October.&quot;"
+              value={prediction} onChange={(e) => setPrediction(e.target.value)} />
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-mini text-ink-4">We find out on</span>
+              <input type="date" className="input w-40" value={resolveBy} onChange={(e) => setResolveBy(e.target.value)} />
+            </div>
+          </div>
+
+          {error && <p className="text-small text-danger leading-relaxed">{error}</p>}
+
+          <button onClick={submit} disabled={saving || !band} className="btn-primary justify-center">
+            {saving ? 'Recording…' : 'Record my call'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -233,109 +303,35 @@ function YourCall({ assessment: a, onDecided }) {
 function DecisionMade({ decision: d, stuBand, stuScore }) {
   const disagreed = stuBand && stuBand !== 'indeterminate' && stuBand !== d.band;
   return (
-    <div className="overflow-y-auto p-4 space-y-5">
+    <div className="rounded border border-line-2 p-3 space-y-3">
       <div className="flex items-baseline gap-2">
-        <h2 className="text-large font-semibold text-ink">Your call</h2>
+        <span className="text-small font-medium text-ink">Your call</span>
+        <div className={`band band-${d.band}`}>{labelFor(d.band)}</div>
         <span className="text-mini text-ink-4">{String(d.decided_at).slice(0, 10)}</span>
       </div>
 
-      <div>
-        <div className={`band band-${d.band} text-large`}>{labelFor(d.band)}</div>
-        {d.rationale && <p className="text-regular text-ink mt-2 leading-relaxed">{d.rationale}</p>}
-      </div>
+      {d.rationale && <p className="text-small text-ink-2 leading-relaxed">{d.rationale}</p>}
 
-      {/* The gap. The only artifact here that compounds. */}
+      {/* The gap. The one artifact here that compounds. */}
       {disagreed && (
-        <div className="rounded border border-line-2 px-3 py-2">
-          <div className="text-micro font-semibold uppercase text-ink-4 mb-1">You and Stu disagree</div>
+        <div className="rounded border border-line-2 bg-ground-2 px-3 py-2">
           <p className="text-small text-ink-2 leading-relaxed">
             You said <span className="font-medium text-ink">{labelFor(d.band)}</span>. Stu read{' '}
             <span className="font-medium text-ink">{labelFor(stuBand)}</span>
             {stuScore != null && <span className="num"> ({stuScore})</span>}.
-            {' '}This is the row worth keeping — in a year it's the only thing that can say who was right.
+            {' '}In a year the prediction below is the only thing that can say who was right.
           </p>
         </div>
       )}
 
       <div>
-        <div className="text-micro font-semibold uppercase text-ink-4 mb-1">Your prediction</div>
-        <p className="text-regular text-ink leading-relaxed">{d.prediction}</p>
+        <div className="text-micro font-semibold uppercase text-ink-4 mb-0.5">Your prediction</div>
+        <p className="text-small text-ink leading-relaxed">{d.prediction}</p>
         <p className="text-mini text-ink-3 mt-1">
           We find out on <span className="num">{d.resolve_by}</span>
-          {d.outcome && d.outcome !== 'unresolved' && (
-            <span className="text-ink"> · you were {d.outcome}</span>
-          )}
+          {d.outcome && d.outcome !== 'unresolved' && <span className="text-ink"> · you were {d.outcome}</span>}
         </p>
       </div>
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// RIGHT — THE READ. Stu's. Locked until Danny has ruled.
-// ══════════════════════════════════════════════════════════════════════════
-function TheRead({ assessment: a, locked }) {
-  if (locked) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <div className="max-w-xs text-center">
-          <p className="text-small text-ink-3 leading-relaxed">
-            Stu's assessment is here. It stays covered until you've recorded yours — otherwise
-            the disagreement measures how much you anchor, not who was right.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // Still running? Say so — don't fall through to "predates the engine" (which reads as
-  // a stale, never-scored row) while the room is mid-read. Polling flips this to the real
-  // read on completion.
-  if (RUNNING_STATES.has(a.status)) return <StillReading a={a} />;
-
-  const conv = parse(a.conviction_output);
-
-  // ── Three states for the SCORE. The analysis renders regardless. ──
-  //
-  // "No score" means one of two completely different things and the screen must
-  // never conflate them: either the engine RAN and honestly held for lack of
-  // evidence, or the row predates the engine and was never scored at all. Saying
-  // "not enough evidence" about a run that never happened is the same lie this
-  // rebuild exists to remove.
-  //
-  // But my first pass returned EARLY on both, which threw away the whole read —
-  // and 14 of Danny's 18 assessments predate the engine. Those rows have a
-  // complete team/product/market/bear analysis and a defensibility section; only
-  // the conviction NUMBER is absent. Hiding four months of real work because one
-  // field is null is its own kind of dishonesty: it renders "we know nothing"
-  // when the truth is "we know a lot and haven't scored it."
-  //
-  // So the score header is conditional. Everything below it is not.
-  return (
-    <div className="overflow-y-auto p-4 space-y-5">
-      {!a.conviction_output ? (
-        <PredatesEngine a={a} />
-      ) : !conv?.determinate ? (
-        <Held conv={conv} a={a} />
-      ) : (
-        <Verdict conv={conv} />
-      )}
-
-      {/* Above the movements, deliberately. "Cool but indefensible" is his most
-          common kill and the fastest one to fire — it should be the first thing
-          he can check the machine against, not something he finds at memo time. */}
-      <Defensibility parts={a.defensibility} />
-      {conv?.determinate && <Movements conv={conv} />}
-      {conv?.determinate && <Docks conv={conv} />}
-      {/* Lead with the decision, then the room, then the agenda. The panel is the
-          felt experience of nine investors weighing in; abstentions are shown, not
-          hidden, and every claim carries whether its evidence checked out. */}
-      <Panel panel={a.panel} bear={a.bear} synthesis={parse(a.synthesis_output)} />
-      <Agenda agenda={a.agenda} />
-      <Memo a={a} />
-      {conv?.calibration && (
-        <p className="text-micro text-ink-4 leading-relaxed border-t border-line pt-3">{conv.calibration}</p>
-      )}
     </div>
   );
 }
@@ -581,7 +577,7 @@ function memoMarkdown(a) {
 function StillReading({ a }) {
   const stage = a.status === 'synthesizing' ? 'Chairing the room — writing the diligence agenda' : 'Convening the room — nine lenses on the deal';
   return (
-    <div className="p-2 space-y-3">
+    <div className="space-y-2">
       <div className="text-large font-semibold text-ink">Reading…</div>
       <p className="text-small text-ink-2 leading-relaxed max-w-md">
         {stage}. A full read runs the Founder Rubric plus nine investor lenses on the strong model — it takes about five minutes. This updates on its own.
@@ -613,7 +609,7 @@ function PredatesEngine({ a }) {
 
 function Held({ conv, a }) {
   return (
-    <div className="p-4 space-y-3">
+    <div className="space-y-3">
       <div>
         <div className="text-large font-semibold text-ink">No score</div>
         <p className="text-small text-ink-2 mt-1 leading-relaxed max-w-md">

@@ -120,8 +120,15 @@ router.get('/group/:groupId', (req, res) => {
 
 // ── GET /api/assessments/:id — single assessment with full data ──
 router.get('/:id', (req, res) => {
+  // Widen the founder JOIN for the headline: the Read page leads with company/founder/
+  // round facts, not just the name. (The narrow SELECT was the "headline info missing"
+  // gap — everything below is already on the founder record.)
   const assessment = db.prepare(`
-    SELECT a.*, f.name as founder_name, f.company as founder_company
+    SELECT a.*,
+      f.name as founder_name, f.company as founder_company, f.role as founder_role,
+      f.website_url, f.linkedin_url, f.company_linkedin_url, f.domain,
+      f.location_city, f.location_state, f.stage, f.company_one_liner,
+      f.round_size, f.valuation, f.investment_amount, f.security_type, f.arr
     FROM opportunity_assessments a
     LEFT JOIN founders f ON a.founder_id = f.id
     WHERE a.id = ? AND a.is_deleted = 0 AND a.created_by = ?
@@ -183,6 +190,24 @@ router.get('/:id', (req, res) => {
     panel: parseJsonColumn(assessment.panel_output),
     agenda: parseJsonColumn(assessment.agenda_output),
     bear: parseJsonColumn(assessment.bear_agent_output),
+    // The headline facts, one tidy object. Any field may be null (a just-typed founder
+    // has almost nothing yet) — the UI shows only what's present.
+    company: {
+      name: assessment.founder_company || null,
+      founder: assessment.founder_name || null,
+      role: assessment.founder_role || null,
+      website: assessment.website_url || null,
+      linkedin: assessment.company_linkedin_url || assessment.linkedin_url || null,
+      domain: assessment.domain || null,
+      location: [assessment.location_city, assessment.location_state].filter(Boolean).join(', ') || null,
+      stage: assessment.stage || null,
+      one_liner: assessment.company_one_liner || null,
+      round_size: assessment.round_size ?? null,
+      valuation: assessment.valuation ?? null,
+      investment_amount: assessment.investment_amount ?? null,
+      security_type: assessment.security_type || null,
+      arr: assessment.arr ?? null,
+    },
     memo_7m: buildMemo7M(assessment),
     defensibility: buildDefensibility(assessment),
   });
