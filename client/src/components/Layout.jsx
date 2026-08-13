@@ -29,28 +29,26 @@ import { api, fetchAppVersion } from '../utils/api';
 //   Talent    genuinely separate: different people, inverted lens, and the
 //             customer is Danny's founders rather than Danny
 //
-// Assess is reachable from a company card. It stays in the nav only until the
-// card can launch a read on its own; dropping it sooner would remove the only way
-// to start one, which is a regression wearing a simplification's clothes.
 const navConfig = [
-  // ── Three doors, three jobs, zero dead ones. ──
+  // ── The doors Danny opens every morning. ──
   //
-  // ASSESS came out. This file's own comment already conceded the case — "Assess
-  // is reachable from a company card. It stays in the nav only until the card can
-  // launch a read on its own." That shipped: CompanyCard has "Assess this
-  // company". A nav item now opens a company PICKER, which is the Discover mistake
-  // — a search box you have to already know the answer to. An assessment is not a
-  // destination; it's something you do TO a company. The route stays; the door goes.
+  // ASSESS is back in the nav (Danny's call, 2026-08-13). It came out on the theory
+  // that "an assessment is something you do TO a company, not a destination", and that
+  // a nav item would just open a company picker you have to already know the answer to.
+  // But with assessment rescoped to the nine-lens expert panel it IS a product worth a
+  // front door, and the /assess hub is a real destination: it lists every past read AND
+  // its intake lets you pick any sourced founder OR type a brand-new one and run a read
+  // — the picker concern is answered by supporting create-new inline. You can still
+  // assess from a company card; this is the fast path in.
   //
   // TALENT came out. 304 candidates and 57 matches against ONE role and ONE
   // portfolio company. It's a different product for a different customer — his
-  // founders, not him — and it doesn't belong beside the three screens he opens
-  // every morning. Moved to the utility menu until there's a second req.
-  //
-  // Every dead door is a reason not to open the building.
+  // founders, not him — and it doesn't belong beside the screens he opens every
+  // morning. Moved to the utility menu until there's a second req.
   { to: '/', label: 'Home' },
   { to: '/sourcing', label: 'Sourcing' },
   { to: '/pipeline', label: 'Pipeline' },
+  { to: '/assess', label: 'Assess' },
 ];
 const utilityConfig = [
   { to: '/talent', label: 'Talent' },
