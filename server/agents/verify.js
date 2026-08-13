@@ -237,6 +237,57 @@ function verifyRubricQuotes(rubric, index) {
   return rubric;
 }
 
+/**
+ * Verify one named-lens card from the expert panel. Each lens makes grounded
+ * claims and surfaces verbatim `quotes` as evidence; this classifies those quotes
+ * against the source and flags invented numbers in the lens's prose — the exact
+ * same deterministic gate the rubric and depth agents get, so a lens cannot launder
+ * a fabrication into the room. Mutates and returns the lens object.
+ *
+ * An ABSTAINING lens (applies:false) makes no claims, so there is nothing to check —
+ * it's left untouched.
+ */
+function verifyLensCard(lens, index) {
+  if (!lens || typeof lens !== 'object' || lens.applies === false) return lens;
+  const idx = index && index.normContext ? index : buildContextIndex(index);
+
+  const quotes = Array.isArray(lens.quotes) ? lens.quotes : [];
+  const counts = { verbatim: 0, paraphrased: 0, unverified: 0 };
+  lens.quote_verification = quotes.map((q) => {
+    const text = typeof q === 'string' ? q : (q.quote || q.text || '');
+    const verdict = classifyQuote(text, idx);
+    counts[verdict]++;
+    return { quote: text, verification: verdict };
+  });
+
+  // The prose the reader actually weighs — read + each strength/risk. Catch invented
+  // figures wherever they hide, not just in the quote list.
+  const proseFields = [lens.read]
+    .concat(Array.isArray(lens.strengths) ? lens.strengths : [])
+    .concat(Array.isArray(lens.risks) ? lens.risks : []);
+  const bad = [...new Set(proseFields.flatMap((t) => unsupportedNumbers(t, idx)))];
+  if (bad.length) lens.unsupported_numbers = bad;
+
+  lens.quote_integrity = {
+    total: quotes.length,
+    ...counts,
+    has_unverified: counts.unverified > 0,
+    has_unsupported_numbers: bad.length > 0,
+  };
+  return lens;
+}
+
+/** Verify every card in the panel in place, against one shared context index. */
+function verifyPanel(panel, context) {
+  if (!Array.isArray(panel)) return panel;
+  const index = buildContextIndex(context);
+  for (const lens of panel) {
+    // A lens that errored (no card produced) has nothing to verify.
+    if (lens && !lens.error) verifyLensCard(lens, index);
+  }
+  return panel;
+}
+
 /** Run verification across all agent outputs in place. */
 function verifyAllAgents(agentOutputs, context) {
   const index = buildContextIndex(context);
@@ -254,6 +305,8 @@ function verifyAllAgents(agentOutputs, context) {
 module.exports = {
   verifyAgentQuotes,
   verifyRubricQuotes,
+  verifyLensCard,
+  verifyPanel,
   verifyAllAgents,
   classifyQuote,
   buildContextIndex,

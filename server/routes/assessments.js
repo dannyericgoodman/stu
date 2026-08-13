@@ -42,6 +42,39 @@ const SCORING_TEMPERATURE = 0;
 // findable. Output tokens are billed as used, so the headroom is free unless taken.
 const AGENT_MAX_TOKENS = 8192;
 
+// ── The model the assessment path runs on ──
+// Sourcing is high-volume and cost-sensitive and stays on the cheap global MODEL
+// (providerKeys.MODEL, currently Sonnet). Assessment is the opposite: low-volume,
+// high-value — a few dollars per deal is the right trade for the strongest grounded
+// analysis. So it gets its own knob, defaulting to Opus.
+//
+// WHY Opus 4.6 AND NOT OPUS 5: the whole scoring path pins temperature to 0 (see
+// SCORING_TEMPERATURE above — "Stu was sampling its own verdicts"). Opus 4.7/4.8/5
+// REMOVE the temperature parameter and 400 if it's sent. Opus 4.6 is Opus-tier AND
+// still accepts temperature:0, so it's the model that satisfies both the brief's
+// explicit "temp 0 for grounded extraction" and this file's determinism scar without
+// changing the request shape. Override via env if a key wants a different Opus.
+const ASSESSMENT_MODEL = process.env.ASSESSMENT_MODEL || 'claude-opus-4-6';
+
+// Run async thunks with a bounded concurrency. The room is nine lenses; firing all
+// nine at once made the rate limit the bottleneck (the same lesson that pulled the
+// rubric out of the old parallel batch). A small pool keeps every lens in flight
+// without the burst. Order of results matches order of thunks. A thunk that throws
+// resolves to a rejected settle — callers use the same settle() pattern as before.
+async function runPool(thunks, concurrency = 4) {
+  const results = new Array(thunks.length);
+  let next = 0;
+  async function worker() {
+    while (next < thunks.length) {
+      const i = next++;
+      try { results[i] = { status: 'fulfilled', value: await thunks[i]() }; }
+      catch (reason) { results[i] = { status: 'rejected', reason }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, thunks.length) }, worker));
+  return results;
+}
+
 // ── GET /api/assessments — list all (only latest version per group) ──
 router.get('/', (req, res) => {
   // For grouped assessments, only return the latest version
@@ -849,68 +882,83 @@ async function runAssessmentAgents(assessmentId, founderId) {
       console.error(`[Assessment ${assessmentId}] rubric agent failed (${rubricOut.error}) — skipping the depth layer, there is no verdict to explain`);
     }
 
-    // Depth layer: the analysis a reader wants once the verdict has their attention.
-    // These inform; they do not decide.
-    const results = await Promise.allSettled([
-      runAgent(client, AGENT_PROMPTS.team, cappedContext, signal),
-      runAgent(client, AGENT_PROMPTS.product, cappedContext, signal),
-      runAgent(client, AGENT_PROMPTS.market, cappedContext, signal),
-      runAgent(client, AGENT_PROMPTS.bear, cappedContext, signal),
-    ]);
+    // ── The room: nine named lenses ──
+    // The depth layer is no longer three generic agents (Team/Product/Market prose).
+    // It is a panel of nine distinct investor lenses that ARE the analysis. Eight named
+    // traditions run here; The Bear is the ninth and runs alongside because it alone
+    // supplies bear_adjustment into conviction. They inform the reader; they do not
+    // decide the number. Run under a bounded pool so nine concurrent calls don't lose
+    // the rate-limit fight (the same lesson that isolated the rubric above).
+    const roomThunks = [
+      ...AGENT_PROMPTS.LENSES.map((lens) => () => runAgent(client, lens.prompt, cappedContext, signal)),
+      () => runAgent(client, AGENT_PROMPTS.bear, cappedContext, signal),
+    ];
+    const roomResults = await runPool(roomThunks, 4);
 
     if (signal.aborted) {
       console.log(`[Assessment] Run ${assessmentId} was cancelled`);
       return;
     }
 
-    const agentOutputs = {
-      team: settle(results[0], 'Team'),
-      product: settle(results[1], 'Product'),
-      market: settle(results[2], 'Market'),
-      bear: settle(results[3], 'Bear'),
-      rubric: rubricOut,
-    };
+    // Stamp each lens's identity (key/label/weighs) onto its card so the panel is
+    // self-describing on read-back, and so an errored lens still shows WHO went dark
+    // rather than a nameless gap. Order matches AGENT_PROMPTS.LENSES.
+    const panel = AGENT_PROMPTS.LENSES.map((lens, i) => {
+      const card = settle(roomResults[i], lens.label);
+      return { key: lens.key, label: lens.label, weighs: lens.weighs, ...card };
+    });
+    const bearOut = settle(roomResults[AGENT_PROMPTS.LENSES.length], 'The Bear');
 
-    // ── An agent that died is an ERROR, not a low score ──
-    // The old code did `(teamScore || 0) * 0.45`, so a crashed Team agent contributed
-    // zero, dropped the total ~3.4 points, and flipped the verdict to "Pass" — while
-    // the UI hid the Team card because the value was null. An infrastructure failure
-    // and a negative judgment produced an identical screen. In a diligence tool that
-    // is the worst possible bug, so failures now surface as failures.
-    const failed = Object.entries(agentOutputs).filter(([, v]) => v && v.error);
-    if (failed.length) {
-      console.error(`[Assessment ${assessmentId}] agents failed: ${failed.map(([k, v]) => `${k} (${v.error})`).join('; ')}`);
+    // The Bear is the ninth voice in the room AND the risk pass that feeds the score.
+    // agentOutputs carries only what conviction + the tested arithmetic touch (bear,
+    // rubric); the panel is the depth surface and is stored separately.
+    const agentOutputs = { bear: bearOut, rubric: rubricOut };
+
+    // ── A voice that died is an ERROR, not a low score ──
+    // An infrastructure failure must never look like a negative judgment (the old
+    // `(teamScore || 0) * 0.45` bug). A lens that honestly ABSTAINED (applies:false)
+    // is NOT a failure — only a lens carrying `.error` is. Surface real failures.
+    const failedVoices = [
+      ...panel.filter((l) => l.error).map((l) => `${l.label} (${l.error})`),
+      ...(bearOut.error ? [`The Bear (${bearOut.error})`] : []),
+      ...(rubricOut.error ? [`Founder Rubric (${rubricOut.error})`] : []),
+    ];
+    if (failedVoices.length) {
+      console.error(`[Assessment ${assessmentId}] voices failed: ${failedVoices.join('; ')}`);
     }
     // The rubric agent IS the conviction. If it died, there is no conviction to report —
     // and we must not fall back to a number that looks like a judgment.
-    const rubricFailed = !!(agentOutputs.rubric && agentOutputs.rubric.error);
+    const rubricFailed = !!(rubricOut && rubricOut.error);
 
     // ── Deterministic score computation ──
-    // LLMs can't do arithmetic reliably. Compute all scores in code.
+    // LLMs can't do arithmetic reliably. The only number here is the bear clamp — the
+    // lenses don't score. correctPillarScores is null-safe on the absent team/product/
+    // market and just clamps bear_adjustment to [-1.5, 0].
     correctPillarScores(agentOutputs);
 
     // ── Trust layer: verify every quote against the source context ──
-    // Tags each key_quote verbatim/paraphrased/unverified. Does not change scores;
-    // it lets the IC trust (or distrust) the evidence behind each number.
+    // Same deterministic gate for the panel as for the rubric and bear: classify each
+    // lens's quotes verbatim/paraphrased/unverified and flag invented numbers. Does not
+    // change any score; it lets the reader trust (or distrust) each lens's evidence.
     try {
-      const { verifyAllAgents } = require('../agents/verify');
-      verifyAllAgents(agentOutputs, cappedContext);
+      const { verifyAllAgents, verifyPanel } = require('../agents/verify');
+      verifyAllAgents(agentOutputs, cappedContext); // bear + rubric
+      verifyPanel(panel, cappedContext);            // the nine lens cards
     } catch (e) {
       console.warn('[Assessment] quote verification skipped:', e.message);
     }
 
-    // Save agent outputs — reuse existing DB columns:
-    // founder_agent_output → team, market_agent_output → product,
-    // economics_agent_output → market, bear_agent_output → bear
+    // Save the depth surface. panel_output is the new home for the room; bear/rubric
+    // keep their columns (bear feeds the score, rubric IS the score). The three
+    // mis-named legacy columns (founder_/market_/economics_agent_output = Team/Product/
+    // Market) are left NULL on new runs — the panel replaced them. Read-back prefers
+    // panel_output and falls back to those columns for pre-panel assessments.
     db.prepare(`UPDATE opportunity_assessments SET
-      founder_agent_output = ?, market_agent_output = ?, economics_agent_output = ?,
-      pattern_agent_output = NULL, bear_agent_output = ?, rubric_output = ?, status = 'synthesizing'
+      panel_output = ?, bear_agent_output = ?, rubric_output = ?,
+      founder_agent_output = NULL, market_agent_output = NULL, economics_agent_output = NULL,
+      pattern_agent_output = NULL, status = 'synthesizing'
       WHERE id = ?
-    `).run(
-      JSON.stringify(agentOutputs.team), JSON.stringify(agentOutputs.product),
-      JSON.stringify(agentOutputs.market),
-      JSON.stringify(agentOutputs.bear), JSON.stringify(agentOutputs.rubric), assessmentId
-    );
+    `).run(JSON.stringify(panel), JSON.stringify(bearOut), JSON.stringify(rubricOut), assessmentId);
 
     if (signal.aborted) return;
 
@@ -920,21 +968,25 @@ async function runAssessmentAgents(assessmentId, founderId) {
     // is then handed to synthesis as a fact. The old flow let the synthesis agent
     // propose a score and then overwrote it, which meant the prose was written to
     // justify a number that changed underneath it.
+    //
+    // The dead-market dock now comes from the Unit-Economics Skeptic (Gurley) lens,
+    // which inherited that one load-bearing boolean from the retired market agent.
+    const gurley = panel.find((l) => l.key === 'unit_economics') || {};
     const conviction = computeConviction({
-      movements: rubricFailed ? {} : (agentOutputs.rubric?.movements || {}),
+      movements: rubricFailed ? {} : (rubricOut?.movements || {}),
       rung: evidence.rung,
       marketRisk: {
-        structurally_dead: agentOutputs.market?.structurally_dead === true,
-        note: agentOutputs.market?.kill_shot_risk || null,
+        structurally_dead: gurley.structurally_dead === true,
+        note: gurley.dead_market_note || null,
       },
-      bearAdjustment: agentOutputs.bear?.bear_adjustment ?? 0,
-      flags: (rubricFailed ? {} : agentOutputs.rubric?.flags) || {},
+      bearAdjustment: bearOut?.bear_adjustment ?? 0,
+      flags: (rubricFailed ? {} : rubricOut?.flags) || {},
     });
     if (rubricFailed) {
       conviction.determinate = false;
       conviction.score = null;
       conviction.band = null;
-      conviction.reason = `The Founder Rubric agent failed (${agentOutputs.rubric.error}). No conviction score — this is a system failure, not a judgment about the company. Re-run.`;
+      conviction.reason = `The Founder Rubric agent failed (${rubricOut.error}). No conviction score — this is a system failure, not a judgment about the company. Re-run.`;
     }
 
     db.prepare('UPDATE opportunity_assessments SET conviction_output = ?, conviction_score = ?, conviction_band = ? WHERE id = ?')
@@ -946,22 +998,31 @@ async function runAssessmentAgents(assessmentId, founderId) {
       );
     console.log(`[Assessment ${assessmentId}] conviction: ${conviction.determinate ? `${conviction.score} (${conviction.band.label})` : 'INDETERMINATE — ' + conviction.reason}`);
 
-    // Run synthesis
+    // Chair the room: the panel synthesizer writes the IC summary AND the diligence
+    // agenda (every lens's questions, deduped and bucketed by owner). It explains the
+    // already-decided conviction; it cannot move the number (correctSynthesisScores
+    // stamps the code's verdict over anything the model emitted).
     try {
-      const synthesis = await runSynthesis(client, AGENT_PROMPTS.synthesis, agentOutputs, cappedContext, signal, conviction);
+      const synthesis = await runPanelSynthesis(client, AGENT_PROMPTS.panelSynthesis, panel, bearOut, cappedContext, signal, conviction);
       if (signal.aborted) return;
 
-      // Override synthesis scores with deterministic computation
+      // Override synthesis scores with deterministic computation. agentOutputs has no
+      // team/product/market — correctSynthesisScores reports those pillars as null.
       correctSynthesisScores(synthesis, agentOutputs, conviction);
 
+      // The bucketed agenda gets its own column so the UI and the vault export can
+      // render it as a first-class deliverable, not buried inside the summary blob.
+      const agenda = synthesis.agenda && typeof synthesis.agenda === 'object' ? synthesis.agenda : null;
+
       db.prepare(`UPDATE opportunity_assessments SET
-        synthesis_output = ?, overall_signal = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        synthesis_output = ?, agenda_output = ?, overall_signal = ?, status = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(
         JSON.stringify(synthesis),
+        agenda ? JSON.stringify(agenda) : null,
         synthesis.overall_signal,
-        // An agent that died must not masquerade as a completed assessment.
-        failed.length ? 'partial' : 'complete',
+        // A voice that died must not masquerade as a completed assessment.
+        failedVoices.length ? 'partial' : 'complete',
         assessmentId
       );
     } catch (err) {
@@ -1262,7 +1323,7 @@ async function anthropicCreateWithRetry(client, params, { attempts = 3, baseDela
 // latency and real complexity. Not worth it. Revisit if volume ever justifies it.
 async function runAgent(client, prompt, context, signal, retries = 1) {
   const response = await anthropicCreateWithRetry(client, {
-    model: MODEL,
+    model: ASSESSMENT_MODEL,
     max_tokens: AGENT_MAX_TOKENS,
     temperature: SCORING_TEMPERATURE,
     system: prompt.system,
@@ -1298,7 +1359,7 @@ function safeParse(raw) {
 
 async function runSynthesis(client, prompt, agentOutputs, context, signal, conviction) {
   const response = await anthropicCreateWithRetry(client, {
-    model: MODEL,
+    model: ASSESSMENT_MODEL,
     max_tokens: AGENT_MAX_TOKENS,
     temperature: SCORING_TEMPERATURE,
     system: prompt.system,
@@ -1309,6 +1370,23 @@ async function runSynthesis(client, prompt, agentOutputs, context, signal, convi
   const parsed = robustJsonParse(text);
   if (parsed) return parsed;
   return { raw: text, error: 'Could not parse synthesis' };
+}
+
+// Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
+// lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
+async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction) {
+  const response = await anthropicCreateWithRetry(client, {
+    model: ASSESSMENT_MODEL,
+    max_tokens: AGENT_MAX_TOKENS,
+    temperature: SCORING_TEMPERATURE,
+    system: prompt.system,
+    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context) }],
+  });
+
+  const text = response.content[0].text.trim();
+  const parsed = robustJsonParse(text);
+  if (parsed) return parsed;
+  return { raw: text, error: 'Could not parse panel synthesis' };
 }
 
 // ── POST /api/assessments/:id/push-to-notion — push assessment to Strider Notion ──
@@ -1351,6 +1429,8 @@ router._internal = {
   correctSynthesisScores,
   assembleContext,
   robustJsonParse,
+  runPool,
   SCORING_TEMPERATURE,
+  ASSESSMENT_MODEL,
 };
 module.exports = router;

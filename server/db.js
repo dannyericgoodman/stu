@@ -1417,6 +1417,19 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_decisions_founder ON decisions(founder_i
 // same as always — the column's meaning is just contextual on assessment_type).
 addColumn('opportunity_assessments', 'assessment_type', "TEXT DEFAULT 'assessment'");
 
+// ── The expert panel (see server/agents/prompts.js LENSES + server/routes/assessments.js) ──
+// The old depth layer was three generic agents (Team/Product/Market prose) stored in the
+// mis-named founder_/market_/economics_agent_output columns. The rescope replaces that prose
+// with a room of NINE named-lens opinions (Monopoly/Thiel, Unit-Economics/Gurley,
+// Founder-Edge/Rabois, Hard-Problems/Lonsdale, Long-Game/Housel, Deep-Tech/Wolfe,
+// Networks/Hoffman, Inflection/Maples, and The Bear) — each grounded in the actual inputs,
+// disagreeing where they should, and abstaining honestly where a lens has nothing to add.
+// panel_output holds the array of lens cards; agenda_output holds the deduped, owner-bucketed
+// diligence agenda synthesised across all of them. New columns rather than reusing the
+// mis-named ones so the panel never inherits the Team/Product/Market column lie.
+addColumn('opportunity_assessments', 'panel_output', 'TEXT');   // JSON array of nine named-lens cards
+addColumn('opportunity_assessments', 'agenda_output', 'TEXT');  // JSON: diligence agenda bucketed by owner
+
 // Thesis Update (Ask Stu, ?topic=thesis): a place to save a thesis reflection/conclusion
 // worked through in chat. Saved IN STU today, not vault-synced — that's a deliberately
 // separate, not-yet-built path (see vault-sync's assessment_type filter + its comment on
