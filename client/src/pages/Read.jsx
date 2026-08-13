@@ -168,20 +168,142 @@ function RoundRow({ c }) {
   );
 }
 
-// The deep dive — the analysis that makes the IC memo. Always visible once the read is done.
+// The deep dive — a comprehensive POV report, the thing Danny carries into IC. The nine
+// lenses run point on the sections; the synthesizer wove them. Order: takeaways →
+// founders → product → market → right-to-win → moat → risks → where-this-goes → the
+// score detail → agenda → the raw room (appendix) → the exportable memo.
 function ReadBody({ a, conv }) {
+  const syn = parse(a.synthesis_output) || {};
   return (
     <>
+      <Section title="Key takeaways" body={syn.key_takeaways} lead />
+      <Section title="The founders" body={syn.founders} lenses="Founder Edge · Hard Problems · Long Game" />
+      <Section title="The product" body={syn.product} lenses="Monopoly · Deep-Tech · Networks" />
+      <MarketSection market={syn.market} />
+      <Section title="Right to win" body={syn.right_to_win} lenses="Founder Edge · Monopoly · Hard Problems" />
+      <Section title="Moat & defensibility" body={syn.moat} lenses="Monopoly · Deep-Tech · Networks" />
       <Defensibility parts={a.defensibility} />
+      <BearSection bear={a.bear} />
+      <Section title="Where this goes" body={syn.where_this_goes} />
+      <Disagreements items={syn.room_disagreements} />
       {conv?.determinate && <Movements conv={conv} />}
       {conv?.determinate && <Docks conv={conv} />}
-      <Panel panel={a.panel} bear={a.bear} synthesis={parse(a.synthesis_output)} />
       <Agenda agenda={a.agenda} />
+      <RoomAppendix panel={a.panel} bear={a.bear} />
       <Memo a={a} />
       {conv?.calibration && (
         <p className="text-micro text-ink-4 leading-relaxed border-t border-line pt-3">{conv.calibration}</p>
       )}
     </>
+  );
+}
+
+// A titled narrative section of the report. Renders nothing if the synthesizer had no
+// material for it (an honest empty beats a padded one).
+function Section({ title, body, lenses, lead }) {
+  if (!body || !String(body).trim()) return null;
+  return (
+    <div className={lead ? '' : 'border-t border-line pt-3'}>
+      <div className="flex items-baseline gap-2 mb-1.5">
+        <div className={`font-semibold uppercase ${lead ? 'text-small text-ink' : 'text-micro text-ink-4'}`}>{title}</div>
+        {lenses && <span className="text-micro text-ink-4">{lenses}</span>}
+      </div>
+      <p className={`leading-relaxed whitespace-pre-wrap ${lead ? 'text-regular text-ink' : 'text-small text-ink-2'}`}>{body}</p>
+    </div>
+  );
+}
+
+// The market section — the POV-shaped part: why-now, the map, a comps table, numbered
+// drivers tagged tailwind/threat/double-edged, and sizing + unit economics.
+function MarketSection({ market: m }) {
+  if (!m || typeof m !== 'object') return null;
+  const has = m.why_now || m.market_map || m.comps?.length || m.drivers?.length || m.sizing_and_unit_economics;
+  if (!has) return null;
+  const tagClass = (t) => t === 'tailwind' ? 'text-ink-2 bg-ground-3' : t === 'threat' ? 'text-danger bg-danger/5' : 'text-ink-3 bg-ground-3';
+  return (
+    <div className="border-t border-line pt-3 space-y-3">
+      <div className="text-micro font-semibold uppercase text-ink-4">The market</div>
+
+      {m.why_now && <SubBlock label="Why now" lens="Inflection" body={m.why_now} />}
+      {m.market_map && <SubBlock label="Market map" body={m.market_map} />}
+
+      {m.comps?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Comps <span className="text-ink-4">· from the materials</span></div>
+          <div className="space-y-1.5">
+            {m.comps.map((c, i) => (
+              <div key={i} className="flex gap-2">
+                <span className="text-small font-medium text-ink w-40 flex-shrink-0">{c.name}</span>
+                <span className="text-small text-ink-2 leading-relaxed flex-1">{c.point}{c.source ? <span className="text-ink-4"> ({c.source})</span> : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {m.drivers?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Drivers</div>
+          <div className="space-y-2">
+            {m.drivers.map((d, i) => (
+              <div key={i}>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-small font-medium text-ink">{d.n != null ? `${d.n}. ` : ''}{d.title}</span>
+                  {d.tag && <span className={`text-micro rounded px-1.5 py-0.5 ${tagClass(d.tag)}`}>{d.tag}</span>}
+                </div>
+                {d.body && <p className="text-small text-ink-2 leading-relaxed mt-0.5">{d.body}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {m.sizing_and_unit_economics && <SubBlock label="Sizing & unit economics" lens="Gurley" body={m.sizing_and_unit_economics} />}
+    </div>
+  );
+}
+
+function SubBlock({ label, lens, body }) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-mini text-ink-3">{label}</span>
+        {lens && <span className="text-micro text-ink-4">{lens}</span>}
+      </div>
+      <p className="text-small text-ink-2 leading-relaxed whitespace-pre-wrap mt-0.5">{body}</p>
+    </div>
+  );
+}
+
+// The Bear as the risks section — its kill shot, narrative, and enumerated risks.
+function BearSection({ bear: b }) {
+  if (!b || b.error) return null;
+  const risks = (Array.isArray(b.primary_risks) ? b.primary_risks : [])
+    .map((r) => (typeof r === 'string' ? r : [r?.risk, r?.severity && `(${r.severity})`].filter(Boolean).join(' ')))
+    .filter(Boolean);
+  if (!b.kill_shot_risk && !b.narrative && !risks.length) return null;
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="flex items-baseline gap-2 mb-1.5">
+        <div className="text-micro font-semibold uppercase text-ink-4">The bear — what kills it</div>
+      </div>
+      {b.kill_shot_risk && <p className="text-small font-medium text-ink leading-relaxed">{b.kill_shot_risk}</p>}
+      {b.narrative && <p className="text-small text-ink-2 leading-relaxed whitespace-pre-wrap mt-1">{b.narrative}</p>}
+      {risks.length > 0 && <ClaimList items={risks} mark="−" />}
+    </div>
+  );
+}
+
+// Where the lenses split — the diligence targets, kept from the synthesis.
+function Disagreements({ items }) {
+  if (!items?.length) return null;
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-1.5">Where the room splits</div>
+      <div className="space-y-1">
+        {items.map((d, i) => <p key={i} className="text-small text-ink-2 leading-relaxed">{typeof d === 'string' ? d : d?.point || ''}</p>)}
+      </div>
+    </div>
   );
 }
 
@@ -478,8 +600,12 @@ function Docks({ conv }) {
 // a ▸ is a memo nobody reads.
 // ══════════════════════════════════════════════════════════════════════════
 function Memo({ a }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // New assessments carry the POV report (in synthesis_output); the sections above ARE
+  // the memo, so here we just offer the export. Pre-report assessments still show the
+  // old 7-M inline.
+  const hasReport = !!(parse(a.synthesis_output)?.key_takeaways);
 
   async function copy() {
     try {
@@ -489,20 +615,24 @@ function Memo({ a }) {
     } catch { /* clipboard denied — the text is on screen either way */ }
   }
 
-  if (!a.memo_7m?.length) return null;
+  if (!hasReport && !a.memo_7m?.length) return null;
 
   return (
     <div className="border-t border-line pt-3">
       <div className="flex items-center gap-2">
-        <button onClick={() => setOpen(!open)} className="text-small font-medium text-ink hover:text-accent">
-          {open ? '▾' : '▸'} Deal memo — 7-M
-        </button>
+        {hasReport ? (
+          <span className="text-small font-medium text-ink">Export</span>
+        ) : (
+          <button onClick={() => setOpen(!open)} className="text-small font-medium text-ink hover:text-accent">
+            {open ? '▾' : '▸'} Deal memo — 7-M
+          </button>
+        )}
         <div className="flex-1" />
         <button onClick={copy} className="text-mini text-accent hover:text-accent-hover">
-          {copied ? 'Copied — paste into Obsidian' : 'Copy as markdown'}
+          {copied ? 'Copied — paste into Obsidian' : 'Copy full POV as markdown'}
         </button>
       </div>
-      {open && <MemoBody a={a} />}
+      {!hasReport && open && <MemoBody a={a} />}
     </div>
   );
 }
@@ -510,45 +640,68 @@ function Memo({ a }) {
 // The document he walks in with. His verdict leads — it's his memo, not Stu's.
 function memoMarkdown(a) {
   const d = a.decision;
-  const co = a.founder_company || a.founder_name || 'Untitled';
-  const L = [`# ${co} — Deal Memo`, '', `*${String(a.created_at).slice(0, 10)} · Danny Goodman · Superior Studios*`, ''];
+  const c = a.company || {};
+  const syn = parse(a.synthesis_output) || {};
+  const co = c.name || a.founder_company || a.founder_name || 'Untitled';
+  const L = [`# ${co} — Investment POV`, '', `*${String(a.created_at).slice(0, 10)} · Danny Goodman · Superior Studios*`, ''];
+
+  if (c.one_liner) L.push(`*${c.one_liner}*`, '');
+  const dealBits = [
+    c.website && cleanUrl(c.website), c.stage,
+    c.round_size != null && `${fmtMoney(c.round_size)} round`,
+    c.valuation != null && `${fmtMoney(c.valuation)}${c.security_type ? ` ${c.security_type}` : ''} valuation`,
+  ].filter(Boolean);
+  if (c.founder || dealBits.length) {
+    L.push(`**${c.founder || ''}${c.role ? `, ${c.role}` : ''}**${dealBits.length ? ` · ${dealBits.join(' · ')}` : ''}`, '');
+  }
+  if (a.conviction_score != null) L.push(`**Verdict: ${a.conviction_score} — ${labelFor(a.conviction_band)}.**`, '');
+  else if (a.conviction_band === 'indeterminate') L.push(`**Verdict: no score yet — insufficient evidence.** The agenda below is the deliverable.`, '');
 
   if (d) {
     L.push('## My call', '', `**${labelFor(d.band)}**`, '');
     if (d.rationale) L.push(d.rationale, '');
     L.push(`**Prediction:** ${d.prediction}`, `**We find out:** ${d.resolve_by}`, '');
-    // The disagreement is the artifact. It belongs in the document, not just the DB —
-    // walking into IC with "Stu read this Monitor, I read it Anchor, check me in
-    // November" is the thing nobody else at that table can do.
     if (a.conviction_band && a.conviction_band !== 'indeterminate' && a.conviction_band !== d.band) {
       L.push(`> Stu read this **${labelFor(a.conviction_band)}**${a.conviction_score != null ? ` (${a.conviction_score})` : ''}. I disagree. Check me on ${d.resolve_by}.`, '');
     }
   }
 
-  if (a.defensibility?.length) {
-    L.push('## Defensibility', '');
-    for (const p of a.defensibility) L.push(`**${p.label}.** ${p.body}`, '');
-  }
-
-  for (const s of a.memo_7m) {
-    L.push(`## ${s.title}`, '');
-    if (s.note) L.push(`*${s.note}*`, '');
-    L.push(s.body, '');
-  }
-
-  // The room and its agenda leave the building too — a memo that names which lenses
-  // spoke, what they saw, and where they split is one Danny can actually lead IC with.
-  const spoke = (a.panel || []).filter((l) => l && l.applies !== false && !l.error);
-  if (spoke.length || (a.bear && !a.bear.error)) {
-    L.push('## The room', '');
-    for (const l of spoke) {
-      L.push(`**${l.label}.** ${[l.verdict, l.read].filter(Boolean).join(' ')}`, '');
+  // ── The POV report (new-format assessments) ──
+  if (syn.key_takeaways) {
+    const sec = (h, body) => { if (body && String(body).trim()) L.push(`## ${h}`, '', body, ''); };
+    sec('Key takeaways', syn.key_takeaways);
+    sec('The founders', syn.founders);
+    sec('The product', syn.product);
+    const m = syn.market;
+    if (m && typeof m === 'object') {
+      L.push('## The market', '');
+      if (m.why_now) L.push('### Why now', '', m.why_now, '');
+      if (m.market_map) L.push('### Market map', '', m.market_map, '');
+      if (m.comps?.length) {
+        L.push('### Comps', '', '| Comp | Read | Source |', '|---|---|---|');
+        m.comps.forEach((x) => L.push(`| ${x.name || ''} | ${(x.point || '').replace(/\|/g, '\\|')} | ${x.source || ''} |`));
+        L.push('');
+      }
+      if (m.drivers?.length) {
+        L.push('### Drivers', '');
+        m.drivers.forEach((dr) => L.push(`**${dr.n != null ? `${dr.n}. ` : ''}${dr.title || ''}** _(${dr.tag || ''})_ — ${dr.body || ''}`, ''));
+      }
+      if (m.sizing_and_unit_economics) L.push('### Sizing & unit economics', '', m.sizing_and_unit_economics, '');
     }
-    if (a.bear && !a.bear.error) {
-      L.push(`**The Bear (adversarial risk).** ${[a.bear.kill_shot_risk, a.bear.narrative].filter(Boolean).join(' ')}`, '');
+    sec('Right to win', syn.right_to_win);
+    sec('Moat & defensibility', syn.moat);
+    if (a.defensibility?.length) for (const p of a.defensibility) L.push(`**${p.label}.** ${p.body}`, '');
+    if (a.bear && !a.bear.error) sec('The bear — what kills it', [a.bear.kill_shot_risk, a.bear.narrative].filter(Boolean).join('\n\n'));
+    sec('Where this goes', syn.where_this_goes);
+    if (syn.room_disagreements?.length) {
+      L.push('## Where the room splits', '');
+      syn.room_disagreements.forEach((x) => L.push(`- ${typeof x === 'string' ? x : x?.point || ''}`));
+      L.push('');
     }
-    const sat = (a.panel || []).filter((l) => l && l.applies === false);
-    if (sat.length) L.push(`*Sat out: ${sat.map((l) => l.label).join('; ')}.*`, '');
+  } else {
+    // ── Legacy fallback: pre-report assessments (the old 7-M) ──
+    if (a.defensibility?.length) { L.push('## Defensibility', ''); for (const p of a.defensibility) L.push(`**${p.label}.** ${p.body}`, ''); }
+    for (const s of (a.memo_7m || [])) { L.push(`## ${s.title}`, ''); if (s.note) L.push(`*${s.note}*`, ''); L.push(s.body, ''); }
   }
 
   if (a.agenda) {
@@ -639,29 +792,28 @@ function Held({ conv, a }) {
 // are shown honestly (never padded away), and every lens's claims carry whether
 // their evidence actually checked out against the source.
 // ══════════════════════════════════════════════════════════════════════════
-function Panel({ panel, bear, synthesis }) {
+// The report's sections above are woven from these raw lens cards. This is the appendix
+// where each VC agent's own read lives, with per-claim grounding — collapsed by default
+// because the narrative sections are the read, but kept so nothing is hidden and every
+// section can be traced back to the lens that ran point.
+function RoomAppendix({ panel, bear }) {
+  const [open, setOpen] = useState(false);
   if (!Array.isArray(panel) || !panel.length) return null;
   const spoke = panel.filter((l) => l && l.applies !== false && !l.error);
   const abstained = panel.filter((l) => l && l.applies === false && !l.error);
   const dark = panel.filter((l) => l && l.error);
   const bearSpoke = bear && !bear.error;
+  const count = spoke.length + (bearSpoke ? 1 : 0);
 
   return (
     <div className="border-t border-line pt-3">
-      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">The room</div>
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 text-left">
+        <span className="text-micro font-semibold uppercase text-ink-4">{open ? '▾' : '▸'} The room</span>
+        <span className="text-micro text-ink-4">{count} lens read{count === 1 ? '' : 's'} in full{abstained.length ? ` · ${abstained.length} abstained` : ''}</span>
+      </button>
 
-      {/* Disagreement is signal. Surface where the room splits before the cards. */}
-      {synthesis?.room_disagreements?.length > 0 && (
-        <div className="rounded border border-line-2 bg-ground-2 px-3 py-2 mb-3">
-          <div className="text-micro font-semibold uppercase text-ink-4 mb-1">Where the room splits</div>
-          <div className="space-y-1">
-            {synthesis.room_disagreements.map((d, i) => (
-              <p key={i} className="text-small text-ink-2 leading-relaxed">{d}</p>
-            ))}
-          </div>
-        </div>
-      )}
-
+      {!open ? null : (
+      <div className="mt-2">
       <div className="space-y-2">
         {spoke.map((l) => <LensCard key={l.key} lens={l} />)}
         {/* The Bear is the ninth voice in the room. It keeps its own schema (it alone
@@ -688,6 +840,8 @@ function Panel({ panel, bear, synthesis }) {
         <p className="text-mini text-danger mt-2 leading-relaxed">
           {dark.map((l) => l.label).join(', ')} failed to return — this read is partial. Re-run.
         </p>
+      )}
+      </div>
       )}
     </div>
   );

@@ -1505,12 +1505,19 @@ async function runSynthesis(client, prompt, agentOutputs, context, signal, convi
   return { raw: text, error: 'Could not parse synthesis' };
 }
 
+// The panel synthesizer writes the full POV report (Key Takeaways, Founders, Product,
+// Market with why-now/map/comps/drivers/sizing, Right to Win, Moat, Where This Goes, +
+// the agenda). That is far more prose than a single lens card, so it gets its own,
+// larger token budget. 16000 is comfortably within the 240s non-streaming timeout on
+// Opus and leaves room for a rich deal without truncating the report mid-section.
+const SYNTHESIS_MAX_TOKENS = 16000;
+
 // Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
 // lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
 async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction) {
   const response = await anthropicCreateWithRetry(client, {
     model: ASSESSMENT_MODEL,
-    max_tokens: AGENT_MAX_TOKENS,
+    max_tokens: SYNTHESIS_MAX_TOKENS,
     temperature: SCORING_TEMPERATURE,
     system: prompt.system,
     messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context) }],
