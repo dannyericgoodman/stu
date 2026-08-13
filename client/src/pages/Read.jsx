@@ -311,6 +311,11 @@ function TheRead({ assessment: a, locked }) {
       <Defensibility parts={a.defensibility} />
       {conv?.determinate && <Movements conv={conv} />}
       {conv?.determinate && <Docks conv={conv} />}
+      {/* Lead with the decision, then the room, then the agenda. The panel is the
+          felt experience of nine investors weighing in; abstentions are shown, not
+          hidden, and every claim carries whether its evidence checked out. */}
+      <Panel panel={a.panel} synthesis={parse(a.synthesis_output)} />
+      <Agenda agenda={a.agenda} />
       <Memo a={a} />
       {conv?.calibration && (
         <p className="text-micro text-ink-4 leading-relaxed border-t border-line pt-3">{conv.calibration}</p>
@@ -494,7 +499,7 @@ function Memo({ a }) {
 function memoMarkdown(a) {
   const d = a.decision;
   const co = a.founder_company || a.founder_name || 'Untitled';
-  const L = [`# ${co} — Deal Memo`, '', `*${String(a.created_at).slice(0, 10)} · Danny Goodman · Strider Capital*`, ''];
+  const L = [`# ${co} — Deal Memo`, '', `*${String(a.created_at).slice(0, 10)} · Danny Goodman · Superior Studios*`, ''];
 
   if (d) {
     L.push('## My call', '', `**${labelFor(d.band)}**`, '');
@@ -517,6 +522,35 @@ function memoMarkdown(a) {
     L.push(`## ${s.title}`, '');
     if (s.note) L.push(`*${s.note}*`, '');
     L.push(s.body, '');
+  }
+
+  // The room and its agenda leave the building too — a memo that names which lenses
+  // spoke, what they saw, and where they split is one Danny can actually lead IC with.
+  const spoke = (a.panel || []).filter((l) => l.applies !== false && !l.error);
+  if (spoke.length) {
+    L.push('## The room', '');
+    for (const l of spoke) {
+      L.push(`**${l.label}.** ${[l.verdict, l.read].filter(Boolean).join(' ')}`, '');
+    }
+    const sat = (a.panel || []).filter((l) => l.applies === false);
+    if (sat.length) L.push(`*Sat out: ${sat.map((l) => l.label).join('; ')}.*`, '');
+  }
+
+  if (a.agenda) {
+    const lines = [];
+    if (a.agenda.top_priorities?.length) {
+      lines.push('**Start here:**');
+      a.agenda.top_priorities.forEach((q) => lines.push(`1. ${typeof q === 'string' ? q : q?.q}`));
+      lines.push('');
+    }
+    for (const [k, label] of [['founder', 'Ask the founder'], ['sme', 'Subject-matter expert'], ['expert_call', 'Expert-network call'], ['desktop', 'Desktop research']]) {
+      const items = Array.isArray(a.agenda[k]) ? a.agenda[k] : [];
+      if (!items.length) continue;
+      lines.push(`**${label}:**`);
+      items.forEach((it) => lines.push(`- ${typeof it === 'string' ? it : it?.q}${it?.why ? ` — ${it.why}` : ''}`));
+      lines.push('');
+    }
+    if (lines.length) L.push('## Diligence agenda', '', ...lines);
   }
 
   if (a.conviction_score != null) {
@@ -563,6 +597,194 @@ function Held({ conv, a }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE ROOM — nine named lenses. The felt experience of a panel of great
+// investors weighing in, with worldviews that sometimes disagree. Abstentions
+// are shown honestly (never padded away), and every lens's claims carry whether
+// their evidence actually checked out against the source.
+// ══════════════════════════════════════════════════════════════════════════
+function Panel({ panel, synthesis }) {
+  if (!Array.isArray(panel) || !panel.length) return null;
+  const spoke = panel.filter((l) => l.applies !== false && !l.error);
+  const abstained = panel.filter((l) => l.applies === false && !l.error);
+  const dark = panel.filter((l) => l.error);
+
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">The room — nine lenses</div>
+
+      {/* Disagreement is signal. Surface where the room splits before the cards. */}
+      {synthesis?.room_disagreements?.length > 0 && (
+        <div className="rounded border border-line-2 bg-ground-2 px-3 py-2 mb-3">
+          <div className="text-micro font-semibold uppercase text-ink-4 mb-1">Where the room splits</div>
+          <div className="space-y-1">
+            {synthesis.room_disagreements.map((d, i) => (
+              <p key={i} className="text-small text-ink-2 leading-relaxed">{d}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {spoke.map((l) => <LensCard key={l.key} lens={l} />)}
+      </div>
+
+      {/* Honest abstention is a first-class output — a lens with nothing useful to
+          add on this deal says so rather than manufacturing a generic take. */}
+      {abstained.length > 0 && (
+        <div className="mt-3">
+          <div className="text-micro text-ink-4 mb-1">Sat this one out</div>
+          <div className="space-y-0.5">
+            {abstained.map((l) => (
+              <p key={l.key} className="text-mini text-ink-4 leading-relaxed">
+                <span className="text-ink-3">{l.label}</span> — {l.abstain_reason || 'no useful perspective on this deal.'}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dark.length > 0 && (
+        <p className="text-mini text-danger mt-2 leading-relaxed">
+          {dark.map((l) => l.label).join(', ')} failed to return — this read is partial. Re-run.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function LensCard({ lens: l }) {
+  return (
+    <div className="rounded border border-line-2 px-3 py-2">
+      <div className="flex items-baseline gap-2">
+        <span className="text-small font-medium text-ink leading-tight">{l.label}</span>
+        <div className="flex-1" />
+        {l.weighs && <span className="text-micro text-ink-4">{l.weighs}</span>}
+        {l.confidence && (
+          <span className={`text-micro ${l.confidence === 'high' ? 'text-ink-2' : l.confidence === 'low' ? 'text-ink-4' : 'text-ink-3'}`}>
+            {l.confidence}
+          </span>
+        )}
+      </div>
+      {l.verdict && <p className="text-small font-medium text-ink mt-1 leading-relaxed">{l.verdict}</p>}
+      {l.read && <p className="text-small text-ink-2 mt-1 leading-relaxed whitespace-pre-wrap">{l.read}</p>}
+      {l.strengths?.length > 0 && <ClaimList items={l.strengths} mark="+" />}
+      {l.risks?.length > 0 && <ClaimList items={l.risks} mark="−" />}
+      <Grounding lens={l} />
+    </div>
+  );
+}
+
+function ClaimList({ items, mark }) {
+  return (
+    <div className="mt-1 space-y-0.5">
+      {items.map((it, i) => (
+        <div key={i} className="flex gap-1.5">
+          <span className="text-mini text-ink-4 select-none">{mark}</span>
+          <span className="text-mini text-ink-3 leading-relaxed">{typeof it === 'string' ? it : it?.text || ''}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Per-claim grounding, made visible. The trust layer (server/agents/verify.js)
+// classified each of this lens's quotes against the source; here that verdict is
+// shown so Danny can trust — or distrust — the evidence behind the read. A clean
+// footer means the quotes checked out; an amber one means a quote or number didn't.
+function Grounding({ lens: l }) {
+  const gi = l.quote_integrity;
+  const quotes = l.quote_verification || [];
+  const flagged = gi?.has_unverified || gi?.has_unsupported_numbers;
+  if (!gi && !quotes.length) return null;
+
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-line">
+      {quotes.length > 0 && (
+        <div className="space-y-0.5">
+          {quotes.map((q, i) => (
+            <div key={i} className="flex items-baseline gap-1.5">
+              <span
+                className={`text-micro select-none ${
+                  q.verification === 'verbatim' ? 'text-ink-2' : q.verification === 'paraphrased' ? 'text-ink-3' : 'text-danger'
+                }`}
+                title={q.verification}
+              >
+                {q.verification === 'verbatim' ? '✓' : q.verification === 'paraphrased' ? '≈' : '⚠'}
+              </span>
+              <span className="text-micro text-ink-4 leading-relaxed italic">“{q.quote}”</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {l.unsupported_numbers?.length > 0 && (
+        <p className="text-micro text-danger mt-1 leading-relaxed">
+          ⚠ Number{l.unsupported_numbers.length > 1 ? 's' : ''} not in the source: {l.unsupported_numbers.join(', ')}
+        </p>
+      )}
+      {!flagged && quotes.length > 0 && (
+        <p className="text-micro text-ink-4 mt-0.5">Grounded — quotes check out against the materials.</p>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE DILIGENCE AGENDA — every lens's questions, deduped and bucketed by who
+// answers them, prioritised by what most changes the decision. When the score is
+// indeterminate, THIS is the deliverable.
+// ══════════════════════════════════════════════════════════════════════════
+const AGENDA_BUCKETS = [
+  ['founder', 'Ask the founder'],
+  ['sme', 'Subject-matter expert'],
+  ['expert_call', 'Expert-network call'],
+  ['desktop', 'Desktop research'],
+];
+
+function Agenda({ agenda }) {
+  if (!agenda || typeof agenda !== 'object') return null;
+  const priorities = Array.isArray(agenda.top_priorities) ? agenda.top_priorities : [];
+  const hasBuckets = AGENDA_BUCKETS.some(([k]) => Array.isArray(agenda[k]) && agenda[k].length);
+  if (!priorities.length && !hasBuckets) return null;
+
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">Diligence agenda</div>
+
+      {priorities.length > 0 && (
+        <div className="mb-3">
+          <div className="text-mini text-ink-3 mb-1">Start here — what most changes the picture</div>
+          <ol className="list-decimal ml-4 space-y-0.5">
+            {priorities.map((q, i) => (
+              <li key={i} className="text-small text-ink leading-relaxed">{typeof q === 'string' ? q : q?.q}</li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {AGENDA_BUCKETS.map(([k, label]) => {
+          const items = Array.isArray(agenda[k]) ? agenda[k] : [];
+          if (!items.length) return null;
+          return (
+            <div key={k}>
+              <div className="text-mini text-ink-3 mb-1">{label} <span className="text-ink-4">· {items.length}</span></div>
+              <div className="space-y-1.5">
+                {items.map((it, i) => (
+                  <div key={i}>
+                    <p className="text-small text-ink-2 leading-relaxed">{typeof it === 'string' ? it : it?.q}</p>
+                    {it?.why && <p className="text-mini text-ink-4 leading-relaxed">{it.why}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

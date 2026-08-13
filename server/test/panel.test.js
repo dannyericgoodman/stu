@@ -8,7 +8,7 @@ const assert = require('node:assert');
 
 const prompts = require('../agents/prompts');
 const { verifyLensCard, verifyPanel, buildContextIndex } = require('../agents/verify');
-const { runPool } = require('../routes/assessments')._internal;
+const { runPool, buildMemo7M, buildDefensibility } = require('../routes/assessments')._internal;
 
 // ── The room is always nine, always the same ──
 
@@ -106,6 +106,54 @@ test('PANEL: runPool runs all thunks, preserves order, and never rejects on a th
   assert.equal(results[0].value, 'a');
   assert.equal(results[1].status, 'rejected', 'a thrown thunk settles as rejected, matching Promise.allSettled');
   assert.equal(results[2].value, 'c', 'order is preserved regardless of concurrency');
+});
+
+// ── Read-back: the 7-M memo and defensibility now source from the room ──
+
+const panelRow = () => ({
+  panel_output: JSON.stringify([
+    { key: 'monopoly', label: 'Thiel', applies: true, verdict: 'A 10x on claims ops.', read: 'Secret: payers insource (deck slide 4).' },
+    { key: 'unit_economics', label: 'Gurley', applies: true, verdict: 'Math works.', read: 'TAM credible (deck).', structurally_dead: false },
+    { key: 'founder_edge', label: 'Rabois', applies: true, verdict: 'A barrel.', read: 'Ran claims ops six years (founder call).' },
+    { key: 'hard_problems', label: 'Lonsdale', applies: true, verdict: 'Hard.', read: 'Regulatory moat (deck).' },
+    { key: 'long_game', label: 'Housel', applies: false, abstain_reason: 'No behavioral read yet.' },
+    { key: 'deep_tech', label: 'Wolfe', applies: false, abstain_reason: 'Not a deep-tech deal.' },
+    { key: 'networks', label: 'Hoffman', applies: true, verdict: 'No network effect.', read: 'Linear growth (site).' },
+    { key: 'inflection', label: 'Maples', applies: true, verdict: 'Real why-now.', read: '2024 rule change (deck).' },
+  ]),
+  bear_agent_output: JSON.stringify({ primary_risks: ['Customer concentration'], bundling_risk: { assessment: 'Stripe could bundle' }, kill_shot_risk: 'Platform dependency' }),
+  synthesis_output: JSON.stringify({ executive_summary: 'Claims-ops insider building payer automation.', one_liner: 'Domain insider, 4 customers in 6 weeks.' }),
+  agenda_output: JSON.stringify({ top_priorities: ['How did you find this problem?'], founder: [{ q: 'Who committed before proof?', why: 'talent magnetism' }] }),
+});
+
+test('PANEL: the 7-M memo is sourced from the room, not the legacy columns', () => {
+  const memo = buildMemo7M(panelRow());
+  assert.equal(memo.length, 7, 'all seven M sections filled from the panel');
+  assert.match(memo.find((s) => s.key === 'mgmt').body, /Ran claims ops/, 'Management ← Founder-Edge/Rabois');
+  assert.match(memo.find((s) => s.key === 'market').body, /rule change/, 'Market ← Inflection/Maples');
+  assert.match(memo.find((s) => s.key === 'conditions').body, /find this problem/, 'Conditions ← the diligence agenda');
+  assert.ok(!JSON.stringify(memo).includes('No behavioral read'), 'an abstaining lens contributes nothing to the memo');
+});
+
+test('PANEL: defensibility is the moat lenses (Thiel/Wolfe/Lonsdale/Bear)', () => {
+  const d = buildDefensibility(panelRow());
+  assert.deepEqual(d.map((p) => p.label), ['Moat', 'Build vs buy', 'Kill shot', 'Gets bundled']);
+  assert.match(d.find((p) => p.label === 'Moat').body, /payers insource/, 'Moat ← the Monopoly lens');
+  assert.match(d.find((p) => p.label === 'Gets bundled').body, /Stripe could bundle/, 'Bundling ← The Bear');
+});
+
+test('PANEL: read-back still serves pre-panel assessments from the legacy columns', () => {
+  // A pre-panel assessment has no panel_output; the mis-named columns still drive it.
+  const legacy = {
+    founder_agent_output: JSON.stringify({ the_read: 'A strong operator who closed four customers.' }), // Team
+    market_agent_output: JSON.stringify({ product_thesis: 'A wedge product.' }),                        // Product
+    economics_agent_output: JSON.stringify({ why_now: 'Regulatory change in 2024.' }),                  // Market
+    bear_agent_output: JSON.stringify({ primary_risks: ['Thin moat'] }),
+    synthesis_output: JSON.stringify({ one_liner: 'Legacy read.' }),
+  };
+  const memo = buildMemo7M(legacy);
+  assert.ok(memo.length >= 3, 'the legacy path still builds the memo');
+  assert.match(memo.find((s) => s.key === 'mgmt').body, /closed four customers/, 'Management ← the mis-named Team column');
 });
 
 test('PANEL: runPool bounds concurrency to the requested width', async () => {

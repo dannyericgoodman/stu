@@ -118,6 +118,12 @@ router.get('/assessments/:id', (req, res) => {
     evidence_rung: a.evidence_rung,
     evidence: safeParse(a.evidence_output),
     context_notes: safeParse(a.context_notes),
+    // The expert panel + its diligence agenda. This is the new depth surface — nine
+    // named-lens cards and the deduped, owner-bucketed agenda synthesised across them.
+    // `agents` below is the LEGACY depth (Team/Product/Market), kept so pre-panel
+    // assessments still export; it is NULL on new runs, which is correct.
+    panel: safeParse(a.panel_output),
+    agenda: safeParse(a.agenda_output),
     agents, synthesis,
     rubric, // Founder Rubric — the four movements that decided the score
     legacy_steward_operator: legacyStewardOperator

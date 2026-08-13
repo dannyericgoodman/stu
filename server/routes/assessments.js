@@ -176,10 +176,21 @@ router.get('/:id', (req, res) => {
   res.json({
     ...assessment,
     decision: decision || null,
+    // The room + its agenda, parsed server-side so the client, the 7-M builder, and
+    // the vault export all read one shape. Null on pre-panel assessments.
+    panel: parseJsonColumn(assessment.panel_output),
+    agenda: parseJsonColumn(assessment.agenda_output),
     memo_7m: buildMemo7M(assessment),
     defensibility: buildDefensibility(assessment),
   });
 });
+
+// Parse a JSON text column, tolerating null/garbage — read-back must never throw on
+// a malformed blob (the same forgiveness the vault export and buildMemo7M rely on).
+function parseJsonColumn(s) {
+  if (!s) return null;
+  try { return typeof s === 'string' ? JSON.parse(s) : s; } catch { return null; }
+}
 
 // The 7-M: Recommendation · Management · Model · Market · Momentum · Malfeasance
 // · Conditions. Canon per Brain/04 Fund & Systems.
@@ -229,13 +240,64 @@ function flatten(v, depth = 0) {
   return null;
 }
 
+// Pull a lens's prose out of the panel by key, unless it abstained. Verdict first
+// (the one-line call), then the read (the analysis). Null if absent or abstained.
+function lensProse(byKey, key) {
+  const l = byKey[key];
+  if (!l || l.applies === false || l.error) return null;
+  return flatten([l.verdict, l.read].filter(Boolean));
+}
+
+// The 7-M, sourced from the NINE-LENS PANEL when one exists, falling back to the
+// legacy Team/Product/Market columns for pre-panel assessments. The mapping from the
+// room to the memo's sections:
+//   Management  ← Founder-Edge (Rabois), Hard-Problems (Lonsdale), Long-Game (Housel)
+//   Model       ← Unit-Economics (Gurley), Monopoly (Thiel)
+//   Market      ← Inflection (Maples), Unit-Economics (Gurley)
+//   Momentum    ← Networks (Hoffman)
+//   Malfeasance ← The Bear (unchanged — it still runs)
+//   Conditions  ← the diligence agenda (top priorities + founder follow-ups)
+function buildMemo7MFromPanel(panel, syn, bear, agenda) {
+  const txt = flatten;
+  const byKey = Object.fromEntries(panel.map((l) => [l.key, l]));
+  const agendaText = (bucketArr) => Array.isArray(bucketArr)
+    ? bucketArr.map((q) => (typeof q === 'string' ? q : q?.q)).filter(Boolean)
+    : [];
+  const conditions = [
+    ...(Array.isArray(agenda?.top_priorities) ? agenda.top_priorities : []),
+    ...agendaText(agenda?.founder),
+  ];
+  const out = [
+    { key: 'rec', title: 'I. Recommendation', body: txt(syn?.executive_summary || syn?.one_liner) },
+    { key: 'mgmt', title: 'II. Management', body: txt([lensProse(byKey, 'founder_edge'), lensProse(byKey, 'hard_problems'), lensProse(byKey, 'long_game')].filter(Boolean)) },
+    { key: 'model', title: 'III. Model', body: txt([lensProse(byKey, 'unit_economics'), lensProse(byKey, 'monopoly')].filter(Boolean)) },
+    { key: 'market', title: 'IV. Market', body: txt([lensProse(byKey, 'inflection'), lensProse(byKey, 'unit_economics')].filter(Boolean)) },
+    { key: 'momentum', title: 'V. Momentum', body: txt(lensProse(byKey, 'networks')) },
+    { key: 'malfeasance', title: 'VI. Malfeasance', body: txt([bear?.primary_risks, bear?.twelve_month_kill, bear?.deck_omissions].filter(Boolean)) },
+    {
+      key: 'conditions', title: 'VII. Conditions',
+      note: 'The diligence agenda — the top priorities and founder follow-ups the room surfaced.',
+      body: txt(conditions.filter(Boolean)),
+    },
+  ];
+  return out.filter((s) => s.body && String(s.body).trim());
+}
+
 function buildMemo7M(a) {
   const j = (s) => { try { return typeof s === 'string' ? JSON.parse(s) : s; } catch { return null; } };
+  const syn = j(a.synthesis_output);
+  const bear = j(a.bear_agent_output);
+
+  // New runs carry the panel. Source the memo from the room.
+  const panel = j(a.panel_output);
+  if (Array.isArray(panel) && panel.length) {
+    return buildMemo7MFromPanel(panel, syn, bear, j(a.agenda_output));
+  }
+
+  // ── Legacy path: pre-panel assessments whose depth lives in the mis-named columns ──
   const team = j(a.founder_agent_output);      // NOT founder — Team
   const product = j(a.market_agent_output);    // NOT market — Product
   const market = j(a.economics_agent_output);  // NOT economics — Market
-  const bear = j(a.bear_agent_output);
-  const syn = j(a.synthesis_output);
   if (!syn && !team) return [];
 
   const txt = flatten;
@@ -290,11 +352,28 @@ function buildMemo7M(a) {
 // ══════════════════════════════════════════════════════════════════════════
 function buildDefensibility(a) {
   const j = (s) => { try { return typeof s === 'string' ? JSON.parse(s) : s; } catch { return null; } };
-  const product = j(a.market_agent_output);    // NOT market — Product
-  const market = j(a.economics_agent_output);  // NOT economics — Market
   const bear = j(a.bear_agent_output);
   const txt = flatten;
 
+  // New runs: defensibility is exactly what the moat lenses see. The Monopoly (Thiel)
+  // and Deep-Tech (Wolfe) lenses ARE the moat read; Hard-Problems (Lonsdale) is the
+  // build-vs-buy read; the Gurley kill and the Bear's bundling risk are the kill shots.
+  const panel = j(a.panel_output);
+  if (Array.isArray(panel) && panel.length) {
+    const byKey = Object.fromEntries(panel.map((l) => [l.key, l]));
+    const gurley = byKey.unit_economics || {};
+    const parts = [
+      { label: 'Moat', body: txt([lensProse(byKey, 'monopoly'), lensProse(byKey, 'deep_tech')].filter(Boolean)) },
+      { label: 'Build vs buy', body: txt(lensProse(byKey, 'hard_problems')) },
+      { label: 'Kill shot', body: txt([gurley.dead_market_note || null, bear?.kill_shot_risk].filter(Boolean)) },
+      { label: 'Gets bundled', body: txt([bear?.bundling_risk, lensProse(byKey, 'networks')].filter(Boolean)) },
+    ].filter((p) => p.body && String(p.body).trim());
+    return parts.length ? parts : null;
+  }
+
+  // ── Legacy path: pre-panel assessments ──
+  const product = j(a.market_agent_output);    // NOT market — Product
+  const market = j(a.economics_agent_output);  // NOT economics — Market
   const parts = [
     { label: 'Moat', body: txt(market?.competitive_moat) },
     { label: 'Build vs buy', body: txt(product?.build_vs_buy_risk) },
@@ -1430,6 +1509,8 @@ router._internal = {
   assembleContext,
   robustJsonParse,
   runPool,
+  buildMemo7M,
+  buildDefensibility,
   SCORING_TEMPERATURE,
   ASSESSMENT_MODEL,
 };
