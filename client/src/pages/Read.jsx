@@ -84,10 +84,13 @@ export default function Read() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
-        <button onClick={() => nav('/pipeline')} className="text-mini text-ink-4 hover:text-ink">← Pipeline</button>
+        {/* An assessment belongs to the Assess product, so "back" returns to Assess —
+            not Pipeline (that jump was the "nav is weird" bug). The company name still
+            links across to its Pipeline card, so the two products stay linked. */}
+        <button onClick={() => nav('/assess')} className="text-mini text-ink-4 hover:text-ink">← Assess</button>
         <span className="text-ink-4">/</span>
         {a.founder_id ? (
-          <Link to={`/founders/${a.founder_id}`} className="text-small font-semibold text-ink hover:text-accent">
+          <Link to={`/founders/${a.founder_id}`} className="text-small font-semibold text-ink hover:text-accent" title="Open the company in Pipeline">
             {a.founder_company || a.founder_name}
           </Link>
         ) : (

@@ -13,6 +13,12 @@ function getToken() {
 }
 
 export function setToken(token) {
+  // Any auth transition (login, logout, session-expiry) can mean a different user on
+  // this browser, so drop the persisted response cache — otherwise the next user could
+  // see the previous user's cached inbox/pipeline for a beat before it revalidates.
+  // Only fires on real auth changes; a normal reload of an already-logged-in session
+  // does not call setToken, so the persisted cache survives reloads (the whole point).
+  lsPurge();
   if (token) {
     localStorage.setItem('stu_token', token);
   } else {
@@ -59,9 +65,64 @@ export function setUser(user) {
 const CACHE = new Map(); // path -> { at, data, inflight }
 const FRESH_MS = 30_000; // under 30s, don't even revalidate — he's just toggling
 
+// ── Persist cached GETs across logins/reloads ──────────────────────────────
+// The in-memory CACHE is empty on every fresh page load, so the FIRST visit to a
+// slow screen (the Sourcing inbox — a heavy /pipeline/inbox query) blocks on the
+// cold request, which is why it "takes forever, then populates when you come back":
+// the second visit finds the warm cache. Persisting to localStorage makes that
+// automatic — on login the screen shows the last-known data instantly (stale) and
+// revalidates underneath. Best-effort: guarded by size, age, and try/catch so a
+// quota error, private mode, or an oversized payload silently falls back to cold.
+const LS_PREFIX = 'sg_cache:';
+const LS_MAX_BYTES = 2_000_000;            // don't persist a single entry over ~2MB
+const LS_MAX_AGE_MS = 12 * 60 * 60 * 1000; // ignore persisted entries older than 12h
+
+function lsPurge() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LS_PREFIX)) localStorage.removeItem(k);
+    }
+  } catch { /* ignore */ }
+}
+function lsSet(path, at, data) {
+  let s;
+  try {
+    s = JSON.stringify({ at, data });
+    if (s.length > LS_MAX_BYTES) { localStorage.removeItem(LS_PREFIX + path); return; }
+    localStorage.setItem(LS_PREFIX + path, s);
+  } catch {
+    // Likely a full quota. Purge our own cache and retry once so persistence self-heals
+    // instead of silently staying dead. (Also covers private mode / non-serialisable —
+    // in which case the retry no-ops too. Persistence is a bonus, never load-bearing.)
+    try { lsPurge(); if (s) localStorage.setItem(LS_PREFIX + path, s); } catch { /* give up quietly */ }
+  }
+}
+function lsGet(path) {
+  try {
+    const s = localStorage.getItem(LS_PREFIX + path);
+    if (!s) return null;
+    const e = JSON.parse(s);
+    if (!e || e.data === undefined || (Date.now() - (e.at || 0)) > LS_MAX_AGE_MS) return null;
+    return { at: e.at, data: e.data };
+  } catch { return null; }
+}
+function lsDel(path) { try { localStorage.removeItem(LS_PREFIX + path); } catch { /* ignore */ } }
+// Store real data (never the cold in-flight placeholder) both in memory and on disk.
+function cacheSet(path, data) { CACHE.set(path, { at: Date.now(), data }); lsSet(path, Date.now(), data); }
+
 /** Drop cached GETs whose path contains `fragment`. Call after any write. */
 export function invalidate(fragment = '') {
-  for (const k of [...CACHE.keys()]) if (!fragment || k.includes(fragment)) CACHE.delete(k);
+  for (const k of [...CACHE.keys()]) if (!fragment || k.includes(fragment)) { CACHE.delete(k); lsDel(k); }
+  // Persisted entries with no live in-memory twin (e.g. seeded from a prior session
+  // but not yet read this session) must be cleared too, or a stale row could survive
+  // a mutation until its 12h expiry.
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LS_PREFIX) && (!fragment || key.slice(LS_PREFIX.length).includes(fragment))) localStorage.removeItem(key);
+    }
+  } catch { /* ignore */ }
 }
 
 /**
@@ -83,6 +144,9 @@ function after(promise, ...fragments) {
  * background refresh never causes a pointless repaint.
  */
 async function cachedGet(path, { onUpdate } = {}) {
+  // Seed memory from the persisted cache on a cold miss, so the very first visit
+  // after login shows last-known data instantly and revalidates underneath.
+  if (!CACHE.has(path)) { const p = lsGet(path); if (p) CACHE.set(path, p); }
   const hit = CACHE.get(path);
   const age = hit ? Date.now() - hit.at : Infinity;
 
@@ -110,7 +174,7 @@ async function cachedGet(path, { onUpdate } = {}) {
       hit.inflight = request(path)
         .then((fresh) => {
           const changed = JSON.stringify(fresh) !== JSON.stringify(hit.data);
-          CACHE.set(path, { at: Date.now(), data: fresh });
+          cacheSet(path, fresh);
           if (changed && onUpdate) onUpdate(fresh);
           return fresh;
         })
@@ -122,7 +186,7 @@ async function cachedGet(path, { onUpdate } = {}) {
 
   // Cold: one request, and dedupe concurrent callers onto it.
   const inflight = request(path).then((data) => {
-    CACHE.set(path, { at: Date.now(), data });
+    cacheSet(path, data);
     return data;
   });
   CACHE.set(path, { at: 0, data: undefined, inflight });
