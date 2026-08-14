@@ -396,6 +396,9 @@ app.use('/api/talent/sourcing/run', expensiveLimiter);
 app.use('/api/talent/sourcing/match', expensiveLimiter);
 app.use('/api/sourcing/run', expensiveLimiter);
 app.use('/api/discover', expensiveLimiter);
+app.use('/api/hiring/matches/run', expensiveLimiter);
+app.use('/api/hiring/roles/ingest', expensiveLimiter);
+app.use('/api/hiring/warm/import', expensiveLimiter);
 app.use('/api/outreach', expensiveLimiter);
 // monitor run + per-id run also trigger discovery — throttled inside routes/monitors.js
 // (both /run and /:id/run) since a prefix limiter can't match the :id form.

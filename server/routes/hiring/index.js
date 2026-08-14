@@ -7,6 +7,7 @@ const router = express.Router();
 router.use('/companies', require('./companies'));
 router.use('/roles', require('./roles'));
 router.use('/candidates', require('./candidates'));
+router.use('/matches', require('./matches').router);
 router.use('/warm', require('./warm'));
 
 module.exports = router;
