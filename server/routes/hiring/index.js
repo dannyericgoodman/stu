@@ -1,0 +1,10 @@
+// ── /api/hiring — the greenfield Hiring surface ──
+// Sub-routers are added phase by phase. Phase 1: companies (portco picker/home) +
+// roles (JD ingest + CRUD). Candidates, matches, and discovery land in later phases.
+const express = require('express');
+const router = express.Router();
+
+router.use('/companies', require('./companies'));
+router.use('/roles', require('./roles'));
+
+module.exports = router;

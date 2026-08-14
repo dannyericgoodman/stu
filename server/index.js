@@ -454,6 +454,7 @@ app.use('/api/settings', requireAuth, require('./routes/settings'));
 app.use('/api/admin', requireAuth, require('./routes/admin'));
 app.use('/api/import', requireAuth, require('./routes/import'));
 app.use('/api/talent', requireAuth, require('./routes/talent'));
+app.use('/api/hiring', requireAuth, require('./routes/hiring'));
 app.use('/api/newsletter', requireAuth, require('./routes/newsletter'));
 app.use('/api/mcp', requireAuth, require('./routes/mcp'));
 app.use('/api/monitors', requireAuth, require('./routes/monitors'));

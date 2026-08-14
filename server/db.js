@@ -1644,6 +1644,154 @@ if (!talentCriteriaFlag && user1Exists()) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// HIRING MODULE — "know anyone good for this role?" (greenfield, 2026-08)
+//
+// A ground-up rebuild of Talent on the new sourcing infra. The old talent_* tables
+// (above) are left dead-but-intact; nothing here reads or writes them. Deliberately
+// greenfield (Danny's call): no legacy scoring columns to carry, and the model is
+// built for the actual workflow — a JD arrives, it's linked to a real portfolio
+// company (the founders table, invested set), and Stu returns a warm-first, IL-tied,
+// grounded shortlist that's tracked per candidate and handed to the founder.
+//
+// Design rules that show up as columns:
+//   · Roles link to founders(id), NOT a separate portco table — founders is the one
+//     source of truth for Danny's universe (invested = investment_amount > 0).
+//   · Every candidate carries its TIER + PROVENANCE. A warm row names the real
+//     relationship (warm_source); a cold row carries the GitHub slope that earned it.
+//     Warmth is never invented — the old engine's Airtable write-back is not warm and
+//     is not imported at all (see routes/hiring — warm import skips it).
+//   · Every IL tie carries its own receipt (il_tie_type/place/evidence) straight from
+//     verifyIlTie, so a claimed Illinois tie is a fact Danny can read and overrule.
+//   · jd_content is stored so the match rationale can be honesty-gated against the
+//     role's own stated requirements, never against invented ones.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Open roles — one per JD, linked to the portfolio company (founders row) it's for.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hiring_roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    founder_id INTEGER REFERENCES founders(id),   -- the portco this role is for
+    company_name TEXT,                            -- snapshot label (survives a founder rename/unlink)
+    title TEXT NOT NULL,
+    role_function TEXT,                           -- engineering|gtm|product|design|ops|data|finance|marketing|other
+    seniority TEXT,                              -- as stated in the JD (junior..founding..exec); blank if unstated
+    must_have_stack TEXT,                        -- JSON array; only what the JD actually requires
+    nice_to_have_stack TEXT,                     -- JSON array
+    domain TEXT,                                 -- e.g. healthcare, fintech (blank if unstated)
+    must_haves TEXT,                             -- JSON array of hard requirements the JD states
+    location_pref TEXT,                          -- free text, as stated
+    remote_ok INTEGER DEFAULT 1,
+    il_only INTEGER DEFAULT 0,                    -- hard-filter the shortlist to verified IL ties
+    comp_note TEXT,                              -- comp/equity exactly as stated; never a guessed band
+    jd_content TEXT,                             -- raw JD text — the grounding source for rationale
+    jd_source TEXT,                              -- 'pdf' | 'url' | 'sentence'
+    jd_ref TEXT,                                 -- filename or url the JD came from
+    parse_json TEXT,                             -- the raw structured parse (audit trail)
+    status TEXT DEFAULT 'open',                  -- open|paused|filled|closed
+    priority TEXT DEFAULT 'normal',
+    notes TEXT,
+    is_deleted INTEGER DEFAULT 0,
+    deleted_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hr_user ON hiring_roles(user_id, is_deleted, status);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hr_founder ON hiring_roles(founder_id, is_deleted);`);
+
+// The candidate pool — warm and cold in one table, tier + provenance on every row.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hiring_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,
+    headline TEXT,                              -- one-line bio
+    linkedin_url TEXT,
+    github_url TEXT,
+    website_url TEXT,
+    email TEXT,
+    current_company TEXT,
+    current_role TEXT,
+    location_city TEXT,
+    location_state TEXT,
+    role_function TEXT,                         -- normalized function(s) (JSON array or csv)
+    tech_stack TEXT,                            -- JSON array
+    years_experience INTEGER,
+    -- tiering + provenance (warmth is never invented)
+    tier TEXT DEFAULT 'cold',                   -- 'warm' | 'cold'
+    source TEXT,                                -- airtable_talent_db|airtable_master_contacts|portfolio_alumni|github_builders
+    warm_source TEXT,                           -- the real relationship, e.g. "Permute Hackathon"
+    superior_connection TEXT,                   -- warm connection note carried from Airtable
+    external_id TEXT,                           -- source record id (dedup on re-import)
+    -- IL tie, with its receipt
+    il_tie_type TEXT,                           -- current|worked|school|hometown|cofounder
+    il_tie_place TEXT,
+    il_tie_evidence TEXT,
+    -- builder quality (cold / GitHub)
+    github_slope_score INTEGER,
+    github_slope_data TEXT,
+    builder_signals TEXT,                       -- JSON array from builderSignals
+    raw_data TEXT,                              -- JSON blob of the source record
+    notes TEXT,
+    is_deleted INTEGER DEFAULT 0,
+    deleted_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_user ON hiring_candidates(user_id, is_deleted, tier);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_linkedin ON hiring_candidates(user_id, linkedin_url);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_github ON hiring_candidates(user_id, github_url);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_external ON hiring_candidates(user_id, external_id);`);
+
+// The shortlist: candidate ↔ role, with the grounded rationale and the handoff status.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hiring_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    role_id INTEGER NOT NULL REFERENCES hiring_roles(id),
+    candidate_id INTEGER NOT NULL REFERENCES hiring_candidates(id),
+    tier TEXT,                                  -- denormalized warm|cold (warm-first sort)
+    fit_score INTEGER,                          -- role-fit 0-100 from cheap signals
+    rank_score REAL,                            -- final combined rank (warmth-weighted)
+    rationale TEXT,                             -- grounded "why this match" (honesty-gated)
+    strengths TEXT,                             -- JSON array
+    gaps TEXT,                                  -- JSON array (stated, not guessed)
+    breakdown TEXT,                             -- JSON of the score components
+    status TEXT DEFAULT 'sourced',              -- sourced|shortlisted|shared|intro_made|hired|passed
+    status_changed_at DATETIME,
+    surfaced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_deleted INTEGER DEFAULT 0,
+    deleted_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(role_id, candidate_id)
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_role ON hiring_matches(role_id, is_deleted, rank_score DESC);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_candidate ON hiring_matches(candidate_id);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_user ON hiring_matches(user_id, is_deleted, status);`);
+
+// Run log — one row per match/discovery run, role-scoped. Counts are reported, never
+// silent: "12 warm + 40 cold considered → 6 shortlisted" is how Danny trusts a run.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hiring_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    role_id INTEGER REFERENCES hiring_roles(id),
+    kind TEXT,                                  -- 'match' | 'discovery' | 'warm_import'
+    warm_considered INTEGER DEFAULT 0,
+    cold_considered INTEGER DEFAULT 0,
+    shortlisted INTEGER DEFAULT 0,
+    summary TEXT,
+    error TEXT,
+    run_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_hrun_role ON hiring_runs(role_id, run_at DESC);`);
+
+// ════════════════════════════════════════════════════════════════════════════
 // COST ATTRIBUTION, MCP ACCESS & SIGNAL MONITORS
 // (BYOK foundation — see docs/talent-mcp-and-monitors-plan.md)
 // ════════════════════════════════════════════════════════════════════════════
