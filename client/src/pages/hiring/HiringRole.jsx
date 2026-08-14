@@ -125,10 +125,18 @@ export default function HiringRole() {
   );
 }
 
+// Tolerate either a hydrated array or a raw JSON string (defense in depth — the
+// server hydrates, but a stray string must never white-screen the card).
+function asArr(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v) { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } }
+  return [];
+}
+
 function MatchCard({ m, onStatus }) {
   const warm = m.tier === 'warm';
-  const strengths = m.strengths || [];
-  const gaps = m.gaps || [];
+  const strengths = asArr(m.strengths);
+  const gaps = asArr(m.gaps);
   return (
     <div className={`bg-white border rounded-xl p-4 ${warm ? 'border-amber-200' : 'border-gray-200'}`}>
       <div className="flex items-start justify-between gap-3">

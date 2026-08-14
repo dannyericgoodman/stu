@@ -75,13 +75,22 @@ router.get('/:id', (req, res) => {
 
   const matches = db.prepare(`
     SELECT m.*, c.name AS candidate_name, c.headline, c.current_company, c.current_role,
-      c.linkedin_url, c.github_url, c.location_city, c.location_state, c.tier AS candidate_tier,
-      c.warm_source, c.il_tie_type, c.il_tie_place, c.github_slope_score
+      c.linkedin_url, c.github_url, c.website_url, c.location_city, c.location_state, c.tier AS candidate_tier,
+      c.warm_source, c.il_tie_type, c.il_tie_place, c.il_tie_evidence, c.github_slope_score
     FROM hiring_matches m
     JOIN hiring_candidates c ON m.candidate_id = c.id
     WHERE m.role_id = ? AND m.is_deleted = 0
     ORDER BY m.rank_score DESC
   `).all(req.params.id);
+  // Hydrate the JSON arrays so the client gets the SAME shape as GET /matches —
+  // this is the bug live verification caught: the card did strengths.slice().map on
+  // a raw JSON string.
+  for (const m of matches) {
+    for (const f of ['strengths', 'gaps', 'breakdown']) {
+      if (m[f]) { try { m[f] = JSON.parse(m[f]); } catch { m[f] = f === 'breakdown' ? {} : []; } }
+      else m[f] = f === 'breakdown' ? {} : [];
+    }
+  }
 
   res.json({ ...hydrate(row), invested: (row.investment_amount || 0) > 0, matches });
 });
