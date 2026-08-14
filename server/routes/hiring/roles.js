@@ -183,6 +183,64 @@ router.put('/:id', (req, res) => {
   res.json(hydrate(db.prepare('SELECT * FROM hiring_roles WHERE id = ?').get(req.params.id)));
 });
 
+// GET /api/hiring/roles/:id/export?status= — the handoff artifact. A shareable,
+// grounded shortlist Danny copies to the founder or works from to make intros. Stu
+// NEVER contacts anyone — this is text, not a send. Defaults to the candidates worth
+// sharing (shortlisted → intro_made); ?status=all includes the whole ranked list.
+router.get('/:id/export', (req, res) => {
+  const role = db.prepare(`
+    SELECT r.*, f.name AS founder_name, f.company AS founder_company
+    FROM hiring_roles r LEFT JOIN founders f ON r.founder_id = f.id
+    WHERE r.id = ? AND r.user_id = ? AND r.is_deleted = 0
+  `).get(req.params.id, req.user.id);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+
+  const shareable = ['shortlisted', 'shared', 'intro_made', 'hired'];
+  const wantAll = req.query.status === 'all';
+  const matches = db.prepare(`
+    SELECT m.*, c.name AS candidate_name, c.headline, c.current_company, c.current_role,
+      c.linkedin_url, c.github_url, c.website_url, c.location_city, c.tier, c.warm_source,
+      c.il_tie_type, c.il_tie_place, c.il_tie_evidence, c.github_slope_score
+    FROM hiring_matches m JOIN hiring_candidates c ON m.candidate_id = c.id
+    WHERE m.role_id = ? AND m.is_deleted = 0
+    ORDER BY m.rank_score DESC
+  `).all(req.params.id).filter((m) => wantAll || shareable.includes(m.status));
+
+  const company = role.company_name || role.founder_company || 'the company';
+  const lines = [];
+  lines.push(`# ${role.title} — ${company}`);
+  const meta = [role.role_function, role.seniority, role.location_pref].filter(Boolean).join(' · ');
+  if (meta) lines.push(`_${meta}_`);
+  lines.push('');
+  if (!matches.length) {
+    lines.push('_No candidates shared yet. Shortlist a few first._');
+  } else {
+    lines.push(`${matches.length} ${matches.length === 1 ? 'name' : 'names'}, warm network first:`);
+    lines.push('');
+    matches.forEach((m, i) => {
+      const badges = [];
+      if (m.tier === 'warm') badges.push(m.warm_source ? `warm — ${m.warm_source}` : 'warm');
+      if (m.il_tie_type) badges.push(`IL: ${m.il_tie_type}${m.il_tie_place ? ` (${m.il_tie_place})` : ''}`);
+      const role_co = [m.current_role, m.current_company].filter(Boolean).join(' @ ');
+      lines.push(`**${i + 1}. ${m.candidate_name}**${role_co ? ` — ${role_co}` : ''}${badges.length ? `  ·  ${badges.join('  ·  ')}` : ''}`);
+      if (m.rationale) lines.push(`   ${m.rationale}`);
+      const gaps = (() => { try { return JSON.parse(m.gaps || '[]'); } catch { return []; } })();
+      if (gaps.length) lines.push(`   _Gap: ${gaps.join('; ')}_`);
+      const links = [
+        m.linkedin_url ? `[LinkedIn](${m.linkedin_url})` : null,
+        m.github_url ? `[GitHub](${m.github_url})` : null,
+        m.website_url ? `[Site](${m.website_url})` : null,
+      ].filter(Boolean);
+      if (links.length) lines.push(`   ${links.join(' · ')}`);
+      lines.push('');
+    });
+  }
+  const markdown = lines.join('\n').trim();
+  // Plain text: strip the light markdown so it pastes clean into an email/DM.
+  const text = markdown.replace(/^#\s+/gm, '').replace(/\*\*/g, '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1: $2').replace(/^_(.*)_$/gm, '$1');
+  res.json({ role_id: role.id, title: role.title, company, count: matches.length, markdown, text });
+});
+
 // DELETE /api/hiring/roles/:id — soft delete.
 router.delete('/:id', (req, res) => {
   const existing = db.prepare('SELECT id FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(req.params.id, req.user.id);
