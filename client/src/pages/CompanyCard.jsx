@@ -230,6 +230,11 @@ export default function CompanyCard() {
             <Field label="Illinois tie" value={c.chicago_connection} onSave={(v) => save('chicago_connection', v)} />
           </Block>
 
+          {/* ── Open roles — the Hiring product, folded onto the portco card ──
+              When Danny is helping this founder hire, every role he's sourcing for
+              them shows here, one click from the shortlist. */}
+          <OpenRoles founderId={id} />
+
           {/* ── The co-founders folded into this card ──
               Danny: "Eric Mills and Scott Nelson are both showing for Permute...
               Could we just have Scott and Kyle kept in?" They're off the BOARD, not
@@ -1051,6 +1056,33 @@ function Block({ label, right, children }) {
       )}
       {children}
     </div>
+  );
+}
+
+// Open hiring roles for this portco — the Hiring product surfaced on the card.
+function OpenRoles({ founderId }) {
+  const [roles, setRoles] = useState(null);
+  useEffect(() => {
+    if (!founderId) return;
+    api.getHiringRoles({ founder_id: founderId }).then(setRoles).catch(() => setRoles([]));
+  }, [founderId]);
+  if (roles == null) return null;               // loading — don't flash an empty block
+  const open = roles.filter((r) => r.status !== 'closed');
+  return (
+    <Block label="Open roles" right={<Link to="/hiring" className="text-micro text-ink-4 hover:text-ink-2">＋ add</Link>}>
+      {!open.length ? (
+        <Empty>None yet — <Link to="/hiring" className="underline">source a hire</Link></Empty>
+      ) : (
+        <div className="space-y-1">
+          {open.map((r) => (
+            <Link key={r.id} to={`/hiring/${r.id}`} className="flex items-center justify-between h-6 group">
+              <span className="text-mini text-ink-2 truncate group-hover:underline">{r.title}</span>
+              {r.match_count > 0 && <span className="text-micro text-ink-4 flex-shrink-0 ml-2">{r.shortlisted_count || 0}/{r.match_count}</span>}
+            </Link>
+          ))}
+        </div>
+      )}
+    </Block>
   );
 }
 

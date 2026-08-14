@@ -50,6 +50,8 @@ const Brief = lazy(() => import('./pages/Brief'));
 const Releases = lazy(() => import('./pages/Releases'));
 const Health = lazy(() => import('./pages/Health'));
 const Admin = lazy(() => import('./pages/Admin'));
+const HiringHome = lazy(() => import('./pages/hiring/HiringHome'));
+const HiringRole = lazy(() => import('./pages/hiring/HiringRole'));
 const TalentLayout = lazy(() => import('./components/TalentLayout'));
 const TalentHome = lazy(() => import('./pages/talent/TalentHome'));
 const TalentCriteria = lazy(() => import('./pages/talent/TalentCriteria'));
@@ -139,6 +141,8 @@ function AppRoutes() {
       <Route path="/assess" element={<ProtectedRoute><Assess /></ProtectedRoute>} />
       <Route path="/assess/:id" element={<ProtectedRoute><Read /></ProtectedRoute>} />
       <Route path="/assess/:id/full" element={<ProtectedRoute><AssessmentDetail /></ProtectedRoute>} />
+      <Route path="/hiring" element={<ProtectedRoute><HiringHome /></ProtectedRoute>} />
+      <Route path="/hiring/:id" element={<ProtectedRoute><HiringRole /></ProtectedRoute>} />
       <Route path="/portfolio" element={<ProtectedRoute><Placeholder title="Portfolio" /></ProtectedRoute>} />
       <Route path="/fund" element={<ProtectedRoute><Placeholder title="Fund Analytics" /></ProtectedRoute>} />
       <Route path="/brief" element={<ProtectedRoute><Brief /></ProtectedRoute>} />

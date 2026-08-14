@@ -574,6 +574,38 @@ export const api = {
   purgeTalentTrash: (type, ids) => request('/talent/trash/purge', { method: 'POST', body: JSON.stringify({ type, ids }) }),
   emptyTalentTrash: () => request('/talent/trash/empty', { method: 'POST' }),
 
+  // ── Hiring (greenfield — "know anyone good for this role?") ──
+  getHiringCompanies: () => request('/hiring/companies'),
+  pickHiringCompanies: (search = '') => request('/hiring/companies/pick?' + new URLSearchParams(search ? { search } : {})),
+  getHiringRoles: (params) => request('/hiring/roles?' + new URLSearchParams(params || {})),
+  getHiringRole: (id) => request(`/hiring/roles/${id}`),
+  updateHiringRole: (id, data) => request(`/hiring/roles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteHiringRole: (id) => request(`/hiring/roles/${id}`, { method: 'DELETE' }),
+  exportHiringRole: (id, status) => request(`/hiring/roles/${id}/export?` + new URLSearchParams(status ? { status } : {})),
+  // JD ingest — sentence/link go as JSON; a PDF goes as multipart (same caveat as
+  // uploadDeck: don't force application/json, or multer sees no file).
+  ingestHiringRole: async (payload, file) => {
+    if (file) {
+      const fd = new FormData();
+      fd.append('file', file);
+      for (const [k, v] of Object.entries(payload || {})) if (v != null) fd.append(k, v);
+      const res = await fetch(`${API_BASE}/hiring/roles/ingest`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd });
+      if (res.status === 401) { setToken(null); setUser(null); window.location.href = '/login'; throw new Error('Session expired'); }
+      const d = await res.json().catch(() => ({ error: 'Ingest failed' }));
+      if (!res.ok) { const e = new Error(d.error || 'Ingest failed'); e.detail = d.detail; throw e; }
+      return d;
+    }
+    return request('/hiring/roles/ingest', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  getHiringCandidates: (params) => request('/hiring/candidates?' + new URLSearchParams(params || {})),
+  getHiringMatches: (params) => request('/hiring/matches?' + new URLSearchParams(params || {})),
+  updateHiringMatch: (id, data) => request(`/hiring/matches/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteHiringMatch: (id) => request(`/hiring/matches/${id}`, { method: 'DELETE' }),
+  runHiringMatch: (roleId, opts = {}) => request('/hiring/matches/run', { method: 'POST', body: JSON.stringify({ role_id: roleId, ...opts }) }),
+  runHiringDiscovery: (roleId, opts = {}) => request('/hiring/discovery/run', { method: 'POST', body: JSON.stringify({ role_id: roleId, ...opts }) }),
+  importHiringWarm: () => request('/hiring/warm/import', { method: 'POST' }),
+  getHiringWarmStatus: () => request('/hiring/warm/status'),
+
   // MCP / API access
   getMcpInfo: () => request('/mcp/info'),
   getMcpTokens: () => request('/mcp/tokens'),
