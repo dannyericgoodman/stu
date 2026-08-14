@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../../utils/api';
 import { useToast } from '../../components/Toast';
@@ -15,36 +15,64 @@ export default function HiringRole() {
   const { id } = useParams();
   const [role, setRole] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState('');
+  const [sourcing, setSourcing] = useState(false);
+  const [progress, setProgress] = useState('');
   const [exportText, setExportText] = useState(null);
   const { toast } = useToast();
+  const pollRef = useRef(null);
 
-  useEffect(() => { load(); }, [id]);
-  async function load() {
+  useEffect(() => { init(); }, [id]);
+  useEffect(() => () => clearInterval(pollRef.current), []); // stop polling on unmount
+
+  // On open: load the role. If a sourcing run is already in flight, resume polling.
+  // If it's a brand-new role (no matches, never sourced), auto-source — "describe it
+  // and the engine goes" is the whole point; don't make Danny hunt for a button.
+  async function init() {
     setLoading(true);
-    try { setRole(await api.getHiringRole(id)); }
-    catch (err) { toast({ message: err.message, tone: 'error' }); }
-    finally { setLoading(false); }
+    let r;
+    try { r = await api.getHiringRole(id); setRole(r); }
+    catch (err) { toast({ message: err.message, tone: 'error' }); setLoading(false); return; }
+    setLoading(false);
+    try {
+      const st = await api.getHiringSourceStatus(id);
+      if (st.status === 'running') startPolling();
+      else if (st.status === 'none' && (!r.matches || !r.matches.length)) source();
+    } catch { /* leave it to the button */ }
   }
 
-  async function runMatch() {
-    setRunning('match');
-    try {
-      const r = await api.runHiringMatch(Number(id));
-      toast({ message: r.summary || 'Shortlist ready' });
-      await load();
-    } catch (err) { toast({ message: err.message, tone: 'error' }); }
-    finally { setRunning(''); }
+  async function load() {
+    try { setRole(await api.getHiringRole(id)); } catch { /* transient */ }
   }
 
-  async function discover() {
-    setRunning('discover');
-    try {
-      const r = await api.runHiringDiscovery(Number(id));
-      toast({ message: r.discovery ? `${r.discovery.added || 0} new IL builders found` : 'Discovery done' });
-      await load();
-    } catch (err) { toast({ message: err.message, tone: 'error' }); }
-    finally { setRunning(''); }
+  function startPolling() {
+    setSourcing(true);
+    if (!progress) setProgress('Sourcing your network + the open web…');
+    clearInterval(pollRef.current);
+    let ticks = 0;
+    pollRef.current = setInterval(async () => {
+      ticks++;
+      try {
+        const st = await api.getHiringSourceStatus(Number(id));
+        if (st.found > 0) setProgress(`Found ${st.found} so far…`);
+        if (st.status === 'done' || st.status === 'error' || ticks > 40) {
+          clearInterval(pollRef.current);
+          setSourcing(false); setProgress('');
+          await load();
+          if (st.status === 'error') toast({ message: st.error || 'Sourcing hit an error', tone: 'error' });
+          else toast({ message: st.summary || 'Shortlist ready' });
+        } else {
+          await load(); // refresh the list as leads land
+        }
+      } catch { /* keep polling */ }
+    }, 3000);
+  }
+
+  // The engine: kick off sourcing (warm + Exa + GitHub → rank) in the background.
+  async function source() {
+    setSourcing(true);
+    setProgress('Sourcing your network + the open web…');
+    try { await api.sourceHiringRole(Number(id)); startPolling(); }
+    catch (err) { setSourcing(false); setProgress(''); toast({ message: err.message, tone: 'error' }); }
   }
 
   async function doExport() {
@@ -82,16 +110,12 @@ export default function HiringRole() {
           </p>
         </div>
         <div className="flex gap-2 flex-shrink-0">
-          <button onClick={runMatch} disabled={!!running}
+          <button onClick={source} disabled={sourcing}
             className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-[13px] font-medium hover:bg-gray-800 disabled:opacity-50">
-            {running === 'match' ? 'Matching…' : matches.length ? 'Re-match' : 'Find matches'}
-          </button>
-          <button onClick={discover} disabled={!!running}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:border-gray-300 disabled:opacity-50">
-            {running === 'discover' ? 'Searching…' : 'Find more on GitHub'}
+            {sourcing ? (progress || 'Sourcing…') : matches.length ? 'Re-source' : 'Find matches'}
           </button>
           {matches.length > 0 && (
-            <button onClick={doExport} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:border-gray-300">Export</button>
+            <button onClick={doExport} disabled={sourcing} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 text-[13px] font-medium hover:border-gray-300 disabled:opacity-50">Export</button>
           )}
         </div>
       </div>
@@ -111,11 +135,43 @@ export default function HiringRole() {
       <div className="mt-6">
         {!matches.length ? (
           <div className="text-sm text-gray-400 py-8 text-center border border-dashed border-gray-200 rounded-xl">
-            No shortlist yet. Click <span className="font-medium text-gray-600">Find matches</span> to rank your warm network and IL-tied builders for this role.
+            {sourcing ? (
+              <span className="inline-flex items-center gap-2 text-gray-500">
+                <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                {progress || 'Sourcing your network + the open web…'}
+              </span>
+            ) : (
+              <>The engine sources your warm network + aligned builders from the open web, then ranks them. Click <span className="font-medium text-gray-600">Find matches</span>.</>
+            )}
           </div>
         ) : (
           <div className="space-y-2">
-            {matches.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
+            {sourcing && (
+              <div className="flex items-center gap-2 text-[12px] text-gray-500 pb-1">
+                <span className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                {progress || 'Sourcing more…'}
+              </div>
+            )}
+            {(() => {
+              const warm = matches.filter((m) => m.tier === 'warm');
+              const cold = matches.filter((m) => m.tier !== 'warm');
+              return (
+                <>
+                  {warm.length > 0 && (
+                    <>
+                      <SectionLabel>Warm network · {warm.length}</SectionLabel>
+                      {warm.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
+                    </>
+                  )}
+                  {cold.length > 0 && (
+                    <>
+                      <SectionLabel>Sourced — open web &amp; GitHub · {cold.length}</SectionLabel>
+                      {cold.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -123,6 +179,10 @@ export default function HiringRole() {
       {exportText && <ExportModal data={exportText} onClose={() => setExportText(null)} />}
     </div>
   );
+}
+
+function SectionLabel({ children }) {
+  return <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 pt-3 pb-1">{children}</div>;
 }
 
 // Tolerate either a hydrated array or a raw JSON string (defense in depth — the

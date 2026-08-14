@@ -25,19 +25,18 @@ test('a GTM person is never returned for an engineering role', () => {
   assert.ok(ranked.find((r) => r.candidate.id === 1), 'eng kept');
 });
 
-test('warm outranks a near-equal cold; strong cold outranks weak warm', () => {
+test('warm is a TIER: the whole warm tier ranks above cold; fit orders within a tier', () => {
   const pool = [
-    // Warm and ColdEqual have the SAME evidence → equal raw fit; warmth breaks the tie.
-    cand({ id: 1, name: 'Warm', tier: 'warm', headline: 'Senior Python Postgres backend, healthcare' }),
-    cand({ id: 2, name: 'ColdEqual', headline: 'Senior Python Postgres backend, healthcare' }),
-    // A much stronger cold (extra stack + slope) must still beat a weak warm contact.
-    cand({ id: 3, name: 'ColdStrong', headline: 'Senior Python Postgres AWS backend healthcare', github_slope_score: 9 }),
-    cand({ id: 4, name: 'WarmWeak', tier: 'warm', headline: 'Frontend React developer' }),
+    cand({ id: 1, name: 'WarmStrong', tier: 'warm', headline: 'Senior Python Postgres backend, healthcare' }),
+    cand({ id: 2, name: 'ColdStrong', headline: 'Senior Python Postgres AWS backend healthcare', github_slope_score: 9 }),
+    // A qualifying-but-weaker warm contact still ranks above even a strong cold one —
+    // the VC's edge is a warm intro. (Below the fit floor it would be dropped entirely.)
+    cand({ id: 3, name: 'WarmWeaker', tier: 'warm', headline: 'Python backend engineer' }),
   ];
   const ranked = rankCandidates(engRole, pool);
   const pos = (id) => ranked.findIndex((r) => r.candidate.id === id);
-  assert.ok(pos(1) < pos(2), 'equal-fit warm beats cold');
-  assert.ok(pos(3) < pos(4), 'much stronger cold beats weak warm');
+  assert.ok(pos(1) < pos(3), 'higher-fit warm leads within the warm tier');
+  assert.ok(pos(3) < pos(2), 'a qualifying warm contact still outranks a strong cold one (tier)');
 });
 
 test('IL-only is a hard filter', () => {

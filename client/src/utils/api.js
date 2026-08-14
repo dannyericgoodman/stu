@@ -602,6 +602,8 @@ export const api = {
   updateHiringMatch: (id, data) => request(`/hiring/matches/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteHiringMatch: (id) => request(`/hiring/matches/${id}`, { method: 'DELETE' }),
   runHiringMatch: (roleId, opts = {}) => request('/hiring/matches/run', { method: 'POST', body: JSON.stringify({ role_id: roleId, ...opts }) }),
+  sourceHiringRole: (roleId) => request(`/hiring/roles/${roleId}/source`, { method: 'POST' }),
+  getHiringSourceStatus: (roleId) => request(`/hiring/roles/${roleId}/source-status`),
   runHiringDiscovery: (roleId, opts = {}) => request('/hiring/discovery/run', { method: 'POST', body: JSON.stringify({ role_id: roleId, ...opts }) }),
   importHiringWarm: () => request('/hiring/warm/import', { method: 'POST' }),
   getHiringWarmStatus: () => request('/hiring/warm/status'),

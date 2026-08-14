@@ -30,9 +30,15 @@ const { detectSignals } = require('../lib/builderSignals');
 const { anthropicFor, MODEL } = require('../lib/providerKeys');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
 
-const WARM_BONUS = 12;   // a warm tier wins ties and near-ties (points on a 0-100 fit scale)
+// Warm-first is a TIER, not a bonus. The brief: "Rank in tiers: Warm matched first;
+// then Cold." A warm contact's one-line bio can't confirm a stack the way a scraped
+// cold profile can, so scoring them head-to-head buries warm every time — which is
+// exactly backwards from the VC's edge. So warm gets a large ordering offset: the
+// whole warm tier sorts above the whole cold tier, and within each tier fit + IL
+// decide. rank_score is an ORDERING KEY only (never shown — the card shows fit_score).
+const WARM_TIER_OFFSET = 1000;
 const IL_BONUS = 8;      // a verified Illinois tie, when the role isn't IL-only
-const SHORTLIST_FLOOR = 25; // below this fit, don't put someone in front of a founder
+const SHORTLIST_FLOOR = 22; // below this fit, don't put someone in front of a founder
 
 // ── candidate text: everything we can honestly cite about a person ──
 function profileText(c) {
@@ -171,15 +177,15 @@ function rankCandidates(role, candidates) {
     if (f.hardMismatch) continue;                          // never pair an eng role with a GTM person
     if (f.fit < SHORTLIST_FLOOR) continue;                 // don't waste the founder's attention
     const warm = cand.tier === 'warm';
-    const rank = f.fit + (warm ? WARM_BONUS : 0) + (cand.il_tie_type && !ilOnly ? IL_BONUS : 0);
+    const rank = (warm ? WARM_TIER_OFFSET : 0) + f.fit + (cand.il_tie_type && !ilOnly ? IL_BONUS : 0);
     ranked.push({
       candidate: cand, fit: f.fit, rank_score: Math.round(rank * 10) / 10,
       tier: cand.tier || 'cold', strengths: f.strengths, gaps: f.gaps, breakdown: f.breakdown,
       il: cand.il_tie_type ? { type: cand.il_tie_type, place: cand.il_tie_place, evidence: cand.il_tie_evidence } : null,
     });
   }
-  // Warm-first is baked into rank_score; ties break to warm, then higher fit.
-  ranked.sort((a, b) => b.rank_score - a.rank_score || (b.tier === 'warm') - (a.tier === 'warm') || b.fit - a.fit);
+  // Warm tier first (via the offset), then fit + IL within each tier.
+  ranked.sort((a, b) => b.rank_score - a.rank_score || b.fit - a.fit);
   return ranked;
 }
 
@@ -247,7 +253,7 @@ function fallbackLine(it) {
  * Run the matcher for one role: rank the pool, take the top N, explain the shortlist,
  * upsert hiring_matches, log the run. Returns the shortlist + counts.
  */
-async function runMatch({ userId = 1, roleId, limit = 10, explain = true } = {}) {
+async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain = true } = {}) {
   const role = db.prepare('SELECT * FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(roleId, userId);
   if (!role) return { error: 'Role not found' };
   const pool = db.prepare('SELECT * FROM hiring_candidates WHERE user_id = ? AND is_deleted = 0').all(userId);
@@ -255,7 +261,12 @@ async function runMatch({ userId = 1, roleId, limit = 10, explain = true } = {})
   const ranked = rankCandidates(role, pool);
   const warmConsidered = pool.filter((c) => c.tier === 'warm').length;
   const coldConsidered = pool.length - warmConsidered;
-  const shortlist = ranked.slice(0, limit);
+  // Represent BOTH tiers — a single flat limit let a whole tier vanish (the "0 warm,
+  // 10 cold" bug). Cap each tier, warm first, so Danny always sees his network AND the
+  // freshly-sourced leads. ranked is already warm-first, so a simple filter+slice works.
+  const warmList = ranked.filter((r) => r.tier === 'warm').slice(0, warmCap);
+  const coldList = ranked.filter((r) => r.tier !== 'warm').slice(0, coldCap);
+  const shortlist = [...warmList, ...coldList];
   const explained = explain ? await explainShortlist({ userId, role, items: shortlist }) : shortlist.map((it) => ({ ...it, rationale: fallbackLine(it) }));
 
   // Upsert matches. Re-running a role refreshes scores/rationale but PRESERVES the
@@ -290,5 +301,5 @@ async function runMatch({ userId = 1, roleId, limit = 10, explain = true } = {})
 
 module.exports = {
   runMatch, rankCandidates, computeFit, functionFit, stackOverlap, seniorityFit, domainFit,
-  profileText, explainShortlist, fallbackLine, WARM_BONUS, IL_BONUS, SHORTLIST_FLOOR,
+  profileText, explainShortlist, fallbackLine, WARM_TIER_OFFSET, IL_BONUS, SHORTLIST_FLOOR,
 };

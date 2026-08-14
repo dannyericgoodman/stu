@@ -1790,6 +1790,12 @@ db.exec(`
   );
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_hrun_role ON hiring_runs(role_id, run_at DESC);`);
+// Sourcing runs in the background (Exa + GitHub take 20-40s); the client polls this
+// row's status. 'running' → 'done' | 'error'. `found` is a live tally so the UI can
+// say "found 6 so far" while it works.
+addColumn('hiring_runs', 'status', "TEXT DEFAULT 'done'");
+addColumn('hiring_runs', 'found', 'INTEGER DEFAULT 0');
+addColumn('hiring_runs', 'finished_at', 'DATETIME');
 
 // ════════════════════════════════════════════════════════════════════════════
 // COST ATTRIBUTION, MCP ACCESS & SIGNAL MONITORS

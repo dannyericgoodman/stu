@@ -7,6 +7,7 @@ const router = express.Router();
 const multer = require('multer');
 const db = require('../../db');
 const { extractJdText, parseRole } = require('../../lib/roleIngest');
+const { startSourcing, latestRun } = require('../../pipeline/hiring-source');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -190,6 +191,22 @@ router.put('/:id', (req, res) => {
   params.push(req.params.id, req.user.id);
   db.prepare(`UPDATE hiring_roles SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
   res.json(hydrate(db.prepare('SELECT * FROM hiring_roles WHERE id = ?').get(req.params.id)));
+});
+
+// POST /api/hiring/roles/:id/source — the engine. Go source aligned leads (warm +
+// Exa + GitHub), then rank. Runs in the background; returns a run_id to poll.
+router.post('/:id/source', (req, res) => {
+  const role = db.prepare('SELECT id FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(req.params.id, req.user.id);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+  const { runId } = startSourcing({ userId: req.user.id, roleId: Number(req.params.id) });
+  res.json({ started: true, run_id: runId });
+});
+
+// GET /api/hiring/roles/:id/source-status — poll the latest sourcing run.
+router.get('/:id/source-status', (req, res) => {
+  const role = db.prepare('SELECT id FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(req.params.id, req.user.id);
+  if (!role) return res.status(404).json({ error: 'Not found' });
+  res.json(latestRun(req.user.id, Number(req.params.id)) || { status: 'none' });
 });
 
 // GET /api/hiring/roles/:id/export?status= — the handoff artifact. A shareable,
