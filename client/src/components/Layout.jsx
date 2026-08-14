@@ -50,9 +50,9 @@ const navConfig = [
   { to: '/pipeline', label: 'Pipeline' },
   { to: '/assess', label: 'Assess' },
   // Hiring is the inverted lens of Assess: instead of judging a founder, you help
-  // one hire. It's the same VC muscle pointed at the portfolio, so it sits nested
-  // under Assess. (Replaces the old Talent wing, which is dead-but-routed.)
-  { to: '/hiring', label: 'Hiring', indent: true },
+  // one hire. Same VC muscle pointed at the portfolio, so it sits right after Assess
+  // — flush-aligned with the other doors, not indented. (Replaces the old Talent wing.)
+  { to: '/hiring', label: 'Hiring' },
 ];
 const utilityConfig = [
   { to: '/settings', label: 'Settings' },
@@ -167,7 +167,7 @@ export default function Layout({ children }) {
               end={item.to === '/'}
               onClick={(e) => { if (item.placeholder) e.preventDefault(); setMobileOpen(false); }}
               className={({ isActive }) =>
-                `flex items-center justify-between ${item.indent ? 'pl-7 pr-3' : 'px-3'} py-[7px] rounded-lg text-[13px] font-medium transition-colors ${
+                `flex items-center justify-between px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors ${
                   item.accent
                     ? isActive
                       ? 'bg-gray-900 text-white'
