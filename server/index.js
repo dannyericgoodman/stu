@@ -26,6 +26,27 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { requireAuth, seedTeam } = require('./auth');
 
+// ══════════════════════════════════════════════════════════════════════════
+// Is the nightly scout armed, and if not, why? ONE definition, used by both the
+// scheduler and /api/health, so the health page can never report a state the cron
+// isn't actually in. Resolves keys through providerKeys — the owner's SAVED key
+// first, environment second — because that is how every engine resolves them, and
+// checking the environment alone is the bug this whole change exists to end.
+// ══════════════════════════════════════════════════════════════════════════
+let scoutKeys = {};
+function scoutArmed() {
+  try { scoutKeys = require('./lib/providerKeys').loadUserApiKeys(1); }
+  catch { scoutKeys = {}; }
+  if (process.env.PIPELINE_ENABLED === 'false') {
+    return { ready: false, why: 'PIPELINE_ENABLED=false (explicit kill switch)' };
+  }
+  const missing = [!scoutKeys.exa && 'exa', !scoutKeys.anthropic && 'anthropic'].filter(Boolean);
+  if (missing.length) {
+    return { ready: false, why: `missing key(s): ${missing.join(' + ')} — set them in Settings` };
+  }
+  return { ready: true, why: null };
+}
+
 const app = express();
 // Railway injects PORT; fall back to STU_PORT or 3002 for local dev
 const PORT = process.env.PORT || process.env.STU_PORT || 3002;
@@ -470,11 +491,20 @@ app.get('/api/health', (req, res) => res.json({
   status: 'ok', app: 'Stu', version: '4.9.2',
   pipeline: {
     // Armed = the daily sourcing/talent/filings crons will actually run tonight.
-    sourcing_armed: process.env.PIPELINE_ENABLED === 'true'
-      || (!!process.env.EXA_API_KEY && !!process.env.ANTHROPIC_API_KEY),
+    // ── ONE definition of "armed", shared with the scheduler ──
+    // This reported the OLD env-only rule while the scheduler had moved to resolving
+    // the owner's saved keys. Two answers to one question, and the health endpoint's
+    // was the more confident and the less true: it would say `sourcing_armed: true`
+    // off an EXA_API_KEY in the environment on a deploy where the scout had actually
+    // declined to schedule, or `false` for an owner whose key is saved in Settings
+    // and whose scout is running perfectly.
+    //
+    // scoutArmed() is the scheduler's own check, hoisted, so a health page that says
+    // armed means the cron is armed. That is the whole job of this endpoint.
+    sourcing_armed: scoutArmed().ready,
     newsletter_armed: true, // ungated — runs for any user with sources/Gmail
-    has_exa: !!process.env.EXA_API_KEY,
-    has_anthropic: !!process.env.ANTHROPIC_API_KEY,
+    has_exa: !!scoutKeys.exa,
+    has_anthropic: !!scoutKeys.anthropic,
   },
 }));
 // Full healthcheck board (authed) — green/red status across datastores, keys, jobs, integrity.
@@ -796,32 +826,31 @@ app.listen(PORT, () => {
   //
   // Every engine below resolves its keys through lib/providerKeys, which reads the
   // OWNER'S SAVED KEY from user_settings first and only falls back to the
-  // environment. Danny's Exa key has always lived there — `api_key_exa`, set, 36
-  // chars — and never in EXA_API_KEY. So the gate looked for the key in the one
-  // place the product deliberately stopped putting it, found nothing, and silently
-  // declined to schedule the single job that makes Sourcing a product.
+  // environment. Danny's Exa key lives there — `api_key_exa`, 36 chars. The gate
+  // looked only at the environment, so it could decline to schedule the single job
+  // that makes Sourcing a product while the key it needed was sitting in Settings.
   //
-  // The evidence is total: `job_runs` has never held one `sourcing_run` row, and
-  // every sourced founder in the database arrived on exactly two dates — both days
-  // he pressed the button himself.
+  // MEASURED, and worth stating precisely because the two environments differ:
+  //   · locally the gate was FALSE (no EXA_API_KEY, PIPELINE_ENABLED=false), and
+  //     `job_runs` has never held one sourcing row — every sourced founder in that
+  //     database arrived on exactly two dates, both manual sweeps.
+  //   · production DOES set EXA_API_KEY, so the old gate armed there. The cron has
+  //     most likely been running on prod all along.
+  //
+  // The fix is still the right one — readiness must be decided by the same resolver
+  // the engines use, or the answer depends on which environment you happen to be in,
+  // which is exactly the confusion above. But it is a correctness fix plus a
+  // dev-environment fix, not the discovery that production never ran.
   //
   // So the gate now asks the engines' own question, through their own resolver.
   // PIPELINE_ENABLED survives only as an explicit KILL SWITCH ('false' stops the
   // scheduler); it is no longer something you must remember to turn on, because a
   // flag you must remember is a flag that will be forgotten in exactly this way.
   // ══════════════════════════════════════════════════════════════════════
-  const scoutKeys = (() => {
-    try { return require('./lib/providerKeys').loadUserApiKeys(1); }
-    catch { return {}; }
-  })();
-  const pipelineDisabled = process.env.PIPELINE_ENABLED === 'false';
-  const pipelineReady = !pipelineDisabled && !!scoutKeys.exa && !!scoutKeys.anthropic;
+  const { ready: pipelineReady, why: notReadyWhy } = scoutArmed();
 
   if (!pipelineReady) {
-    // Say WHICH key is missing. "Pipeline inactive" alone is how this hid.
-    const why = pipelineDisabled
-      ? 'PIPELINE_ENABLED=false (explicit kill switch)'
-      : `missing key(s): ${[!scoutKeys.exa && 'exa', !scoutKeys.anthropic && 'anthropic'].filter(Boolean).join(' + ')} — set them in Settings`;
+    const why = notReadyWhy;
     console.warn(`[Cron] Nightly scout NOT scheduled — ${why}`);
     // Recorded under its OWN job name, not 'nightly_scout'. The inbox reads the last
     // 'nightly_scout' row to say "Scout ran 4h ago", and a config problem filed under

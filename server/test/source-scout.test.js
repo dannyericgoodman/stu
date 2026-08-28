@@ -6,7 +6,7 @@
 //   · a fellowship is never written into the company field.
 //   · a cohort hit we know nothing about is not a lead.
 //   · the nightly scout's readiness gate reads the OWNER'S SAVED KEY, not the
-//     environment — the bug that meant sourcing never ran on a schedule.
+//     environment, and /api/health reports that same answer rather than a second one.
 // ══════════════════════════════════════════════════════════════════════════
 
 const test = require('node:test');
@@ -103,16 +103,28 @@ test('the historical cleanup only ever nulls the company, never the headline', (
     '"Thiel Fellow" as a headline is a true statement — misfiled, not false');
 });
 
-// ── The gate that meant sourcing never ran ─────────────────────────────
+// ── The readiness gate ─────────────────────────────────────────────────
 test('the scout readiness gate reads the saved key, not the environment', () => {
   const src = read('index.js');
-  const gate = src.slice(src.indexOf('const scoutKeys'), src.indexOf('if (pipelineReady) {'));
+  const gate = src.slice(src.indexOf('function scoutArmed()'), src.indexOf('const app = express()'));
   assert.ok(/loadUserApiKeys\(1\)/.test(gate),
     'readiness resolves keys the same way the engines do');
   assert.ok(!/process\.env\.EXA_API_KEY/.test(gate),
     'EXA_API_KEY is not where the key lives — that lookup is the whole bug');
   assert.ok(/PIPELINE_ENABLED === 'false'/.test(gate),
     'PIPELINE_ENABLED is a kill switch, never something you must remember to turn on');
+});
+
+test('/api/health reports the scheduler\'s OWN answer, not a second one', () => {
+  // The health endpoint used to compute `sourcing_armed` from env vars while the
+  // scheduler resolved saved keys — so it could confidently report armed on a deploy
+  // where the cron had declined to schedule, which is the exact class of bug (two
+  // answers to one question, the louder one wrong) this change exists to remove.
+  const src = read('index.js');
+  assert.ok(/sourcing_armed: scoutArmed\(\)\.ready/.test(src),
+    'health calls the scheduler\'s check rather than re-deriving it');
+  assert.ok(!/sourcing_armed: process\.env\.PIPELINE_ENABLED/.test(src),
+    'the old env-only copy is gone');
 });
 
 test('the scout writes one ledger row whether or not it found anyone', () => {
