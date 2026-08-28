@@ -25,6 +25,39 @@ function list() {
   }));
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// A PROGRAM IS NOT A COMPANY.
+//
+// The cohort connectors resolve people who are IN a program, so the program's name
+// is all over their search result. lib/cohortDiscovery no longer puts it in the
+// headline (that was the original bug), but the enrichment pass reads whatever text
+// exists and can still answer `company: "Z Fellows"` for someone whose bio is mostly
+// the fellowship. That produced rows like "Cory Levy | Z Fellows" — he runs it.
+//
+// So the last thing before persist is a check against the connector's OWN label and
+// the handful of program names the enricher actually returns. Nulling the field is
+// the honest outcome: we do not know what they're building, and an empty company
+// column says that. The program itself is already carried in `evidence` and in the
+// `source` column, so nothing is lost.
+// ══════════════════════════════════════════════════════════════════════
+const PROGRAM_NAMES = new Set([
+  'y combinator', 'yc', 'a16z speedrun', 'speedrun', 'thiel fellowship', 'thiel fellows',
+  'z fellows', 'zfellows', 'neo', 'neo scholars', 'the residency', 'emergent ventures',
+  'techstars', 'on deck', 'entrepreneur first', 'antler', 'south park commons',
+]);
+const normCo = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+function scrubProgramCompany(rows, connector) {
+  if (!Array.isArray(rows)) return rows;
+  const own = normCo(connector && connector.label);
+  for (const p of rows) {
+    const co = normCo(p.company);
+    if (!co) continue;
+    if (co === own || PROGRAM_NAMES.has(co)) p.company = null;
+  }
+  return rows;
+}
+
 // Run one connector for a user. fetch → geo-filter → enrich → dedup → persist.
 async function ingest(key, { userId, since = null, enrich = true, persist = true, limit = 50, deps = {} } = {}) {
   const c = REGISTRY[key];
@@ -102,8 +135,8 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
     if (e) { enriched = true; return e; }
     return rows;
   }
-  const pipelineEnriched = await enrichGroup(pipelineNew);
-  const watchEnriched = await enrichGroup(watchNew);
+  const pipelineEnriched = scrubProgramCompany(await enrichGroup(pipelineNew), c);
+  const watchEnriched = scrubProgramCompany(await enrichGroup(watchNew), c);
 
   // 6. Persist, tagged by scope. isDupe still runs here as well as above — the
   //    two calls are cheap SELECTs, and re-checking closes the window where a
@@ -141,6 +174,13 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
   // saturates, a healthy run looks like "fetched 144, skipped 144, spent $0" —
   // and without that number it's indistinguishable from a broken connector. The
   // cron writes this into its ledger line.
+  // Score what just landed. Same reason as the sweep: the inbox reads a stored
+  // verdict, and an unscored row is invisible in every filtered view.
+  if (persisted || watchlisted) {
+    try { require('../../lib/fitIndex').rescoreStale({ userId }); }
+    catch (e) { console.error(`[Sources][${key}] fit scoring failed (rows still saved):`, e.message); }
+  }
+
   return {
     source: key, fetched: raw.length, geoKept, watchlisted, enriched, persisted,
     skippedAsDupe,

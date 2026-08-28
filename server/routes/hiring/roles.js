@@ -81,7 +81,7 @@ router.get('/:id', (req, res) => {
     FROM hiring_matches m
     JOIN hiring_candidates c ON m.candidate_id = c.id
     WHERE m.role_id = ? AND m.is_deleted = 0
-    ORDER BY m.rank_score DESC
+    ORDER BY m.rank_score DESC, m.fit_score DESC, m.id ASC
   `).all(req.params.id);
   // Hydrate the JSON arrays so the client gets the SAME shape as GET /matches —
   // this is the bug live verification caught: the card did strengths.slice().map on
@@ -229,7 +229,7 @@ router.get('/:id/export', (req, res) => {
       c.il_tie_type, c.il_tie_place, c.il_tie_evidence, c.github_slope_score
     FROM hiring_matches m JOIN hiring_candidates c ON m.candidate_id = c.id
     WHERE m.role_id = ? AND m.is_deleted = 0
-    ORDER BY m.rank_score DESC
+    ORDER BY m.rank_score DESC, m.fit_score DESC, m.id ASC
   `).all(req.params.id).filter((m) => wantAll || shareable.includes(m.status));
 
   const company = role.company_name || role.founder_company || 'the company';

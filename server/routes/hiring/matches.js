@@ -48,7 +48,12 @@ router.get('/', (req, res) => {
       c.superior_connection, c.il_tie_type, c.il_tie_place, c.il_tie_evidence, c.github_slope_score
     FROM hiring_matches m JOIN hiring_candidates c ON m.candidate_id = c.id
     WHERE ${where}
-    ORDER BY m.rank_score DESC
+    -- Mirror rankCandidates' tiebreak exactly. rank_score alone leaves ties, and a
+    -- tie is common by construction: a warm contact at fit 70 and a cold one at fit
+    -- 82 both land on 90 once the +12 warm and +8 Illinois bonuses are applied. SQL
+    -- broke those arbitrarily, so the better-fitting candidate could render second —
+    -- the ranker's decision, silently undone by the ORDER BY.
+    ORDER BY m.rank_score DESC, m.fit_score DESC, m.id ASC
   `).all(...params);
   res.json(rows.map(hydrate));
 });

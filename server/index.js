@@ -75,6 +75,66 @@ try {
   console.error('[Boot] Stale-run reaper failed (server continues):', e.message);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// SCORE ANY ROW WHOSE FIT VERDICT IS MISSING OR STALE.
+//
+// No migration flag on purpose. The query IS the flag — it selects rows where
+// fit_scored_at is NULL or older than the enrichment that would change the answer,
+// so a drained queue matches nothing and the whole thing costs one indexed lookup.
+// A flag would make this run exactly once and then silently stop covering the rows
+// a later deploy added, which is the failure mode half this file's comments are about.
+//
+// First boot after the columns land does real work: ~0.5 ms per row (2,232 rows ≈
+// 1.2 s), once. Every boot after that is free.
+// ══════════════════════════════════════════════════════════════════════════
+try {
+  const r = require('./lib/fitIndex').rescoreStale({ userId: 1 });
+  if (r.scored) console.log(`[Boot] Scored ${r.scored} founder(s) whose fit verdict was missing or stale.`);
+} catch (e) {
+  console.error('[Boot] Fit scoring failed (server continues, inbox falls back to live scoring):', e.message);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// UN-FILE THE FELLOWSHIPS SAVED AS COMPANIES (idempotent, flagged).
+//
+// Production has its own database, so fixing lib/cohortDiscovery only stops NEW
+// rows from being written that way — the 97 already in Danny's inbox that read
+// "Cory Levy | Z Fellows" stay wrong until this runs there. Flagged because it is a
+// one-time repair of historical rows, not an ongoing rule; the ongoing rule lives in
+// pipeline/sources/index.js and runs on every ingest.
+// ══════════════════════════════════════════════════════════════════════════
+try {
+  const dbi = require('./db');
+  dbi.exec("CREATE TABLE IF NOT EXISTS migration_flags (key TEXT PRIMARY KEY, ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+  if (!dbi.prepare("SELECT 1 FROM migration_flags WHERE key = 'program_company_cleanup_v1'").get()) {
+    const r = require('./migrations/cleanup-program-company').cleanup({ apply: true });
+    dbi.prepare("INSERT INTO migration_flags (key) VALUES ('program_company_cleanup_v1')").run();
+    console.log(`[Migration] Program-as-company cleanup: cleared ${r.cleared} of ${r.scanned} rows.`);
+  }
+} catch (e) {
+  console.error('[Migration] Program-as-company cleanup failed (server continues):', e.message);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// BRING STORED HIRING SHORTLISTS ONTO THE NEW RANKER (idempotent, flagged).
+//
+// hiring_matches.rank_score was written when warm carried a flat +1,000 bonus, and
+// the role page orders by that column — so a shortlist saved before the fix keeps
+// rendering the old order until someone re-sources it. Deterministic recompute only:
+// no LLM call, rationale and handoff status preserved. See the migration's header.
+// ══════════════════════════════════════════════════════════════════════════
+try {
+  const dbi = require('./db');
+  dbi.exec("CREATE TABLE IF NOT EXISTS migration_flags (key TEXT PRIMARY KEY, ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+  if (!dbi.prepare("SELECT 1 FROM migration_flags WHERE key = 'hiring_warm_bonus_rescore_v1'").get()) {
+    const r = require('./migrations/rescore-hiring-matches').rescoreHiringMatches({ apply: true });
+    dbi.prepare("INSERT INTO migration_flags (key) VALUES ('hiring_warm_bonus_rescore_v1')").run();
+    console.log(`[Migration] Hiring re-score: ${r.updated} match(es) updated across ${r.roles} role(s), ${r.retired} retired.`);
+  }
+} catch (e) {
+  console.error('[Migration] Hiring re-score failed (server continues):', e.message);
+}
+
 // One-time Airtable migration (idempotent — uses migration_flags table)
 (async () => {
   try {
@@ -652,42 +712,20 @@ app.listen(PORT, () => {
     // edge — the whole point of Danny's Frontier Watch framing. If something ever
     // needs to be caught the day it lands, it does not belong on this cron.
     // ══════════════════════════════════════════════════════════════════
-    cron.schedule('30 11 1 * *', async () => {
-      console.log('[Cron] Running early-signal sources (monthly)...');
-      const { recordJobRun } = require('./services/health');
-      try {
-        const { ingestAll } = require('./pipeline/sources');
-        const r = await ingestAll({ userId: 1 });
-        console.log('[Cron][Sources]', JSON.stringify(r.map(x => ({ s: x.source, kept: x.geoKept, saved: x.persisted, skipped: x.skippedAsDupe, err: x.error }))));
-
-        const saved = r.reduce((n, x) => n + (x?.persisted || 0), 0);
-        const fetched = r.reduce((n, x) => n + (x?.fetched || 0), 0);
-        const errs = r.filter((x) => x?.error);
-        // Per-connector, so a source producing zero is visible AS zero rather than
-        // vanishing into a total. That the cohort rosters fetch ~99 people and
-        // yield 0 Illinois ties is a finding about the source, not a failure —
-        // and it should be readable here instead of rediscovered every few months.
-        const breakdown = r.map((x) => `${x.source}: ${x.fetched}→${x.geoKept} IL`).join(' · ');
-        // skippedAsDupe is in the line because a HEALTHY saturated run now looks
-        // like "fetched 144, skipped 144, saved 0, $0" — and without that number
-        // it is indistinguishable from a broken connector. That ambiguity is the
-        // exact reason Danny concluded sourcing didn't work when it did.
-        const skipped = r.reduce((n, x) => n + (x?.skippedAsDupe || 0), 0);
-        recordJobRun(
-          'early_signal_sources',
-          errs.length ? 'partial' : 'ok',
-          `+${saved} saved of ${fetched} fetched, ${skipped} already known (not re-enriched) — ${breakdown}` +
-            `${errs.length ? ` — ${errs.length} errors` : ''}`,
-          1
-        );
-
-      } catch (e) {
-        console.error('[Cron][Sources] failed:', e.message);
-        // A failure has to be as visible as a success, or silence stays ambiguous.
-        recordJobRun('early_signal_sources', 'error', e.message, 1);
-      }
-    }, { timezone: 'America/Chicago' });
-    console.log('Early-signal sources scheduled (MONTHLY — 1st, 11:30 AM CT)');
+    // ══════════════════════════════════════════════════════════════════
+    // THE MONTHLY ROSTER CRON LIVED HERE AND HAS BEEN FOLDED INTO THE SCOUT.
+    //
+    // It ran `ingestAll` on the 1st at 11:30 and wrote its own `early_signal_sources`
+    // ledger row, while the sweep wrote a separate `sourcing_run` row from a
+    // different cron. Two half-answers, neither of which said whether sourcing
+    // worked last night — and the roster half, on a monthly clock, could not
+    // possibly be the reason to open the app in the morning.
+    //
+    // Rosters now run inside the nightly scout on MONDAYS (see above), one arm of
+    // one job with one ledger line. Same cadence order of magnitude, same cost
+    // profile, one place to look. Nothing schedules `early_signal_sources` any
+    // more; the inbox reads `nightly_scout`.
+    // ══════════════════════════════════════════════════════════════════
 
     // ══════════════════════════════════════════════════════════════════
     // LinkedIn enrichment stays DAILY, and deliberately did not go monthly with
@@ -711,6 +749,12 @@ app.listen(PORT, () => {
         const { runLinkedInEnrichment } = require('./pipeline/linkedin-enrich');
         const e = await runLinkedInEnrichment({ userId: 1, limit: 40 });
         console.log('[Cron][LinkedIn]', JSON.stringify(e));
+        // Enrichment is the single biggest thing that changes a fit verdict — it
+        // supplies the employment history the hyperscaler marker reads instead of a
+        // 195-character bio. Re-score what it touched, or the inbox keeps showing a
+        // verdict formed before the evidence arrived.
+        try { require('./lib/fitIndex').rescoreStale({ userId: 1 }); }
+        catch (err) { console.error('[Cron][LinkedIn] re-score failed:', err.message); }
         recordJobRun(
           'linkedin_enrich',
           'ok',
@@ -743,54 +787,159 @@ app.listen(PORT, () => {
     console.log('Weekly founder digest scheduled (Fri 7:00 AM CT)');
   }
 
-  // Daily sourcing cron — runs at 6:00 AM CT (12:00 UTC in CDT / 12:00 UTC in CST).
-  // Self-activating: we schedule whenever the pipeline can actually do work — i.e. the
-  // keys that power it (Exa for discovery + Anthropic for scoring) are present in the
-  // environment — OR when PIPELINE_ENABLED is explicitly set. This removes the silent
-  // failure mode where the engine was built and keyed but never ran because a separate
-  // flag wasn't flipped in prod.
-  const pipelineReady = process.env.PIPELINE_ENABLED === 'true'
-    || (!!process.env.EXA_API_KEY && !!process.env.ANTHROPIC_API_KEY);
+  // ══════════════════════════════════════════════════════════════════════
+  // THE READINESS GATE ASKED THE WRONG QUESTION FOR MONTHS.
+  //
+  // It was:
+  //   process.env.PIPELINE_ENABLED === 'true'
+  //     || (!!process.env.EXA_API_KEY && !!process.env.ANTHROPIC_API_KEY)
+  //
+  // Every engine below resolves its keys through lib/providerKeys, which reads the
+  // OWNER'S SAVED KEY from user_settings first and only falls back to the
+  // environment. Danny's Exa key has always lived there — `api_key_exa`, set, 36
+  // chars — and never in EXA_API_KEY. So the gate looked for the key in the one
+  // place the product deliberately stopped putting it, found nothing, and silently
+  // declined to schedule the single job that makes Sourcing a product.
+  //
+  // The evidence is total: `job_runs` has never held one `sourcing_run` row, and
+  // every sourced founder in the database arrived on exactly two dates — both days
+  // he pressed the button himself.
+  //
+  // So the gate now asks the engines' own question, through their own resolver.
+  // PIPELINE_ENABLED survives only as an explicit KILL SWITCH ('false' stops the
+  // scheduler); it is no longer something you must remember to turn on, because a
+  // flag you must remember is a flag that will be forgotten in exactly this way.
+  // ══════════════════════════════════════════════════════════════════════
+  const scoutKeys = (() => {
+    try { return require('./lib/providerKeys').loadUserApiKeys(1); }
+    catch { return {}; }
+  })();
+  const pipelineDisabled = process.env.PIPELINE_ENABLED === 'false';
+  const pipelineReady = !pipelineDisabled && !!scoutKeys.exa && !!scoutKeys.anthropic;
+
+  if (!pipelineReady) {
+    // Say WHICH key is missing. "Pipeline inactive" alone is how this hid.
+    const why = pipelineDisabled
+      ? 'PIPELINE_ENABLED=false (explicit kill switch)'
+      : `missing key(s): ${[!scoutKeys.exa && 'exa', !scoutKeys.anthropic && 'anthropic'].filter(Boolean).join(' + ')} — set them in Settings`;
+    console.warn(`[Cron] Nightly scout NOT scheduled — ${why}`);
+    // Recorded under its OWN job name, not 'nightly_scout'. The inbox reads the last
+    // 'nightly_scout' row to say "Scout ran 4h ago", and a config problem filed under
+    // that name would render as a run that failed — which is a different and untrue
+    // statement about the same day. Not-scheduled and ran-and-failed are exactly the
+    // two states this product keeps conflating.
+    try { require('./services/health').recordJobRun('scout_not_scheduled', 'error', why, 1); } catch { /* health is optional */ }
+  }
+
   if (pipelineReady) {
-    console.log(`[Cron] Pipeline active (${process.env.PIPELINE_ENABLED === 'true' ? 'PIPELINE_ENABLED' : 'keys present'})`);
+    console.log('[Cron] Pipeline active (owner keys resolved via providerKeys)');
     const cron = require('node-cron');
     const { runSourcingEngine } = require('./pipeline/sourcing-engine');
 
     // ══════════════════════════════════════════════════════════════════
-    // The daily sourcing run — the single biggest recurring line on Danny's bill
-    // (~$29.80/mo: 27 Exa queries + ~37 LLM calls), and until now it recorded
-    // NOTHING. It logged to console, which on Railway scrolls away in minutes.
+    // THE NIGHTLY SCOUT — one job, so the inbox is full before he opens it.
     //
-    // That is exactly why he said "I would click Find Founders and it wouldn't
-    // really work": the only durable record was sourcing_runs, written by this
-    // engine alone, while the connectors that actually produced rows wrote
-    // nowhere. Thirty dollars a month with no evidence it ran.
+    // Danny: "Set this up so sourcing runs daily (I want to log in in the morning
+    // and see new folks!)."
     //
-    // Timezone added. It was bare `0 12 * * *` — 12:00 UTC — while the boot log
-    // announced "6:00 AM CT". Off by an hour in summer, and a log that lies about
-    // when a job runs is the same defect as one that lies about whether it did.
+    // It used to be two jobs that each knew half the story. The daily cron ran the
+    // Exa sweep alone — the arm that finds people BEFORE anyone labels them
+    // (stealth, just-departed, lab spinouts, staff engineers exploring) — and
+    // reported its number. The roster connectors (YC, a16z Speedrun, Thiel, Z,
+    // Neo, Residency, Emergent) ran monthly on a different cron and reported
+    // theirs. Neither knew about the other, so no single row in job_runs ever
+    // answered "did sourcing work last night."
+    //
+    // Now it is one job with one ledger line, and the two arms run on the cadence
+    // their SOURCE actually changes:
+    //
+    //   Exa sweep      NIGHTLY  — the open web changes daily. This is the arm that
+    //                             finds the founders nobody has labelled yet, and
+    //                             it is the reason to open the app in the morning.
+    //   Roster pull    MONDAYS  — YC ships two batches a year and Speedrun runs in
+    //                             waves. Polling a twice-yearly answer nightly is
+    //                             what made this cost $36/mo to learn nothing. The
+    //                             dedup fix already made re-reads free; weekly
+    //                             makes them rare AND keeps the credentialed names
+    //                             flowing, which Danny explicitly still wants.
+    //
+    // Then LinkedIn enrichment runs on what just landed, so the morning list has
+    // real employment history behind its markers rather than a 195-character bio.
+    // A row he cannot read is a row he skips, and this is the step that makes it
+    // readable. It self-limits — `linkedin_enriched_at IS NULL` means a drained
+    // queue does no work and costs nothing.
+    //
+    // 4:30 AM CT: late enough that the previous day's edits are in, early enough
+    // that everything (sweep ~4min, rosters ~8min, enrichment ~3min) is finished
+    // and scored well before he logs in.
     // ══════════════════════════════════════════════════════════════════
-    cron.schedule('0 8 * * *', async () => {
-      console.log('[Cron] Starting daily sourcing run...');
+    cron.schedule('30 4 * * *', async () => {
       const { recordJobRun } = require('./services/health');
+      const startedAt = Date.now();
+      const isMonday = new Date().getDay() === 1;
+      console.log(`[Scout] Starting nightly scout (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
+
+      const parts = [];
+      const errors = [];
+      let added = 0;
+
+      // ── Arm 1: the open-web sweep. Runs every night. ──
       try {
-        const result = await runSourcingEngine({ userId: 1 });
-        const errs = result.errors?.length || 0;
-        recordJobRun(
-          'sourcing_run',
-          errs ? 'partial' : 'ok',
-          `+${result.totalAdded || 0} added, ${result.totalFiltered || 0} filtered by the gates` +
-            `${errs ? `, ${errs} errors — ${String(result.errors[0]).slice(0, 80)}` : ''}`,
-          1
-        );
-        console.log(`[Cron] Sourcing complete: ${result.totalAdded} new founders`);
-      } catch (err) {
-        console.error('[Cron] Sourcing failed:', err.message);
-        recordJobRun('sourcing_run', 'error', err.message, 1);
+        const r = await runSourcingEngine({ userId: 1 });
+        added += r.totalAdded || 0;
+        parts.push(`sweep +${r.totalAdded || 0} of ${r.totalFiltered || 0} filtered`);
+        if (r.errors?.length) errors.push(...r.errors.map((e) => `sweep: ${String(e).slice(0, 60)}`));
+      } catch (e) {
+        errors.push(`sweep: ${e.message}`);
+        parts.push('sweep FAILED');
       }
+
+      // ── Arm 2: the rosters. Mondays only. ──
+      if (isMonday) {
+        try {
+          const rows = await require('./pipeline/sources').ingestAll({ userId: 1 });
+          const saved = rows.reduce((n, x) => n + (x?.persisted || 0), 0);
+          const dupes = rows.reduce((n, x) => n + (x?.skippedAsDupe || 0), 0);
+          added += saved;
+          parts.push(`rosters +${saved} (${dupes} already known)`);
+          for (const x of rows) if (x?.error) errors.push(`${x.source}: ${String(x.error).slice(0, 50)}`);
+        } catch (e) {
+          errors.push(`rosters: ${e.message}`);
+          parts.push('rosters FAILED');
+        }
+      }
+
+      // ── Arm 3: make what landed readable. ──
+      try {
+        const e = await require('./pipeline/linkedin-enrich').runLinkedInEnrichment({ userId: 1, limit: 40 });
+        parts.push(e.skipped ? `enrich skipped (${e.skipped})` : `enriched ${e.enriched}`);
+      } catch (e) {
+        errors.push(`enrich: ${e.message}`);
+      }
+
+      // ── Arm 4: score everything new, so the inbox is a plain indexed read. ──
+      try {
+        const f = require('./lib/fitIndex').rescoreStale({ userId: 1 });
+        parts.push(`scored ${f.scored}`);
+      } catch (e) {
+        errors.push(`score: ${e.message}`);
+      }
+
+      const mins = Math.round((Date.now() - startedAt) / 6000) / 10;
+      // ONE row, and it always writes — including on a night that found nobody.
+      // "+0 added" is a real answer; silence is the thing that made him stop
+      // believing the automation existed.
+      recordJobRun(
+        'nightly_scout',
+        errors.length ? 'partial' : 'ok',
+        `+${added} new founders in ${mins}m — ${parts.join(' · ')}` +
+          (errors.length ? ` — ${errors.length} error(s): ${errors[0]}` : ''),
+        1
+      );
+      console.log(`[Scout] Done: +${added} in ${mins}m — ${parts.join(' · ')}`);
     }, { timezone: 'America/Chicago' });
 
-    console.log('Daily sourcing engine scheduled (8:00 AM CT)');
+    console.log('Nightly scout scheduled (4:30 AM CT — sweep nightly, rosters Mondays, then enrich + score)');
 
     // Daily talent sourcing — source EACH open role against its own function + JD, so
     // marketing/product/CS roles get fresh candidates automatically (not just engineering).

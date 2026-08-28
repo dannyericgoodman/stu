@@ -3,30 +3,45 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
 
 // ══════════════════════════════════════════════════════════════════════════
-// Home — Today's Tasks, and the state of the funnel.
+// Home — the screen Danny opens first.
 //
-// Danny, 2026-07-15: "What if there was a home screen with 'Today's Tasks' and a
-// dashboard covering pipeline stats. And then there is a separate Sourcing
-// function, and a Pipeline function."
+// Danny, 2026-08-28: "The homepage doesn't look different. I'd like it to be
+// cleaner, more actionable. It could even just give me the ability to build a custom
+// task list or set off agents to go accomplish tasks for me."
 //
-// The Home this replaces was four task buttons — a menu, which you only open
-// when you already know what you want, which is why it never got opened. This
-// one tells you something instead of asking you something.
+// ── WHAT CAME OFF ──
+// Two thirds of this screen was a second, worse view of Airtable: a five-stage
+// funnel grid (87 Found / 20 Met / 1 Assessed / 0 Decided / 9 Invested), a
+// "which channels produce" bar chart whose top channel was the string "Danny
+// Goodman" and whose second was "Unknown", and two big number cards. He told me he
+// cleaned up Airtable and is comfortable there, so every one of those panels asked
+// him to read a worse copy of something he already trusts. None of them had a verb.
 //
-// ── TWO KINDS OF TASK, AND THE AGENTS ARE GUESTS ──
-// Danny: "It is my to-do list — I should be able to add/modify/delete/check-off
-// my own ideas in addition to what your agents suggest."
+// The Pipeline screen itself is untouched — this is about what Home spends its space
+// on, and a link is enough.
 //
-// So there are two lists that never merge. What Stu noticed is COMPUTED from
-// pipeline state, never stored, and can't be ticked off — you fix the underlying
-// thing and it goes away by itself. What Danny wrote is his: his order, his
-// wording, deletable. His text is ink; the machine's is ink-3. No badges, no
-// sparkles — that's the whole provenance system and it's enough.
+// ── WHAT IT IS NOW, IN ORDER ──
+//   1. YOUR LIST      his own rows, first, with the add box at the TOP. It was
+//                     buried under a machine-written panel with the input at the
+//                     bottom, which is the layout of a log, not a to-do list.
+//   2. SET RUNNING    the three things in Stu that do real work in the background,
+//                     one per product, dispatchable in two clicks with a target
+//                     picker that only lists targets that would actually work.
+//   3. NEEDS YOU      the integrity checks — but only the ones that are a TASK.
 //
-// ── WHY THE DASHBOARD SHOWS NO PIPELINE TOTAL ──
-// He asked for stats. He also said "I want to inflate my pipeline numbers." So
-// this shows funnel STATE (where things are, which channels produce) and exactly
-// one progress number: DECIDED. Nothing on this screen goes up when he adds a name.
+// ── THE 101 ──
+// "Live deals with no read: 101" was the loudest row on the old screen and the least
+// actionable thing on it: each read is a nine-lens Opus run, and a list of 101 of
+// them is a wall, not a task. It taught him to scroll past the panel that matters
+// most. It is now a fact in the footer strip, and the handful he can actually run
+// today — the companies that have materials on file — are the picker for the read
+// agent. Same truth, moved from nagging to doing.
+//
+// ── UNCHANGED, DELIBERATELY ──
+// No pipeline total, no growth trend, no conversion rate. Danny: "I want to inflate
+// my pipeline numbers." A metric he has told me he games is a metric I will not
+// build. DECIDED is still the only progress number, and it still requires a dated
+// falsifiable prediction to increment.
 // ══════════════════════════════════════════════════════════════════════════
 
 export default function Home() {
@@ -34,17 +49,54 @@ export default function Home() {
   const [attention, setAttention] = useState(null);
   const [stats, setStats] = useState(null);
   const [today, setToday] = useState(null);
+  const [agents, setAgents] = useState(null);
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);   // what was just set running
+
+  function loadAgents() { api.getAgents({ fresh: true }).then(setAgents).catch(() => {}); }
 
   useEffect(() => {
     api.getAttention().then(setAttention).catch((e) => setErr(e.message));
     api.getPipelineStats().then(setStats).catch(() => {});
     api.getToday().then(setToday).catch(() => {});
+    loadAgents();
   }, []);
 
+  // Poll only while something is actually running. A background job that finishes
+  // without the screen noticing is the same defect as one that never ran.
+  const anyRunning = (agents?.agents || []).some((a) => a.running?.length);
+  useEffect(() => {
+    if (!anyRunning) return;
+    const t = setInterval(loadAgents, 10000);
+    return () => clearInterval(t);
+  }, [anyRunning]);
+
+  // ── Dispatch ──
+  // Each agent fires its PRODUCT'S OWN route. Home does not re-implement any of the
+  // three workflows; it just knows how to start them and how to say so.
+  async function dispatch(kind, target) {
+    try {
+      if (kind === 'scout') {
+        await api.triggerSourcing();
+        setNote('Scout is sweeping. It takes a few minutes — new founders land in Source.');
+      } else if (kind === 'read') {
+        await api.runCardRead(target.id);
+        setNote(`Reading ${target.label}. The panel takes a couple of minutes.`);
+      } else if (kind === 'hiring') {
+        await api.sourceHiringRole(target.id);
+        setNote(`Sourcing candidates for ${target.label}.`);
+      }
+      loadAgents();
+    } catch (e) {
+      // Say what failed, in its own words. `/read` in particular refuses politely
+      // and usefully ("Nothing to read yet — add a deck or call notes first").
+      setErr(e.message);
+    }
+  }
+
   async function addItem(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
     const title = draft.trim();
     if (!title) return;
     setDraft('');
@@ -83,14 +135,35 @@ export default function Home() {
   }
 
   const items = today?.items || [];
+  const open = items.filter((i) => !i.completed_at).length;
+
+  // The read backlog is a FACT, not a task — see the header. Split it out of the
+  // amber list so the checks panel holds only things he can finish today.
+  const BACKLOG_KEYS = new Set(['considering_never_assessed']);
+  const checkData = attention && {
+    ...attention,
+    checks: attention.checks.filter((c) => !BACKLOG_KEYS.has(c.key)),
+  };
+  const backlog = attention?.checks.find((c) => BACKLOG_KEYS.has(c.key));
+
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: 'long', month: 'long', day: 'numeric',
+  });
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-4 py-4 max-w-[1100px]">
-        {err && <div className="text-small text-danger mb-3">{err}</div>}
+      <div className="px-4 py-4 max-w-[820px]">
+        {err && (
+          <div className="flex items-start gap-2 text-small text-danger mb-3">
+            <span className="flex-1">{err}</span>
+            <button className="text-ink-4 hover:text-ink-2" onClick={() => setErr(null)}>Dismiss</button>
+          </div>
+        )}
 
-        <div className="flex items-baseline gap-2 mb-2">
+        <div className="flex items-baseline gap-2 mb-4">
           <h1 className="text-large font-semibold text-ink">Today</h1>
+          <span className="text-mini text-ink-3">{todayLabel}</span>
+          <div className="flex-1" />
           {attention && (
             <span className="text-mini text-ink-3">
               {attention.needs_attention === 0
@@ -100,51 +173,205 @@ export default function Home() {
           )}
         </div>
 
+        {/* ── 1. HIS LIST ── first, and the input is at the TOP.
+            Danny: "It is my to-do list — I should be able to add/modify/delete/
+            check-off my own ideas in addition to what your agents suggest." An add
+            box below the rows is the layout of a log; you write at the top of a list. */}
         <div className="border border-line-2 rounded-md bg-ground mb-4">
           <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-            <span className="text-micro font-semibold uppercase text-ink-4">What Stu noticed</span>
-          </div>
-          {!attention ? (
-            Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="row px-3"><span className="block h-2 w-64 bg-ground-3 rounded-sm" /></div>
-            ))
-          ) : (
-            <Checks data={attention} nav={nav} />
-          )}
-        </div>
-
-        <div className="border border-line-2 rounded-md bg-ground mb-4">
-          <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-            <span className="text-micro font-semibold uppercase text-ink-4">Yours</span>
+            <span className="text-micro font-semibold uppercase text-ink-4">Your list</span>
             <div className="flex-1" />
-            <span className="num text-micro text-ink-4">{items.filter((i) => !i.completed_at).length}</span>
+            {open > 0 && <span className="num text-micro text-ink-4">{open}</span>}
           </div>
 
-          {items.map((item) => (
-            <TaskRow
-              key={item.id}
-              item={item}
-              onToggle={() => toggleItem(item)}
-              onDelete={() => removeItem(item)}
-              onRename={(title) => renameItem(item, title)}
-            />
-          ))}
-
-          <form onSubmit={addItem} className="flex items-center h-row px-3 border-t border-line">
+          {/* Enter is handled EXPLICITLY, not left to the browser's implicit form
+              submission. Implicit submission depends on the form having exactly one
+              submittable field and is the kind of behaviour that quietly stops
+              working when someone adds a second input next year — and the thing that
+              would break is the only interaction on this screen that must never fail.
+              The onSubmit stays so a future submit button also works. */}
+          <form onSubmit={addItem} className="flex items-center h-row px-3 border-b border-line">
             <span className="w-3 mr-2 text-ink-4 text-center leading-none">+</span>
             <input
               className="flex-1 bg-transparent border-0 outline-none text-small text-ink placeholder-ink-4"
               placeholder="Add something…"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addItem(e); } }}
             />
           </form>
+
+          {items.length === 0 ? (
+            <div className="px-3 py-2.5 text-mini text-ink-4">
+              Nothing on your list. Type above, or set one of the agents below running.
+            </div>
+          ) : (
+            items.map((item) => (
+              <TaskRow
+                key={item.id}
+                item={item}
+                onToggle={() => toggleItem(item)}
+                onDelete={() => removeItem(item)}
+                onRename={(title) => renameItem(item, title)}
+              />
+            ))
+          )}
         </div>
 
-        <Dashboard stats={stats} nav={nav} />
+        {/* ── 2. THE AGENTS ── */}
+        <Agents data={agents} note={note} onClearNote={() => setNote(null)} onRun={dispatch} nav={nav} />
+
+        {/* ── 3. WHAT NEEDS HIM ── only rows that are a task. */}
+        <div className="border border-line-2 rounded-md bg-ground mb-4">
+          <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
+            <span className="text-micro font-semibold uppercase text-ink-4">Needs you</span>
+          </div>
+          {!checkData ? (
+            Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="row px-3"><span className="block h-2 w-64 bg-ground-3 rounded-sm" /></div>
+            ))
+          ) : (
+            <Checks data={checkData} nav={nav} />
+          )}
+        </div>
+
+        {/* ── The footer strip ──
+            Everything that is a NUMBER rather than a task. One line, no cards, each
+            one a link to the screen that owns it. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-mini text-ink-3">
+          {stats && (
+            <button className="hover:text-ink transition" onClick={() => nav('/sourcing')}>
+              <span className="num text-ink">{stats.inbox_waiting}</span> waiting in Source →
+            </button>
+          )}
+          {today && (
+            <span title="The only progress metric here. It requires a dated, falsifiable prediction to increment.">
+              <span className="num text-ink">{today.decided_this_week}</span> decided this week
+            </span>
+          )}
+          {backlog?.count > 0 && (
+            <span title={backlog.action}>
+              <span className="num text-ink">{backlog.count}</span> live deals with no read
+            </span>
+          )}
+          <button className="hover:text-ink transition" onClick={() => nav('/pipeline')}>
+            Open the pipeline →
+          </button>
+        </div>
       </div>
     </div>
   );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SET SOMETHING RUNNING.
+//
+// Three agents, one per product, each firing its own existing route. Two of them
+// need a target, and the picker only ever lists targets that would actually work —
+// the read agent lists companies that HAVE materials on file, because the engine
+// refuses (correctly) to score a company with nothing to read, and offering the
+// other ninety would be offering ninety errors.
+//
+// An agent with no valid target says WHY rather than rendering an empty menu.
+// ══════════════════════════════════════════════════════════════════════════
+function Agents({ data, note, onClearNote, onRun, nav }) {
+  const [picking, setPicking] = useState(null);
+
+  return (
+    <div className="border border-line-2 rounded-md bg-ground mb-4">
+      <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
+        <span className="text-micro font-semibold uppercase text-ink-4">Set something running</span>
+      </div>
+
+      {note && (
+        <div className="flex items-center gap-2 px-3 h-row border-b border-line bg-accent-soft text-small">
+          <span className="flex-1 text-ink">{note}</span>
+          <button className="text-ink-4 hover:text-ink-2 text-mini" onClick={onClearNote}>Dismiss</button>
+        </div>
+      )}
+
+      {!data ? (
+        Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="row px-3"><span className="block h-2 w-48 bg-ground-3 rounded-sm" /></div>
+        ))
+      ) : (
+        data.agents.map((a) => {
+          const targets = a.targets || [];
+          const isOpen = picking === a.kind;
+          const blocked = a.needs_target && targets.length === 0;
+
+          return (
+            <div key={a.kind} className="border-b border-line last:border-b-0">
+              <div className="flex items-center gap-2 h-row px-3">
+                <span className="text-small text-ink font-medium flex-none w-40">{a.label}</span>
+                <span className="text-mini text-ink-3 truncate flex-1 min-w-0">
+                  {blocked ? a.empty_reason : a.detail}
+                </span>
+
+                {/* What's running now, named. A spinner with no subject is a spinner
+                    you learn to ignore. */}
+                {a.running?.length > 0 && (
+                  <span className="text-mini text-accent flex-none">
+                    running · {a.running.map((r) => r.label).join(', ')}
+                  </span>
+                )}
+
+                {!blocked && (
+                  <button
+                    onClick={() => (a.needs_target ? setPicking(isOpen ? null : a.kind) : onRun(a.kind))}
+                    className="btn-secondary h-5 text-mini flex-none"
+                  >
+                    {a.needs_target ? (isOpen ? 'Close' : 'Pick…') : 'Run'}
+                  </button>
+                )}
+              </div>
+
+              {/* The scout is the one agent with a durable record of its last run, so
+                  it is the one that can honestly report when it last worked. */}
+              {a.kind === 'scout' && a.last && (
+                <div className="px-3 pb-1.5 text-mini text-ink-4 truncate" title={a.last.detail || ''}>
+                  Last run {timeAgo(a.last.ran_at)}
+                  {a.last.detail ? ` · ${a.last.detail}` : ''}
+                </div>
+              )}
+              {a.kind === 'scout' && !a.last && (
+                <div className="px-3 pb-1.5 text-mini text-ink-4">
+                  No run recorded yet — it runs nightly at 4:30am.
+                </div>
+              )}
+
+              {isOpen && (
+                <div className="border-t border-line bg-ground-2 max-h-56 overflow-y-auto">
+                  {targets.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => { setPicking(null); onRun(a.kind, t); }}
+                      className="w-full flex items-center gap-2 h-row px-3 pl-8 text-left hover:bg-ground-3 transition"
+                    >
+                      <span className="row-primary flex-none w-60 truncate" title={t.label}>{t.label}</span>
+                      <span className="text-mini text-ink-3 truncate flex-1 min-w-0">{t.detail}</span>
+                      <span className="text-mini text-accent flex-none">Run →</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function timeAgo(iso) {
+  if (!iso) return 'never';
+  const t = new Date(String(iso).replace(' ', 'T') + (String(iso).endsWith('Z') ? '' : 'Z')).getTime();
+  if (Number.isNaN(t)) return 'never';
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
 }
 
 // Every check renders daily, including when clean — the reason Permute's version
@@ -226,9 +453,9 @@ function Checks({ data, nav }) {
         <div key={c.key}>
           <button
             onClick={() => setOpen(open === c.key ? null : c.key)}
-            disabled={!c.count}
+            disabled={!c.count && !c.blocked}
             className={`w-full flex items-center gap-2 h-row px-3 text-small text-left transition ${
-              c.count ? 'hover:bg-ground-3 cursor-pointer' : 'cursor-default'
+              c.count || c.blocked ? 'hover:bg-ground-3 cursor-pointer' : 'cursor-default'
             }`}
           >
             <span className="w-3 text-center text-mini flex-none">
@@ -238,15 +465,21 @@ function Checks({ data, nav }) {
             </span>
             <span className={`flex-none ${c.count ? 'text-ink font-medium' : 'text-ink-3'}`}>{c.title}</span>
             <span className="text-ink-4 text-mini truncate">
-              {c.blocked ? "can't run yet" : c.count ? c.action : c.clean}
+              {c.blocked ? (open === c.key ? "can't run yet" : "can't run yet — why?") : c.count ? c.action : c.clean}
             </span>
             <span className="flex-1" />
             {c.count > 0 && <span className="num text-mini text-ink font-medium">{c.count}</span>}
           </button>
 
-          {/* Blocked is a first-class state, not a failure. The engine refuses to
-              compute a number off data it doesn't have, and says what would fix it. */}
-          {c.blocked && <div className="px-3 pb-2 pl-8 text-mini text-ink-3 max-w-3xl">{c.blocked_reason}</div>}
+          {/* Blocked is a first-class state, not a failure — the engine refuses to
+              compute a number off data it doesn't have, and says what would fix it.
+              But the reason is a PARAGRAPH, and rendering it inline made the one row
+              on this panel that Danny cannot act on the largest thing on it. It now
+              opens on click like every other row, so the honesty is one click away
+              instead of in the way. */}
+          {c.blocked && open === c.key && (
+            <div className="px-3 pb-2 pl-8 text-mini text-ink-3 max-w-2xl">{c.blocked_reason}</div>
+          )}
 
           {open === c.key && c.rows.length > 0 && (
             <div className="border-y border-line bg-ground-2 max-h-64 overflow-y-auto">
@@ -278,98 +511,22 @@ function Checks({ data, nav }) {
   );
 }
 
-function Dashboard({ stats, nav }) {
-  if (!stats) return null;
-  const F = stats.funnel;
-
-  // No total, deliberately. Every stage is a link to the same board, filtered —
-  // a dashboard whose numbers aren't clickable is a poster.
-  const stages = [
-    { k: 'found', label: 'Found', n: F.found },
-    { k: 'met', label: 'Met', n: F.met },
-    { k: 'assessed', label: 'Assessed', n: F.assessed },
-    { k: 'decided', label: 'Decided', n: F.decided },
-    { k: 'invested', label: 'Invested', n: F.invested },
-  ];
-  const max = Math.max(...stats.by_source.map((s) => s.n), 1);
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div className="border border-line-2 rounded-md bg-ground lg:col-span-2">
-        <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-          <span className="text-micro font-semibold uppercase text-ink-4">Where things are</span>
-          <div className="flex-1" />
-          <button className="text-micro text-accent" onClick={() => nav('/pipeline')}>Open the pipeline →</button>
-        </div>
-        <div className="flex">
-          {stages.map((s) => (
-            <button
-              key={s.k}
-              onClick={() => nav(`/pipeline?stage=${s.k}`)}
-              className="flex-1 px-3 py-3 text-left border-r border-line last:border-r-0 hover:bg-ground-3 transition"
-            >
-              <div className="num text-display text-ink leading-none">{s.n}</div>
-              <div className="text-mini text-ink-3 mt-1">{s.label}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="border border-line-2 rounded-md bg-ground">
-        <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-          <span className="text-micro font-semibold uppercase text-ink-4">Decided this week</span>
-        </div>
-        <div className="px-3 py-3">
-          {/* The ONLY progress metric in the product. Its increment requires a dated
-              falsifiable prediction — a bare pass=+1 would pay him to fire his
-              ten-second "cool but indefensible" reflex faster. */}
-          <div className="num text-display text-ink leading-none">{stats.decided_this_week}</div>
-          <div className="text-mini text-ink-3 mt-1">
-            {stats.calibration.decisions === 0
-              ? 'No decisions on file yet'
-              : stats.calibration.right_when_disagreed == null
-              ? `${stats.calibration.disagreed} disagreements with Stu, none resolved yet`
-              : `Right ${stats.calibration.right_when_disagreed}% of the time you disagreed with Stu`}
-          </div>
-        </div>
-      </div>
-
-      <div className="border border-line-2 rounded-md bg-ground lg:col-span-2">
-        <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-          {/* His own Permute spec: "Count of founders by Source, so I can see which
-              channel is producing volume." */}
-          <span className="text-micro font-semibold uppercase text-ink-4">Which channels produce</span>
-        </div>
-        <div className="py-1">
-          {stats.by_source.map((s) => (
-            <div key={s.source} className="flex items-center gap-2 h-6 px-3 text-mini">
-              <span className="w-40 truncate text-ink-2">{s.source}</span>
-              {/* The bar is ink, not a hue. Color would mean state; this is volume. */}
-              <span className="flex-1 h-1 bg-ground-3 rounded-sm overflow-hidden">
-                <span className="block h-full bg-ink-4" style={{ width: `${(s.n / max) * 100}%` }} />
-              </span>
-              <span className="num text-ink-3 w-8 text-right">{s.n}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* self-start, or the grid stretches this to match the taller card beside it
-          and leaves a dead white block above the header. */}
-      <button
-        onClick={() => nav('/sourcing')}
-        className="border border-line-2 rounded-md bg-ground text-left hover:bg-ground-3 transition self-start"
-      >
-        <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
-          <span className="text-micro font-semibold uppercase text-ink-4">Waiting in sourcing</span>
-        </div>
-        <div className="px-3 py-3">
-          <div className="num text-display text-ink leading-none">{stats.inbox_waiting}</div>
-          <div className="text-mini text-ink-3 mt-1">
-            {stats.inbox_waiting === 0 ? 'Inbox is clear' : 'with a verified Illinois tie'}
-          </div>
-        </div>
-      </button>
-    </div>
-  );
-}
+// ══════════════════════════════════════════════════════════════════════════
+// Dashboard — REMOVED 2026-08-28.
+//
+// It rendered the five-stage funnel grid, the "which channels produce" bar chart,
+// "Decided this week", and "Waiting in sourcing" as four cards taking two thirds of
+// Home. Danny: "The homepage doesn't look different. I'd like it to be cleaner, more
+// actionable."
+//
+// Every panel here was a read-only view of the Airtable mirror, which he told me he
+// had cleaned up and was comfortable managing in Airtable — so this was asking him to
+// consult a worse copy of a system he already trusts. None of the four had a verb on
+// it. The channel chart's top two rows were the strings "Danny Goodman" and
+// "Unknown", which is the Airtable Source field ungrouped rather than a channel
+// taxonomy.
+//
+// The two numbers worth keeping (inbox waiting, decided this week) are one line in
+// the footer strip, each a link to the screen that owns it. /api/pipeline/stats is
+// unchanged and still serves them; the Pipeline screen is untouched.
+// ══════════════════════════════════════════════════════════════════════════

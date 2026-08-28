@@ -423,6 +423,31 @@ addColumn('sourced_founders', 'github_slope_scored_at', 'DATETIME');
 // resolver re-searching the same founder every run. See pipeline/github-resolve.
 addColumn('sourced_founders', 'github_resolve_reason', 'TEXT');
 
+// ── THE STORED FIT VERDICT — see lib/fitIndex for why this exists ──
+// The founder-quality rubric used to run on every row on every inbox load, which
+// meant SELECTing 23 KB of scrape blobs per row (51 MB in production) purely to
+// throw them away. The verdict only changes when the ROW changes, so it is written
+// here at ingest / enrichment / slope time and the inbox reads columns.
+//
+// These are a CACHE of lib/founderFit.evaluate(), never a second implementation.
+// fit_scored_at is the staleness key: NULL, or older than linkedin_enriched_at /
+// github_slope_scored_at, means the verdict predates evidence that would change it.
+addColumn('sourced_founders', 'fit_meet', 'INTEGER');          // cleared the gates
+addColumn('sourced_founders', 'fit_tier', 'TEXT');             // must-meet | strong | null
+addColumn('sourced_founders', 'fit_reason', 'TEXT');           // why that tier, in words
+addColumn('sourced_founders', 'fit_priority', 'INTEGER');      // summed marker weights
+addColumn('sourced_founders', 'fit_stage', 'TEXT');
+addColumn('sourced_founders', 'fit_stage_late', 'INTEGER');    // past the stage he wants
+addColumn('sourced_founders', 'fit_lifestyle', 'INTEGER');     // failed the venture-scale gate
+addColumn('sourced_founders', 'fit_why', 'TEXT');              // JSON array of marker labels
+addColumn('sourced_founders', 'fit_marker_count', 'INTEGER');
+addColumn('sourced_founders', 'fit_scored_at', 'DATETIME');
+// The inbox's exact access path: one user's live queue, best first. Without this the
+// LIMIT would still make SQLite walk every pending row to sort it.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_inbox
+  ON sourced_founders(user_id, status, list_scope, fit_tier, fit_priority DESC);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_fit_stale ON sourced_founders(user_id, fit_scored_at);`);
+
 // ── THE FALSIFIABLE LEARNING LOOP ──
 // The quant red-teamer's core point: "will attract tier-1 tomorrow" is unfalsifiable
 // with no deadline, so the engine can never be scored. This is the fix — when a

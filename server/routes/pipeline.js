@@ -269,133 +269,176 @@ router.get('/', (req, res) => {
 // to stand while using it — which is why all 167 rows are still 'pending'.
 // ══════════════════════════════════════════════════════════════════════
 router.get('/inbox', (req, res) => {
+  const uid = req.user.id;
+  const scope = req.query.scope === 'watchlist' ? 'watchlist' : 'pipeline';
+
+  // ── The verdict is READ, not recomputed ──
+  // This used to select raw_data / enriched_data / linkedin_data / github_slope_data
+  // for every pending row so lib/founderFit could score them, then strip those four
+  // columns back out before responding. On production's 2,232 rows that is ~51 MB
+  // read and ~1.2 s of single-threaded CPU per page load, paid in full even for the
+  // Must-meet view because the tier filter ran after the scoring.
+  //
+  // lib/fitIndex now writes the same verdict — same function, same evidence gate —
+  // at ingest, enrichment and slope time. So this is an ordinary indexed SELECT and
+  // not one blob is touched.
+  const base = `FROM sourced_founders
+    WHERE user_id = ? AND status IN ('pending','starred')
+      AND COALESCE(do_not_resurface, 0) = 0
+      AND list_scope = ?`;
+
+  // Counts come from the FULL queue, before any filter, so the header can say how
+  // many are behind each view and the number can never disagree with the list.
+  const counts = db.prepare(`
+    SELECT COALESCE(fit_tier, 'none') AS tier, COUNT(*) AS n ${base} GROUP BY 1
+  `).all(uid, scope);
+  const nOf = (t) => counts.find((c) => c.tier === t)?.n || 0;
+  const tierCounts = {
+    mustMeet: nOf('must-meet'),
+    strong: nOf('strong'),
+    all: counts.reduce((a, c) => a + c.n, 0),
+  };
+
+  // ── "New folks this morning" ──
+  // Danny: "I want to log in in the morning and see new folks!" — answered with the
+  // arrival DATE on every row rather than a per-session read/unread state, which is
+  // one more thing to get wrong and reset at the wrong moment.
+  //
+  // The boundary is the last nightly scout, so "new" means "arrived on the most
+  // recent run" and stays true all day instead of emptying the moment he blinks. No
+  // scout has ever run on some databases, so fall back to the last 24 hours — never
+  // to "everything", which would label the whole backlog new.
+  const lastScout = db.prepare(
+    `SELECT ran_at FROM job_runs WHERE job = 'nightly_scout' AND status IN ('ok','partial')
+     ORDER BY ran_at DESC LIMIT 1`
+  ).get();
+  //
+  // ONE boundary, resolved to a concrete timestamp here, used by the count in the
+  // header, the "New" filter, and the dot on each row. Deriving it three times is
+  // how a header says 23 over a list of 19.
+  const newSince = lastScout?.ran_at
+    || db.prepare(`SELECT datetime('now','-1 day') AS t`).get().t;
+  const newCount = db.prepare(`SELECT COUNT(*) n ${base} AND created_at >= ?`)
+    .get(uid, scope, newSince).n;
+
+  // ── Filters ──
+  const where = [];
+  const params = [uid, scope];
+  const tierParam = String(req.query.tier || '');
+  if (tierParam === 'must-meet') where.push(`fit_tier = 'must-meet'`);
+  else if (tierParam === 'strong') where.push(`fit_tier IN ('must-meet','strong')`);
+  else if (String(req.query.meetWorthy) === '1') where.push(`fit_meet = 1`);
+  if (String(req.query.hideLate) === '1') where.push(`COALESCE(fit_stage_late, 0) = 0`);
+  if (String(req.query.newOnly) === '1') { where.push('created_at >= ?'); params.push(newSince); }
+
+  // ── Order ──
+  // 'newest' is one click away because the arrival date is only useful if he can
+  // bring today's names to the top with it. 'best' stays the default: quality first,
+  // which is what the screen is for the other 23 hours of the day.
+  const order = req.query.sort === 'newest'
+    ? `created_at DESC, COALESCE(fit_priority, 0) DESC`
+    : `CASE fit_tier WHEN 'must-meet' THEN 2 WHEN 'strong' THEN 1 ELSE 0 END DESC,
+       CASE WHEN fit_stage = 'earliest' THEN 1 ELSE 0 END DESC,
+       COALESCE(fit_priority, 0) DESC,
+       created_at DESC`;
+
+  // A page, not the whole table. 200 is well past what anyone triages in a sitting
+  // and small enough that the response is a few hundred KB rather than megabytes.
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  const filterSql = where.length ? ` AND ${where.join(' AND ')}` : '';
+  const matched = db.prepare(`SELECT COUNT(*) n ${base}${filterSql}`).get(...params).n;
+
   const rows = db.prepare(`
     SELECT id, name, company, company_one_liner, role, source, headline,
            confidence_score, confidence_rationale, chicago_connection, location_city,
            location_type, caliber_tier, caliber_score, breakout_score, linkedin_url,
            github_url, website_url, list_scope, status, created_at,
-           -- The study panel's whole point, and it was reading three columns this
-           -- query never selected. Sourcing.jsx:353 says "Everything here is
-           -- EVIDENCE" above three sections that silently rendered nothing,
-           -- because "'evidence_map' in row" was false and undefined skips a block
-           -- without erroring. Half the panel was dead for 23 of 61 rows that HAVE
-           -- the data. Same narrow-column-list trap as the company card.
-           evidence_map, caliber_signals, builder_signals,
-           -- The founder-quality check reads the SOURCE material — bio, experience,
-           -- tags. Leaving these out is the same narrow-column trap the comment
-           -- above is about: founderFit would score every row against empty text and
-           -- silently find nothing. These are the fields lib/founderFit.profileText
-           -- actually reads.
-           raw_data, enriched_data, linkedin_data, pedigree_signals,
-           tags, previous_company_norm,
-           -- Builder slope. Without these the founder-slope marker silently never
-           -- fires — the exact narrow-column trap this file keeps re-learning.
-           github_slope_score, github_slope_data
-    FROM sourced_founders
-    WHERE user_id = ? AND status IN ('pending','starred')
-      AND COALESCE(do_not_resurface, 0) = 0
-      AND list_scope = COALESCE(?, 'pipeline')
-    ORDER BY
-      CASE status WHEN 'starred' THEN 0 ELSE 1 END,
-      -- ══════════════════════════════════════════════════════════════
-      -- NORMALIZE. These are three different instruments, not one column.
-      --
-      -- This was COALESCE(caliber_score, breakout_score, confidence_score, 0),
-      -- which reads as "whichever score exists" and is a scale collision:
-      --
-      --   exa rows          caliber_score   2-9    (n=23, breakout NULL)
-      --   yc_directory      breakout_score  10-48  (n=23, caliber  NULL)
-      --   pre_program       breakout_score  10-40  (n=15, caliber  NULL)
-      --   rows with BOTH:   0
-      --
-      -- Disjoint populations on incomparable ranges, so every breakout row
-      -- mechanically outranked every caliber row. Measured 2026-07-16: all 7 of
-      -- Danny's S/A-tier founders sat at ranks 39-45 of 61, below rows scoring
-      -- breakout=10. The ranker was ANTI-correlated with quality at the top —
-      -- and Sourcing.jsx renders server order with no client sort, so this is
-      -- literally what he read top-down with j.
-      --
-      -- Each score is now divided by its own ceiling (caliber /10, breakout and
-      -- confidence /100 per breakoutScore.js's Math.min(score,100)), which is the
-      -- honest amount of comparability available: it says "how far up its own
-      -- scale did this row get", not "these numbers mean the same thing." They
-      -- don't — caliber is a tiered judgement with signals behind it, breakout is
-      -- a keyword count. A future ranker should prefer caliber outright rather
-      -- than average the two; this only stops the inversion.
-      -- ══════════════════════════════════════════════════════════════
-      CASE
-        WHEN caliber_score IS NOT NULL THEN caliber_score / 10.0
-        WHEN breakout_score IS NOT NULL THEN breakout_score / 100.0
-        WHEN confidence_score IS NOT NULL THEN confidence_score / 100.0
-        ELSE 0
-      END DESC,
-      created_at DESC
-  `).all(req.user.id, req.query.scope || 'pipeline');
+           evidence_map, caliber_signals, builder_signals, pedigree_signals, tags,
+           github_slope_score,
+           fit_meet, fit_tier, fit_reason, fit_priority, fit_stage, fit_stage_late,
+           fit_lifestyle, fit_why, fit_marker_count, fit_scored_at
+    ${base}${filterSql}
+    ORDER BY ${order}
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  const scored = rows.map((r) => {
+    let why = [];
+    try { const v = JSON.parse(r.fit_why || '[]'); if (Array.isArray(v)) why = v; } catch { /* leave empty */ }
+    const {
+      fit_meet, fit_tier, fit_reason, fit_priority, fit_stage, fit_stage_late,
+      fit_lifestyle, fit_why, fit_marker_count, fit_scored_at, ...rest
+    } = r;
+    return {
+      ...rest,
+      // is_new is a FACT about the row against the run boundary, computed in one
+      // place so the count in the header and the dot on the row can never disagree.
+      is_new: r.created_at >= newSince,
+      fit: {
+        meetWorthy: !!fit_meet,
+        tier: fit_tier,
+        tierReason: fit_reason,
+        priority: fit_priority || 0,
+        stage: fit_stage,
+        stageTooLate: !!fit_stage_late,
+        lifestyle: !!fit_lifestyle,
+        why,
+        markers: new Array(fit_marker_count || 0),
+        // Null means the rubric has not run on this row yet — a brand-new arrival
+        // between the scout and the next boot. Say so rather than rendering it as
+        // "didn't qualify", which is a different and untrue statement.
+        scored: !!fit_scored_at,
+      },
+    };
+  });
 
   // ── When did the scout last run, and what did it find? ──
   // Danny: "it didn't seem to be sourcing new founders for me on any time
   // interval? I would click 'Find Founders' and it wouldn't really work."
   //
-  // It was running. The log only ever recorded the Exa sweep (which produces
-  // almost nothing) and discarded the connector results (which produce
-  // everything), so a day that added 167 founders reported "0 found". An
-  // automation you can't see is one you don't believe in, so the answer goes at
-  // the top of the screen where the work happens — not in a Health page nobody
-  // opens.
+  // It genuinely never ran on a schedule — the cron's readiness gate looked for the
+  // Exa key in the environment while it has always lived in user_settings. Fixed in
+  // index.js; this reads the one ledger row the nightly scout now writes, falling
+  // back to the two older job names so a database mid-upgrade still says something true.
   const { lastRun } = require('../services/health');
-  const last = lastRun('early_signal_sources', req.user.id) || lastRun('sourcing_run', req.user.id);
+  const last = lastRun('nightly_scout', uid)
+    || lastRun('early_signal_sources', uid)
+    || lastRun('sourcing_run', uid);
 
-  // ── The founder-quality check, on read ──
-  // Danny asked for a check to "identify, select, and prioritize who I should meet":
-  // earliest-stage + IL tie + an outlier marker (exit/YC/Speedrun/SPC/hyperscaler/
-  // prior-founding/prior-raise). Attached here, not stored, so it's always fresh.
+  // ══════════════════════════════════════════════════════════════════════
+  // "NOT SCHEDULED" MUST NOT LOOK LIKE "FOUND NOBODY".
   //
-  //   fit.why      — the verified "Why they're here". Only markers whose evidence is
-  //                  verbatim in the profile survive, which is the fix for "some
-  //                  descriptions are good, some bad."
-  //   fit.priority — the ranking. It becomes the PRIMARY sort key, ahead of the
-  //                  normalized caliber/breakout score the query ordered by. A
-  //                  stable sort keeps that score as the within-priority tiebreak.
-  //   stageTooLate — the Cargado case: past earliest stage. Optionally hidden.
-  const ff = require('../lib/founderFit');
-  let scored = rows.map((r) => {
-    const f = ff.evaluate(r);
-    // Strip the heavy source blobs back out — they were selected only to feed the
-    // rubric, and the inbox payload shouldn't carry every founder's full scrape.
-    const { raw_data, enriched_data, linkedin_data, github_slope_data, ...rest } = r;
-    return { ...rest, fit: { meetWorthy: f.meetWorthy, tier: f.tier, tierReason: f.tierReason, priority: f.priority, stage: f.stage, stageTooLate: f.stageTooLate, lifestyle: f.lifestyle, why: f.why, markers: f.markers } };
-  });
-
-  // Tier counts over the FULL list, before any filter — the header shows the size
-  // of each tier so Danny can widen from Must-meet knowing exactly how many more
-  // are behind it. Computed once, here, so the counts and the filter never disagree.
-  const tierCounts = {
-    mustMeet: scored.filter((r) => r.fit.tier === 'must-meet').length,
-    strong: scored.filter((r) => r.fit.tier === 'strong').length,
-    all: scored.length,
-  };
-
-  // ?tier=must-meet — the very best (default view). ?tier=strong — widen to solid
-  // single-signal founders. ?meetWorthy=1 — both tiers. Anything else — everything.
-  const tierParam = String(req.query.tier || '');
-  if (tierParam === 'must-meet') scored = scored.filter((r) => r.fit.tier === 'must-meet');
-  else if (tierParam === 'strong') scored = scored.filter((r) => r.fit.tier === 'strong' || r.fit.tier === 'must-meet');
-  else if (String(req.query.meetWorthy) === '1') scored = scored.filter((r) => r.fit.meetWorthy);
-  if (String(req.query.hideLate) === '1') scored = scored.filter((r) => !r.fit.stageTooLate);
-
-  // Rank: Must-meet first, then explicit earliest-stage (the cream of a tier),
-  // then priority. A stable sort keeps the SQL's normalized-score order as the
-  // final tiebreak, so this refines the ranking rather than discarding it.
-  const tierRank = (t) => (t === 'must-meet' ? 2 : t === 'strong' ? 1 : 0);
-  scored.sort((a, b) =>
-    (tierRank(b.fit.tier) - tierRank(a.fit.tier)) ||
-    ((b.fit.stage === 'earliest' ? 1 : 0) - (a.fit.stage === 'earliest' ? 1 : 0)) ||
-    (b.fit.priority - a.fit.priority));
+  // The scout only runs if the owner's Exa + Anthropic keys resolve and
+  // PIPELINE_ENABLED isn't explicitly 'false'. Both of those live outside the repo
+  // — in Settings and in Railway's dashboard — so the app cannot test them and a
+  // deploy cannot fix them. If either is wrong the scout silently never runs, which
+  // is EXACTLY the failure this whole rebuild exists to end: for months the gate
+  // looked for the Exa key in the environment, found nothing, declined to schedule,
+  // and the screen just said the inbox was quiet.
+  //
+  // Boot records `scout_not_scheduled` with the reason. Surfacing it here — and only
+  // when it is NEWER than the last real run, so a fixed config stops nagging — puts
+  // the answer on the screen Danny opens every morning rather than in a log he'd
+  // have to know to read.
+  // ══════════════════════════════════════════════════════════════════════
+  const blocked = lastRun('scout_not_scheduled', uid);
+  const scoutBlocked = blocked && (!last || blocked.ran_at > last.ran_at)
+    ? { reason: blocked.detail, since: blocked.ran_at }
+    : null;
 
   res.json({
     rows: scored,
-    total: scored.length,
+    // `total` is what the CURRENT filter matched, not what was returned — the client
+    // needs it to know there is a next page.
+    total: matched,
+    returned: scored.length,
+    limit,
+    offset,
     tiers: tierCounts,
+    new_count: newCount,
+    new_since: newSince,
     // The national Frontier Watch — everything with no Illinois tie. Kept separate
     // rather than dropped, because "best of the best" is a different question from
     // "best we can be first to," and Brandon asks the first one.
@@ -403,17 +446,19 @@ router.get('/inbox', (req, res) => {
       `SELECT COUNT(*) n FROM sourced_founders
        WHERE user_id = ? AND status IN ('pending','starred') AND list_scope = 'watchlist'
          AND COALESCE(do_not_resurface, 0) = 0`
-    ).get(req.user.id).n,
+    ).get(uid).n,
     last_run: last
       ? { job: last.job, status: last.status, detail: last.detail, ran_at: last.ran_at }
       : // Null is not "it failed" — it's "no run has ever been recorded", which is
-        // a different and more useful thing to say. The cron recorded nothing until
-        // 2026-07-15, so this is the honest state of most databases.
+        // a different and more useful thing to say.
         null,
+    // Set when the scheduler declined to arm the scout, with the reason. Null is the
+    // healthy state.
+    scout_blocked: scoutBlocked,
     arrived_today: db.prepare(
       `SELECT COUNT(*) n FROM sourced_founders
        WHERE user_id = ? AND DATE(created_at) = DATE('now')`
-    ).get(req.user.id).n,
+    ).get(uid).n,
   });
 });
 

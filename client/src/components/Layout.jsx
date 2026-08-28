@@ -46,7 +46,9 @@ const navConfig = [
   // founders, not him — and it doesn't belong beside the screens he opens every
   // morning. Moved to the utility menu until there's a second req.
   { to: '/', label: 'Home' },
-  { to: '/sourcing', label: 'Sourcing' },
+  // "Source" — Danny's word. The route and the API keep their old names; nothing
+  // user-facing shows them, and renaming a path breaks bookmarks for a label change.
+  { to: '/sourcing', label: 'Source' },
   { to: '/pipeline', label: 'Pipeline' },
   { to: '/assess', label: 'Assess' },
   // Hiring is the inverted lens of Assess: instead of judging a founder, you help

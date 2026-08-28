@@ -30,15 +30,59 @@ const { detectSignals } = require('../lib/builderSignals');
 const { anthropicFor, MODEL } = require('../lib/providerKeys');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
 
-// Warm-first is a TIER, not a bonus. The brief: "Rank in tiers: Warm matched first;
-// then Cold." A warm contact's one-line bio can't confirm a stack the way a scraped
-// cold profile can, so scoring them head-to-head buries warm every time — which is
-// exactly backwards from the VC's edge. So warm gets a large ordering offset: the
-// whole warm tier sorts above the whole cold tier, and within each tier fit + IL
-// decide. rank_score is an ORDERING KEY only (never shown — the card shows fit_score).
-const WARM_TIER_OFFSET = 1000;
+// ══════════════════════════════════════════════════════════════════════════
+// WARM IS A BONUS. IT USED TO BE A 1,000-POINT TIER, AND THAT WAS WRONG ON THE
+// REAL DATA.
+//
+// The old rule: `rank = (warm ? 1000 : 0) + fit + il`. A flat 1,000 means the whole
+// warm tier sorts above the whole cold tier no matter what, so fit stops being a
+// ranking input across the boundary and becomes a tiebreak within it.
+//
+// What that produced for Hale's Founding Full-Stack Engineer role, measured:
+//
+//   #1-6  warm, fit 43-52, current_role EMPTY, current_company EMPTY, city EMPTY
+//         all six from one event, six near-identical rationales
+//   #7    Ezekiel Chow — Founding Full Stack Engineer, stealth, Chicago,
+//         React + Node + Postgres — fit 82
+//
+// Danny would have sent his founder six names he cannot describe and buried the one
+// that matches the JD. The entire warm pool is 16 people from a single hackathon, so
+// "warm" here was never a strong relationship — it was an attendance list.
+//
+// The intent behind the tier is still right and is preserved: an EQUAL cold match
+// should lose to someone Danny knows. A bonus does exactly that — it wins ties and
+// near-ties, which is what "equal fit → warm wins" actually means — without letting
+// a 33-point fit gap be erased by knowing someone's name.
+//
+// 12 is calibrated, not picked: it is slightly above the IL bonus (a real
+// relationship beats a geography match) and comfortably below the smallest gap that
+// should decide a hire. On the measured Hale data it puts Ezekiel Chow first and
+// keeps every warm candidate on the list.
+//
+// rank_score stays an ORDERING KEY only — never shown. The card shows fit_score.
+// ══════════════════════════════════════════════════════════════════════════
+const WARM_BONUS = 12;
 const IL_BONUS = 8;      // a verified Illinois tie, when the role isn't IL-only
 const SHORTLIST_FLOOR = 22; // below this fit, don't put someone in front of a founder
+
+// ══════════════════════════════════════════════════════════════════════════
+// YOU CANNOT INTRODUCE SOMEONE YOU CANNOT DESCRIBE.
+//
+// The handoff artifact renders "**1. Name** — role @ company · why". For the six
+// warm names above, every one of those fields was empty, so the founder received a
+// bare name and a hackathon. That is not a lead, and sending it costs Danny more
+// credibility than sending nothing.
+//
+// So a row needs at least one substantive fact about what this person actually does
+// — a current role, a current company, or a headline — before it can be put in front
+// of a founder. This is a SHORTLIST gate, not a delete: the candidate stays in the
+// pool and the moment enrichment fills any of those fields they rank normally.
+// ══════════════════════════════════════════════════════════════════════════
+function isDescribable(c) {
+  return !!(String(c.current_role || '').trim()
+    || String(c.current_company || '').trim()
+    || String(c.headline || '').trim());
+}
 
 // ── candidate text: everything we can honestly cite about a person ──
 function profileText(c) {
@@ -86,9 +130,31 @@ function stackOverlap(role, cand, text) {
   const matched = must.filter(present);
   const missing = must.filter((t) => !present(t));
   const niceMatched = nice.filter(present);
-  // No must-have stack stated → neutral (don't penalize a role that didn't specify).
-  const score = must.length ? matched.length / must.length : null;
-  return { score, matched, missing, niceMatched, hasMust: must.length > 0 };
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ABSENCE OF EVIDENCE IS NOT EVIDENCE OF ABSENCE.
+  //
+  // This scored 0/30 whenever a candidate's text didn't contain the role's stack
+  // tokens — which silently punished people for having a SHORT PROFILE rather than
+  // for lacking the skill. Danny's warm pool is one-line Airtable bios ("CTO/Full
+  // Stack. Masters @ UChicago in computer science"), so every person he actually
+  // knows took a 30-point zero on an axis nobody had evidence about, and ranked
+  // below a stranger whose scraped profile happened to list React.
+  //
+  // A 3,000-character scraped LinkedIn profile with no "React" in it IS evidence.
+  // A 60-character bio is not. So when there's no structured tech_stack and barely
+  // any text, the axis returns null — computeFit renormalizes over the axes it can
+  // actually read, exactly as seniorityFit already does for an unknown seniority —
+  // and the uncertainty is stated as a gap instead of being hidden inside a score.
+  //
+  // This never invents a match: `matched` stays empty, so no strength is claimed.
+  // It only stops us asserting a weakness we cannot see.
+  // ══════════════════════════════════════════════════════════════════════
+  const READABLE_PROFILE_CHARS = 200;
+  const unreadable = !haveKeys.size && String(text || '').length < READABLE_PROFILE_CHARS;
+  const score = !must.length ? null : (unreadable && !matched.length ? null : matched.length / must.length);
+
+  return { score, matched, missing, niceMatched, hasMust: must.length > 0, unevidenced: !!(must.length && score === null) };
 }
 
 // ── seniority alignment (light; only when the role states one) ──
@@ -156,7 +222,8 @@ function computeFit(role, cand) {
   if (cand.il_tie_type) strengths.push(`Illinois tie (${cand.il_tie_type}${cand.il_tie_place ? `: ${cand.il_tie_place}` : ''})`);
   if (slope >= 5) strengths.push(`GitHub slope ${slope}/10`);
   for (const sg of sigs.slice(0, 2)) strengths.push(sg.label.toLowerCase());
-  if (stack.hasMust && stack.missing.length) gaps.push(`no stated ${stack.missing.join('/')}`);
+  if (stack.unevidenced) gaps.push(`stack not evidenced — profile is one line, ${parseArr(role.must_have_stack).join('/')} unverified`);
+  else if (stack.hasMust && stack.missing.length) gaps.push(`no stated ${stack.missing.join('/')}`);
   if (fn.hardMismatch) gaps.push(fn.note);
   if (sen.note) gaps.push(sen.note);
 
@@ -176,15 +243,17 @@ function rankCandidates(role, candidates) {
     const f = computeFit(role, cand);
     if (f.hardMismatch) continue;                          // never pair an eng role with a GTM person
     if (f.fit < SHORTLIST_FLOOR) continue;                 // don't waste the founder's attention
+    if (!isDescribable(cand)) continue;                    // nothing to tell the founder
     const warm = cand.tier === 'warm';
-    const rank = (warm ? WARM_TIER_OFFSET : 0) + f.fit + (cand.il_tie_type && !ilOnly ? IL_BONUS : 0);
+    const rank = (warm ? WARM_BONUS : 0) + f.fit + (cand.il_tie_type && !ilOnly ? IL_BONUS : 0);
     ranked.push({
       candidate: cand, fit: f.fit, rank_score: Math.round(rank * 10) / 10,
       tier: cand.tier || 'cold', strengths: f.strengths, gaps: f.gaps, breakdown: f.breakdown,
       il: cand.il_tie_type ? { type: cand.il_tie_type, place: cand.il_tie_place, evidence: cand.il_tie_evidence } : null,
     });
   }
-  // Warm tier first (via the offset), then fit + IL within each tier.
+  // One list, best first. Warmth and an IL tie are weights inside the score, not
+  // partitions around it, so a strong stranger and a known name compete directly.
   ranked.sort((a, b) => b.rank_score - a.rank_score || b.fit - a.fit);
   return ranked;
 }
@@ -261,12 +330,13 @@ async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain 
   const ranked = rankCandidates(role, pool);
   const warmConsidered = pool.filter((c) => c.tier === 'warm').length;
   const coldConsidered = pool.length - warmConsidered;
-  // Represent BOTH tiers — a single flat limit let a whole tier vanish (the "0 warm,
-  // 10 cold" bug). Cap each tier, warm first, so Danny always sees his network AND the
-  // freshly-sourced leads. ranked is already warm-first, so a simple filter+slice works.
-  const warmList = ranked.filter((r) => r.tier === 'warm').slice(0, warmCap);
-  const coldList = ranked.filter((r) => r.tier !== 'warm').slice(0, coldCap);
-  const shortlist = [...warmList, ...coldList];
+  // ── ONE RANKED SHORTLIST ──
+  // This used to fill a warm quota and a cold quota separately, which was the only
+  // way to stop the 1,000-point warm offset from swallowing the whole list. With
+  // warmth scored as a bonus the quotas are not just unnecessary, they're harmful:
+  // a warm cap would drop a well-matched known contact at #7 to make room for a
+  // weaker stranger, and a cold cap would do the reverse. Take the top N of one list.
+  const shortlist = ranked.slice(0, Math.max(1, warmCap + coldCap));
   const explained = explain ? await explainShortlist({ userId, role, items: shortlist }) : shortlist.map((it) => ({ ...it, rationale: fallbackLine(it) }));
 
   // Upsert matches. Re-running a role refreshes scores/rationale but PRESERVES the
@@ -301,5 +371,5 @@ async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain 
 
 module.exports = {
   runMatch, rankCandidates, computeFit, functionFit, stackOverlap, seniorityFit, domainFit,
-  profileText, explainShortlist, fallbackLine, WARM_TIER_OFFSET, IL_BONUS, SHORTLIST_FLOOR,
+  profileText, explainShortlist, fallbackLine, isDescribable, WARM_BONUS, IL_BONUS, SHORTLIST_FLOOR,
 };

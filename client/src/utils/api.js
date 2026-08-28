@@ -438,6 +438,10 @@ export const api = {
   getAttention: (opts) => cachedGet('/today/attention', opts),
 
   getToday: (opts) => cachedGet('/today', opts),
+  // What Danny can set running from Home, on what, and what's running now. Read-only —
+  // dispatch goes through each product's own existing route so there is one code path
+  // per agent, not a home-screen copy of three workflows.
+  getAgents: (opts) => cachedGet('/today/agents', opts),
   addTodayItem: (body) => after(request('/today/items', { method: 'POST', body: JSON.stringify(body) }), '/today'),
   updateTodayItem: (id, body) => after(request(`/today/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }), '/today'),
   deleteTodayItem: (id) => after(request(`/today/items/${id}`, { method: 'DELETE' }), '/today'),

@@ -118,6 +118,134 @@ router.get('/', (req, res) => {
   });
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// GET /api/today/agents — what Danny can set running from the home screen.
+//
+// Danny: "It could even just give me the ability to build a custom task list or set
+// off agents to go accomplish tasks for me."
+//
+// There are exactly THREE things in Stu that do real work in the background, one per
+// product, and all three already exist and are already used elsewhere:
+//
+//   scout   → the nightly sweep, on demand          (POST /api/sourcing/run)
+//   read    → the nine-lens panel on one company    (POST /api/companies/:id/read)
+//   hiring  → source candidates for one open role   (POST /api/hiring/roles/:id/source)
+//
+// This endpoint does NOT dispatch. It answers "what can I run, on what, and is
+// anything running right now" — the client fires the existing routes. Dispatching
+// from here would be a fourth copy of three workflows, and this codebase already has
+// two inboxes and two rankers from exactly that instinct.
+//
+// TARGETS ARE PRE-FILTERED TO WHAT WOULD ACTUALLY WORK. The read agent only lists
+// companies that HAVE materials on file, because `/read` refuses (correctly) to score
+// a company with nothing to read — offering the other 90 would be offering 90 errors.
+// This is also the honest replacement for Home's old "Live deals with no read: 101",
+// which was a backlog wearing a task's clothes: 101 things he cannot act on, versus
+// the handful he actually can.
+// ══════════════════════════════════════════════════════════════════════════
+router.get('/agents', (req, res) => {
+  const uid = req.user.id;
+
+  // ── Running right now ──
+  const runningReads = db.prepare(`
+    SELECT a.id, a.founder_id, f.company, f.name AS founder_name
+    FROM opportunity_assessments a LEFT JOIN founders f ON a.founder_id = f.id
+    WHERE a.created_by = ? AND a.is_deleted = 0
+      AND a.status IN ('running','processing_inputs','synthesizing')
+    ORDER BY a.created_at DESC
+  `).all(uid);
+
+  const runningHiring = db.prepare(`
+    SELECT h.id, h.role_id, r.title, r.company_name
+    FROM hiring_runs h LEFT JOIN hiring_roles r ON h.role_id = r.id
+    WHERE h.user_id = ? AND h.finished_at IS NULL AND h.status = 'running'
+    ORDER BY h.run_at DESC
+  `).all(uid);
+
+  // ── Read targets: companies with materials on file and no completed read ──
+  const readTargets = db.prepare(`
+    SELECT f.id, f.company, f.name,
+           (SELECT COUNT(*) FROM company_sources cs
+             WHERE cs.founder_id = f.id AND cs.content_text IS NOT NULL) AS materials
+    FROM founders f
+    WHERE f.created_by = ? AND f.is_deleted = 0
+      AND EXISTS (SELECT 1 FROM company_sources cs
+                   WHERE cs.founder_id = f.id AND cs.content_text IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM opportunity_assessments a
+                       WHERE a.founder_id = f.id AND a.is_deleted = 0
+                         AND a.status IN ('complete','partial')
+                         AND a.assessment_type = 'assessment')
+    ORDER BY f.updated_at DESC, f.id DESC
+    LIMIT 25
+  `).all(uid);
+
+  // ── Hiring targets: open roles ──
+  const roleTargets = db.prepare(`
+    SELECT r.id, r.title, r.company_name, f.company AS founder_company,
+           (SELECT COUNT(*) FROM hiring_matches m WHERE m.role_id = r.id AND m.is_deleted = 0) AS matches
+    FROM hiring_roles r LEFT JOIN founders f ON r.founder_id = f.id
+    WHERE r.user_id = ? AND r.is_deleted = 0 AND r.status = 'open'
+    ORDER BY r.updated_at DESC
+    LIMIT 25
+  `).all(uid);
+
+  const { lastRun } = require('../services/health');
+  const scoutLast = lastRun('nightly_scout', uid) || lastRun('sourcing_run', uid);
+
+  res.json({
+    agents: [
+      {
+        kind: 'scout',
+        label: 'Find new founders',
+        detail: 'Sweep the open web for stealth and just-departed builders with an Illinois tie',
+        needs_target: false,
+        // The scout has no durable "running" row of its own — it writes its ledger
+        // line when it FINISHES. Saying so is better than inventing a spinner state
+        // the server cannot actually observe.
+        running: [],
+        last: scoutLast
+          ? { status: scoutLast.status, detail: scoutLast.detail, ran_at: scoutLast.ran_at }
+          : null,
+        targets: null,
+      },
+      {
+        kind: 'read',
+        label: 'Run a read',
+        detail: 'Put one company through the nine-lens panel',
+        needs_target: true,
+        running: runningReads.map((r) => ({
+          id: r.id, target_id: r.founder_id, label: r.company || r.founder_name || `#${r.founder_id}`,
+        })),
+        last: null,
+        targets: readTargets.map((t) => ({
+          id: t.id,
+          label: t.company || t.name,
+          detail: `${t.materials} ${t.materials === 1 ? 'document' : 'documents'} on file`,
+        })),
+        // Named so the empty state can be honest about WHY it is empty.
+        empty_reason: 'No company has materials on file without a read. Add a deck or call notes to a card first.',
+      },
+      {
+        kind: 'hiring',
+        label: 'Source candidates',
+        detail: 'Find people for one open role at a portfolio company',
+        needs_target: true,
+        running: runningHiring.map((r) => ({
+          id: r.id, target_id: r.role_id, label: r.title || `role #${r.role_id}`,
+        })),
+        last: null,
+        targets: roleTargets.map((t) => ({
+          id: t.id,
+          label: t.title,
+          detail: [t.company_name || t.founder_company, t.matches ? `${t.matches} found so far` : 'nothing found yet']
+            .filter(Boolean).join(' · '),
+        })),
+        empty_reason: 'No open roles. Add one on the Hiring screen.',
+      },
+    ],
+  });
+});
+
 // ── POST /api/today/items — Danny adds his own ──
 router.post('/items', (req, res) => {
   const { title, detail, lane = 'mine', due_at, founder_id } = req.body;

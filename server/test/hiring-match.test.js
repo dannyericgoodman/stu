@@ -13,7 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const db = require('../db');
-const { rankCandidates, computeFit, runMatch } = require('../pipeline/hiring-match');
+const { rankCandidates, computeFit, isDescribable, runMatch } = require('../pipeline/hiring-match');
 
 const engRole = { role_function: 'engineering', title: 'Founding Backend Engineer', seniority: 'senior', domain: 'healthcare', must_have_stack: ['Python', 'Postgres'], nice_to_have_stack: ['AWS'], il_only: 0 };
 const cand = (o) => ({ role_function: '["engineering"]', tier: 'cold', ...o });
@@ -25,18 +25,65 @@ test('a GTM person is never returned for an engineering role', () => {
   assert.ok(ranked.find((r) => r.candidate.id === 1), 'eng kept');
 });
 
-test('warm is a TIER: the whole warm tier ranks above cold; fit orders within a tier', () => {
-  const pool = [
-    cand({ id: 1, name: 'WarmStrong', tier: 'warm', headline: 'Senior Python Postgres backend, healthcare' }),
-    cand({ id: 2, name: 'ColdStrong', headline: 'Senior Python Postgres AWS backend healthcare', github_slope_score: 9 }),
-    // A qualifying-but-weaker warm contact still ranks above even a strong cold one —
-    // the VC's edge is a warm intro. (Below the fit floor it would be dropped entirely.)
-    cand({ id: 3, name: 'WarmWeaker', tier: 'warm', headline: 'Python backend engineer' }),
+// ══════════════════════════════════════════════════════════════════════════
+// This test used to assert the OPPOSITE — that "a qualifying warm contact still
+// outranks a strong cold one" — because warmth was a flat +1,000 offset.
+//
+// Measured against Danny's real data, that rule put six Permute Hackathon attendees
+// with empty role/company/city (fit 43-52) above Ezekiel Chow — Founding Full Stack
+// Engineer, stealth, Chicago, React + Node + Postgres, fit 82 — for Hale's founding
+// engineer role. His whole warm pool is 16 people from one event, so the "tier" was
+// an attendance list outranking the JD.
+//
+// The intent survives and is what's asserted now: an EQUAL cold match loses to
+// someone he knows. That is what "warm wins" should ever have meant.
+// ══════════════════════════════════════════════════════════════════════════
+test('warm is a BONUS: it wins ties and near-ties, it does not erase a fit gap', () => {
+  // Identical profiles, one warm. The ONLY difference is the relationship.
+  const bio = 'Senior Python Postgres backend, healthcare';
+  const tie = [
+    cand({ id: 1, name: 'WarmTwin', tier: 'warm', headline: bio }),
+    cand({ id: 2, name: 'ColdTwin', headline: bio }),
   ];
-  const ranked = rankCandidates(engRole, pool);
-  const pos = (id) => ranked.findIndex((r) => r.candidate.id === id);
-  assert.ok(pos(1) < pos(3), 'higher-fit warm leads within the warm tier');
-  assert.ok(pos(3) < pos(2), 'a qualifying warm contact still outranks a strong cold one (tier)');
+  const tied = rankCandidates(engRole, tie);
+  assert.strictEqual(tied[0].candidate.id, 1, 'at equal fit, the warm contact leads');
+  assert.strictEqual(tied[0].fit, tied[1].fit, 'and they really were equal on fit');
+
+  // A materially stronger cold candidate is NOT displaced. This is the assertion
+  // that would have caught the Hale shortlist: a 12-point bonus cannot erase the
+  // gap between "Python backend engineer" and a senior full-stack match.
+  const gap = [
+    cand({ id: 3, name: 'WarmWeaker', tier: 'warm', headline: 'Python backend engineer' }),
+    cand({ id: 4, name: 'ColdStrong', headline: 'Senior Python Postgres AWS backend healthcare', github_slope_score: 9 }),
+  ];
+  const ranked = rankCandidates(engRole, gap);
+  assert.strictEqual(ranked[0].candidate.id, 4, 'a clearly better cold candidate outranks a weaker warm one');
+  assert.ok(ranked[0].fit - ranked[1].fit > 12, 'and the gap really was larger than the warm bonus');
+});
+
+test('a candidate nobody can describe is never shortlisted', () => {
+  // The six warm names at the top of Hale's real shortlist had no role, no company
+  // and no headline. The export renders "**1. Name** — role @ company · why", so the
+  // founder received a bare name. A lead you cannot describe is not a lead.
+  const nameOnly = cand({ id: 9, name: 'Just A Name', tier: 'warm', headline: '', current_role: '', current_company: '' });
+  const ranked = rankCandidates(engRole, [nameOnly]);
+  assert.strictEqual(ranked.length, 0, 'dropped from the shortlist');
+  // ...but only from the SHORTLIST. It stays in the pool for enrichment to fill in.
+  assert.strictEqual(isDescribable(nameOnly), false);
+  assert.strictEqual(isDescribable(cand({ name: 'X', headline: 'CTO/Full Stack, UChicago MS' })), true,
+    'a one-line bio IS describable — that is what most warm rows have');
+});
+
+test('an unreadable profile scores stack as UNKNOWN, not as missing', () => {
+  // A 3,000-char scraped profile with no "Postgres" is evidence. A 60-char bio is not.
+  // Scoring both as 0/30 is what buried every warm contact Danny actually knows.
+  const thin = computeFit(engRole, cand({ name: 'Thin', headline: 'CTO/Full Stack' }));
+  const thick = computeFit(engRole, cand({
+    name: 'Thick',
+    headline: 'Senior engineer'.padEnd(260, ' building distributed services and internal tooling'),
+  }));
+  assert.ok(thin.gaps.some((g) => /not evidenced/i.test(g)), 'the uncertainty is stated, not hidden');
+  assert.ok(thin.fit > thick.fit, 'unknown beats a profile long enough to have shown the stack and did not');
 });
 
 test('IL-only is a hard filter', () => {

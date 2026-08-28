@@ -1807,6 +1807,19 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
     errors.push({ source: 'github-activity', error: err.message });
   }
 
+  // ── Phase 5.7: Score the new arrivals ──
+  // The inbox reads a STORED verdict (lib/fitIndex), so a founder inserted here
+  // without one would render as "didn't qualify" — indistinguishable from a real
+  // rejection, and wrong. Scoring here closes that window inside the same run that
+  // opened it. Cheap and self-limiting: only rows with no verdict match.
+  try {
+    const f = require('../lib/fitIndex').rescoreStale({ userId });
+    if (f.scored) console.log(`[Sourcing] Scored ${f.scored} new arrival(s) against the founder rubric`);
+  } catch (err) {
+    console.error('[Sourcing][Fit] scoring failed (rows still saved):', err.message);
+    errors.push({ source: 'fit-index', error: err.message });
+  }
+
   // ── Phase 6: Update run log ──
   db.prepare('UPDATE sourcing_runs SET sources_hit = ?, founders_found = ?, founders_added = ?, founders_deduplicated = ?, errors = ? WHERE id = ?').run(
     JSON.stringify(sourcesHit), totalFound, totalAdded, totalDeduped, JSON.stringify(errors), runId

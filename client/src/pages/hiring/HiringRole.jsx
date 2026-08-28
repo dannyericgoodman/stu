@@ -152,23 +152,29 @@ export default function HiringRole() {
                 {progress || 'Sourcing more…'}
               </div>
             )}
+            {/* ══════════════════════════════════════════════════════════════
+                ONE RANKED SHORTLIST — this used to be two sections.
+
+                Splitting into "Warm network" then "Sourced — open web" put every
+                warm contact above every cold one on screen, which re-imposed in the
+                UI exactly the tier dominance the matcher just stopped doing. On
+                Hale's real role that meant six hackathon attendees with no recorded
+                role sat above a founding full-stack engineer in Chicago who matched
+                the JD — the ranker's fix would have been invisible.
+                
+                The warmth is still on every card, as a badge with its provenance
+                ("warm · Permute Hackathon"). That's the honest place for it: a fact
+                about the person, not a partition that decides the order.
+                ══════════════════════════════════════════════════════════════ */}
             {(() => {
-              const warm = matches.filter((m) => m.tier === 'warm');
-              const cold = matches.filter((m) => m.tier !== 'warm');
+              const warmN = matches.filter((m) => m.tier === 'warm').length;
               return (
                 <>
-                  {warm.length > 0 && (
-                    <>
-                      <SectionLabel>Warm network · {warm.length}</SectionLabel>
-                      {warm.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
-                    </>
-                  )}
-                  {cold.length > 0 && (
-                    <>
-                      <SectionLabel>Sourced — open web &amp; GitHub · {cold.length}</SectionLabel>
-                      {cold.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
-                    </>
-                  )}
+                  <SectionLabel>
+                    Best fit first · {matches.length}
+                    {warmN > 0 && <span className="font-normal text-gray-400"> · {warmN} from your network</span>}
+                  </SectionLabel>
+                  {matches.map((m) => <MatchCard key={m.id} m={m} onStatus={setStatus} />)}
                 </>
               );
             })()}

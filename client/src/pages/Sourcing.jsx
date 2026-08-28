@@ -104,6 +104,46 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // reason; it's noise wearing a signal's clothes.
 const JUNK_SIGNAL = /^(actively building|founder|building|startup|entrepreneur)$/i;
 
+// ── Where a row came from, in words ──
+// The `source` column holds the connector key. Rendering it raw put
+// "il_school_discovery" and "a16z_speedrun" in a 96px column, which is a database
+// identifier leaking into a reading surface. This is a display map only — one
+// entry per real connector, and an unknown key degrades to the key with its
+// underscores opened up rather than to a guess.
+const SOURCE_LABEL = {
+  exa: 'Web sweep',
+  yc_directory: 'YC',
+  a16z_speedrun: 'a16z Speedrun',
+  thiel_fellows: 'Thiel',
+  z_fellows: 'Z Fellows',
+  neo_scholars: 'Neo',
+  the_residency: 'The Residency',
+  emergent_ventures: 'Emergent',
+  pre_program: 'Applied to YC',
+  il_school_discovery: 'IL schools',
+  github: 'GitHub',
+  uspto_trademark: 'Trademark filing',
+  sec_filings: 'SEC Form D',
+};
+function sourceLabel(k) {
+  if (!k) return '—';
+  return SOURCE_LABEL[k] || String(k).replace(/_/g, ' ');
+}
+
+// ── When it arrived ──
+// Relative for the last week (that's the window he acts in), then an absolute date
+// — "14d ago" stops being a date you can reason about somewhere around a fortnight.
+function addedLabel(iso) {
+  if (!iso) return '—';
+  const t = new Date(String(iso).replace(' ', 'T') + (String(iso).endsWith('Z') ? '' : 'Z'));
+  if (Number.isNaN(t.getTime())) return '—';
+  const days = Math.floor((Date.now() - t.getTime()) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  return t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 // A tag is the scannable half: short, no embedded evidence quote.
 const isTag = (s) => s && s.length <= 46 && !/:\s*['"]/.test(s);
 
@@ -214,6 +254,15 @@ export default function Sourcing() {
   // Defaulting to must-meet IS the repeat-use trust feature: every time he opens
   // Sourcing, the engine has already done the culling and shown its reasoning.
   const [tierView, setTierView] = useState('must-meet');
+  // Best or newest. Danny: "I want to log in in the morning and see new folks!"
+  // Quality stays the default — it's what the screen is for the other 23 hours of
+  // the day — but the arrival date is only useful if one click can bring today's
+  // names to the top, so Newest is a toggle rather than a buried sort menu.
+  const [sort, setSort] = useState('best');
+  // How many rows the server has been asked for. The inbox used to return EVERY
+  // pending row (2,232 in production, ~51 MB of scrape blobs read to score them),
+  // which is what "it's very laggy" was. Now it's a page, and this grows on demand.
+  const [pageSize, setPageSize] = useState(200);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(null);
   const [cursor, setCursor] = useState(0);
@@ -227,15 +276,24 @@ export default function Sourcing() {
   // reading surface into a guessing one.
   const [openId, setOpenId] = useState(null);
 
+  // Changing the view is a different question, not a longer answer — go back to
+  // one page rather than re-requesting however many the last view had grown to.
+  useEffect(() => { setPageSize(200); setCursor(0); }, [scope, tierView, sort]);
+
   useEffect(() => {
     let dead = false;
     setData(null);
     api
-      .getPipelineInbox({ scope, tier: tierView === 'all' ? undefined : tierView })
+      .getPipelineInbox({
+        scope,
+        ...(tierView === 'all' ? {} : { tier: tierView }),
+        sort,
+        limit: pageSize,
+      })
       .then((d) => !dead && setData(d))
       .catch((e) => !dead && setErr(e.message));
     return () => { dead = true; };
-  }, [scope, tierView]);
+  }, [scope, tierView, sort, pageSize]);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -325,19 +383,19 @@ export default function Sourcing() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
-        <span className="text-small font-semibold text-ink">Sourcing</span>
+        <span className="text-small font-semibold text-ink">Source</span>
         <span className="text-mini text-ink-4">
           {scope === 'pipeline' ? 'verified Illinois tie' : 'no Illinois tie — national frontier'}
         </span>
-        <div className="flex-1" />
         <ScoutState data={data} running={running} onRun={runScout} />
+        <div className="flex-1 min-w-0" />
         <input
-          className="input w-48 border-0 bg-transparent focus:ring-0 px-0"
+          className="input w-40 flex-none border-0 bg-transparent focus:ring-0 px-0"
           placeholder="Filter…"
           value={q}
           onChange={(e) => { setQ(e.target.value); setCursor(0); }}
         />
-        <div className="flex items-center gap-px">
+        <div className="flex items-center gap-px flex-none">
           {[
             { k: 'pipeline', label: 'Illinois', n: data?.total },
             { k: 'watchlist', label: 'Frontier Watch', n: data?.watchlist },
@@ -371,8 +429,53 @@ export default function Sourcing() {
               {t.n != null && <span className="num text-ink-4 ml-1">{t.n}</span>}
             </button>
           ))}
+          <div className="w-px h-3.5 bg-line-2 mx-1" />
+          {/* Two orderings, both honest about what they are. "Best" is the founder
+              rubric; "Newest" is arrival order. Neither is a filter — the same rows
+              are present either way, which is the whole point of one inbox. */}
+          {[
+            { k: 'best', label: 'Best', title: 'Ranked by the founder-quality check: must-meet first, then earliest-stage, then signal strength.' },
+            { k: 'newest', label: 'Newest', title: 'Most recently found first — what the scout brought in overnight.' },
+          ].map((o) => (
+            <button
+              key={o.k}
+              onClick={() => setSort(o.k)}
+              title={o.title}
+              className={`px-2 h-6 rounded text-mini font-medium transition ${
+                sort === o.k ? 'bg-ground-4 text-ink' : 'text-ink-3 hover:text-ink hover:bg-ground-3'
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════════
+          THE NIGHTLY RUN IS OFF, AND WHY.
+
+          The scout arms only if the owner's Exa + Anthropic keys resolve and
+          PIPELINE_ENABLED isn't 'false'. Both live outside the repo — in Settings
+          and in Railway's dashboard — so no deploy can fix or even test them. If
+          either is wrong the scout silently never runs and this screen just looks
+          quiet, which is precisely the failure that went unnoticed for months.
+
+          It gets a full-width row, not a slot in the toolbar: the first version of
+          this rendered inline between the Run button and the filter box and
+          truncated to "Nightly sco…", which is a warning you cannot read and
+          therefore is not a warning. ══════════════════════════════════════════ */}
+      {data?.scout_blocked && (
+        <div className="flex items-center gap-2 px-3 h-row border-b attn-open text-small flex-shrink-0">
+          <span className="text-attention flex-none">▲</span>
+          <span className="text-ink">
+            The nightly scout is off — <span className="text-ink-2">{data.scout_blocked.reason}</span>
+          </span>
+          <div className="flex-1" />
+          <button className="text-accent font-medium text-mini" onClick={() => nav('/settings')}>
+            Open Settings →
+          </button>
+        </div>
+      )}
 
       {justTracked && (
         <div className="flex items-center gap-2 px-3 h-row border-b border-line bg-accent-soft text-small flex-shrink-0">
@@ -390,8 +493,9 @@ export default function Sourcing() {
       <div className="flex items-center h-6 px-3 border-b border-line-2 bg-ground-3 text-micro font-semibold uppercase text-ink-4 flex-shrink-0">
         <span className="flex-[2] min-w-0">Person</span>
         <span className="flex-[3] min-w-0">Why they're here</span>
-        <span className="w-40">Illinois tie</span>
-        <span className="w-24">Found via</span>
+        <span className="w-36">Illinois tie</span>
+        <span className="w-28">Found via</span>
+        <span className="w-16">Added</span>
         <span className="w-36 text-right pr-1">Triage</span>
       </div>
 
@@ -401,8 +505,9 @@ export default function Sourcing() {
             <div key={i} className="row px-3">
               <span className="flex-[2]"><span className="block h-2 w-28 bg-ground-3 rounded-sm" /></span>
               <span className="flex-[3]"><span className="block h-2 w-56 bg-ground-3 rounded-sm" /></span>
-              <span className="w-40"><span className="block h-2 w-20 bg-ground-3 rounded-sm" /></span>
-              <span className="w-24"><span className="block h-2 w-14 bg-ground-3 rounded-sm" /></span>
+              <span className="w-36"><span className="block h-2 w-20 bg-ground-3 rounded-sm" /></span>
+              <span className="w-28"><span className="block h-2 w-14 bg-ground-3 rounded-sm" /></span>
+              <span className="w-16"><span className="block h-2 w-8 bg-ground-3 rounded-sm" /></span>
               <span className="w-36" />
             </div>
           ))
@@ -466,7 +571,7 @@ export default function Sourcing() {
               {/* Geography is the moat, so the tie is a column and its evidence is on
                   hover. 55 of 85 rows here once carried a fabricated Chicago tie, and
                   it survived four months because nobody could see it. */}
-              <span className="w-40 min-w-0 text-mini truncate" title={r.chicago_connection || 'no verified Illinois tie'}>
+              <span className="w-36 min-w-0 text-mini truncate" title={r.chicago_connection || 'no verified Illinois tie'}>
                 {r.location_type === 'cofounder' ? (
                   <span className="text-ink-3">via co-founder</span>
                 ) : r.location_type ? (
@@ -482,7 +587,19 @@ export default function Sourcing() {
                 )}
               </span>
 
-              <span className="w-24 text-ink-3 text-mini truncate">{r.source}</span>
+              {/* The raw connector key ("il_school_discovery", "a16z_speedrun") is a
+                  column name, not a sentence. Same fact, readable at a glance —
+                  the raw key stays on hover so nothing is hidden. */}
+              <span className="w-28 text-ink-3 text-mini truncate" title={r.source}>{sourceLabel(r.source)}</span>
+
+              {/* When it arrived. Danny asked for the date rather than a per-session
+                  "new" state — a date is a fact about the row that reads the same
+                  however long he's been away, and it can't get out of sync with
+                  anything. Today's arrivals are inked, the rest recede. */}
+              <span className={`w-16 text-mini tabular-nums ${r.is_new ? 'text-accent font-medium' : 'text-ink-4'}`}
+                    title={`Found ${new Date(r.created_at).toLocaleString()}`}>
+                {addedLabel(r.created_at)}
+              </span>
 
               <span className="w-36 flex items-center justify-end gap-1">
                 {/* LinkedIn is always visible, never hover-gated. Danny: "jump off
@@ -536,7 +653,21 @@ export default function Sourcing() {
         <span><kbd className="text-ink-3">t</kbd> add</span>
         <span><kbd className="text-ink-3">x</kbd> pass</span>
         <div className="flex-1" />
-        <span>{rows.length} waiting</span>
+        {/* Was `{rows.length} waiting`, which after pagination would quietly mean
+            "waiting on this page". Say what's shown AND what matched, so a page
+            boundary never reads as an empty queue. */}
+        {data && data.total > rows.length && (
+          <button
+            onClick={() => setPageSize((n) => n + 200)}
+            className="text-accent hover:text-accent-hover font-medium"
+          >
+            Show more
+          </button>
+        )}
+        <span>
+          {rows.length}
+          {data && data.total > rows.length ? ` of ${data.total}` : ''} waiting
+        </span>
       </div>
     </div>
   );
@@ -714,8 +845,11 @@ function ScoutState({ data, running, onRun }) {
     : null;
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-mini text-ink-4 truncate max-w-[380px]" title={last?.detail || ''}>
+    <div className="flex items-center gap-2 min-w-0">
+      <button onClick={onRun} disabled={running} className="btn-secondary h-6 text-mini flex-none whitespace-nowrap">
+        {running ? 'Sweeping…' : 'Run scout'}
+      </button>
+      <span className="text-mini text-ink-4 truncate min-w-0" title={last?.detail || ''}>
         {running ? (
           <span className="text-ink-2">Sweeping — this takes a few minutes…</span>
         ) : !last ? (
@@ -727,14 +861,17 @@ function ScoutState({ data, running, onRun }) {
             <span className={last.status === 'error' ? 'text-ink-2' : 'text-ink-4'}>
               Scout ran {when}
             </span>
-            {data.arrived_today > 0 && <span className="text-ink-2"> · {data.arrived_today} arrived today</span>}
+            {/* The number that answers "is it worth opening this morning". It counts
+                arrivals since the last scout run — not since midnight — so a run
+                that finishes at 4:30am still reads as one night's work. */}
+            {data.new_count > 0 && (
+              <span className="text-ink-2"> · <span className="text-accent font-medium">{data.new_count} new</span> since the last run</span>
+            )}
+            {data.new_count === 0 && last.status !== 'error' && <span className="text-ink-4"> · nobody new</span>}
             {last.status === 'error' && <span className="text-ink-2"> · failed</span>}
           </>
         )}
       </span>
-      <button onClick={onRun} disabled={running} className="btn-secondary h-6 text-mini">
-        {running ? 'Sweeping…' : 'Run scout'}
-      </button>
     </div>
   );
 }
