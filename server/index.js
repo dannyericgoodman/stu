@@ -108,9 +108,18 @@ try {
 // First boot after the columns land does real work: ~0.5 ms per row (2,232 rows ≈
 // 1.2 s), once. Every boot after that is free.
 // ══════════════════════════════════════════════════════════════════════════
+// A THIRD reason this now does work: the RUBRIC itself moved. rescoreStale keys on
+// lib/founderFit RUBRIC_VERSION as well as on row freshness, so shipping a change to
+// the markers, weights or gates brings the whole inbox current AT DEPLOY rather than
+// at the next 4:30am scout. Without that, a release that removed a bad founder from
+// Must-meet would have kept showing him for a day on the one screen whose entire job
+// is to be right the moment it is opened.
 try {
-  const r = require('./lib/fitIndex').rescoreStale({ userId: 1 });
-  if (r.scored) console.log(`[Boot] Scored ${r.scored} founder(s) whose fit verdict was missing or stale.`);
+  const r = require('./lib/fitIndex').rescoreStale({ userId: 1, limit: 20000 });
+  if (r.scored) {
+    const v = require('./lib/founderFit').RUBRIC_VERSION;
+    console.log(`[Boot] Scored ${r.scored} founder(s) whose fit verdict was missing, stale, or behind rubric ${v}.`);
+  }
 } catch (e) {
   console.error('[Boot] Fit scoring failed (server continues, inbox falls back to live scoring):', e.message);
 }

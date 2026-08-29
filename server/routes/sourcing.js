@@ -285,6 +285,16 @@ router.post('/run', async (req, res) => {
       .then(async ([exa, connectors]) => {
         try {
           const e = await require('../pipeline/linkedin-enrich').runLinkedInEnrichment({ userId: uid, limit: 40 });
+          // Score what just landed. The nightly scout has always done this (Arm 4)
+          // and the manual Run did not, so clicking Run produced new founders with
+          // NO verdict — they arrived unranked and sat below everything, which looks
+          // exactly like the run having found nothing.
+          try {
+            const f = require('../lib/fitIndex').rescoreStale({ userId: uid });
+            console.log(`[Sourcing] Manual run scored ${f.scored} founder(s).`);
+          } catch (e) {
+            console.error('[Sourcing] Manual run scoring failed:', e.message);
+          }
           console.log('[Run][LinkedIn]', JSON.stringify(e));
         } catch (e) { console.error('[Run][LinkedIn]', e.message); }
 
