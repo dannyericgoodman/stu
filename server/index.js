@@ -982,7 +982,10 @@ app.listen(PORT, () => {
     // Daily talent sourcing — source EACH open role against its own function + JD, so
     // marketing/product/CS roles get fresh candidates automatically (not just engineering).
     const { runTalentEngine } = require('./pipeline/talent-engine');
-    cron.schedule('30 12 * * *', async () => {
+    // 6:30 AM CT, declared. This read `30 12 * * *` with no timezone while claiming
+    // "6:30 AM CT" below: 12:30 UTC is 7:30 AM CDT, not 6:30 CT, and it moved with
+    // daylight saving because nothing pinned it.
+    cron.schedule('30 6 * * *', async () => {
       const dbi = require('./db');
       const roles = dbi.prepare("SELECT id, user_id, title FROM talent_roles WHERE is_deleted = 0 AND status = 'open' ORDER BY user_id, updated_at DESC LIMIT 25").all();
       console.log(`[Cron] Daily talent sourcing across ${roles.length} open role(s)`);
@@ -1011,13 +1014,26 @@ app.listen(PORT, () => {
         'talent_sourcing', failed ? 'partial' : 'ok',
         `${roles.length} role(s), +${added} candidates${failed ? `, ${failed} failed` : ''}`, 1
       );
-    });
+    }, { timezone: 'America/Chicago' });
     console.log('Daily talent sourcing engine scheduled (6:30 AM CT, per open role)');
 
-    // R2: Daily SEC Form D IL filings pull — 11 AM UTC (pre-sourcing run so any
-    // new filings are available for matching when sourcing runs at 12 UTC).
+    // ── Daily SEC Form D IL filings pull — 3:45 AM CT, ahead of the scout ──
+    //
+    // TWO BUGS FIXED HERE.
+    //
+    // 1. No timezone. Every other job on this file declares America/Chicago; this one
+    //    did not, so it ran at 11:00 in the CONTAINER'S zone (UTC on Railway) and the
+    //    line below announced "5:00 AM CT". 11:00 UTC is 6:00 AM CDT in summer and
+    //    5:00 AM CST in winter — so the log was right for about four months a year
+    //    and the job silently walked an hour twice a year.
+    //
+    // 2. The ordering it was written for no longer existed. The comment said "pre-
+    //    sourcing run ... when sourcing runs at 12 UTC", but the scout moved to
+    //    4:30 AM CT (09:30 UTC in summer). Filings were landing roughly two hours
+    //    AFTER the run they exist to feed, so a fresh Form D waited a full day to be
+    //    matched. 3:45 AM CT puts it back in front of the 4:30 scout.
     const { runFilingsSource } = require('./pipeline/filings-source');
-    cron.schedule('0 11 * * *', async () => {
+    cron.schedule('45 3 * * *', async () => {
       console.log('[Cron] Starting SEC Form D filings pull...');
       try {
         const result = await runFilingsSource({ userId: 1, days: 30 });
@@ -1026,7 +1042,7 @@ app.listen(PORT, () => {
       } catch (err) {
         console.error('[Cron] Filings pull failed:', err.message);
       }
-    });
-    console.log('Daily SEC filings pull scheduled (5:00 AM CT)');
+    }, { timezone: 'America/Chicago' });
+    console.log('Daily SEC filings pull scheduled (3:45 AM CT — ahead of the 4:30 scout)');
   }
 });
