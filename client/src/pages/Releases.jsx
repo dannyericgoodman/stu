@@ -6,6 +6,56 @@
 
 const RELEASES = [
   {
+    version: 'v5.1.0',
+    date: 'August 29, 2026',
+    time: '4:00 AM CT',
+    title: 'One ranking, a morning shortlist, and a memo you can edit',
+    highlights: [
+      {
+        product: 'Source',
+        change:
+          'Stu was running TWO founder scorers. The quiet one (breakoutScore) scored a regex over a blob of text and rewarded three things the outcome data contradicts: a technical title (about half of unicorn founding CEOs are non-technical), the phrase "dropped out" (the median founder is 34 with ~11 years of experience), and elite schools scored as quality. It sat in the API payload right next to the real verdict. It is gone. founderFit is the only ranking, and it reads structured LinkedIn employment history rather than guessing from prose.',
+        benefit: 'One answer to "how good is this founder," not two that disagree.',
+      },
+      {
+        product: 'Source',
+        change:
+          'A chemistry professor was ranked MUST-MEET. Ken Suslick — h-index 134, National Academy of Sciences, no operating history — cleared the top tier because his bio says he "was the lead consultant for Molecular Biosystems Inc.", which "was acquired". The exit marker fired on the phrase with no attribution. Exits are now attributed within the sentence, with an advisory/consulting veto, plus a gate for academics with no operating evidence (a professor who actually spun a company out still qualifies — deep tech is in scope). Across the live Illinois inbox this changed exactly one verdict in 226, and it was the professor.',
+        benefit: 'The top of the list is people who have built things, not people who were nearby when something was built.',
+      },
+      {
+        product: 'Source',
+        change:
+          'Weights checked against outcome data rather than instinct. YC now sits above Speedrun / Z Fellows / SPC — YC is the only one with published separation (~45% of its companies raise a Series A against a ~33% baseline); the others have no outcome data and equal weighting claimed a lift nobody has demonstrated. Elite school stays, relabelled: it does NOT predict the company (unicorn founders split roughly 36% top-10 school, 28% middle, 36% outside the top 100) but it does predict the next round. And "just left a role" now affects rank instead of only helping someone qualify.',
+        benefit: 'School and employer are shown as next-round signals, never as evidence the founder is good — so the shortlist cannot quietly become a pedigree filter.',
+      },
+      {
+        product: 'Home',
+        change:
+          'THIS MORNING — the ranked list, capped at ten, sitting above the agents. The full inbox is still on Source and still holds everything that cleared the gates; this is the short one you can actually finish. Every reason carries its kind: quality signals read normally, next-round signals are muted, and "reachable now" is called out because timing decays and nothing else on the row does. The 4:30am scout already fed this — it needed no new plumbing.',
+        benefit: 'Ten names and why, waiting before you are up.',
+      },
+      {
+        product: 'Assess',
+        change:
+          'Download memo (.docx) on any completed assessment. It assembles the run into the house memo shape — Decision Header, the seven Ms, the room, conditions, sources — and calls no model, because the run is already written in your voice and re-generating would turn quote-verified prose into fresh unverified prose. Recommendation, entry terms and return shape ship as [DANNY: ...] blanks; Stu cannot know those and will not guess.',
+        benefit: 'A Word draft you edit, instead of a blank page.',
+      },
+      {
+        product: 'Assess',
+        change:
+          'Caught before it shipped: the memo told you every lens had failed quote verification. quote_integrity is a counts object, not a status string, so comparing it to "clean" stringified it to "[object Object]" and never matched. On the Gil assessment the truth was 39 of 45 quotes verbatim and zero unverified. A false alarm about citations, printed inside the citations section.',
+        benefit: 'The sourcing section tells the truth about the sourcing.',
+      },
+      {
+        product: 'Everything',
+        change:
+          'Editing the rubric used to invalidate nothing. Stored verdicts refreshed only when the ROW changed, so a weight change would have left every already-scored founder on the old logic indefinitely while the code claimed otherwise. The rubric now carries a version and the nightly scout re-scores anything behind it. Also: the test suite is 573 of 573 green — the one long-standing failure was a fixture whose 2025 join dates had aged out of a trailing 12-month window, so it failed on the calendar rather than on a code change.',
+        benefit: 'A rubric change reaches the whole inbox by morning, on its own.',
+      },
+    ],
+  },
+  {
     version: 'v5.0.0',
     date: 'July 16, 2026',
     time: '3:30 AM CT',

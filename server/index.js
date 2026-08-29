@@ -488,7 +488,7 @@ app.use('/api/outreach', expensiveLimiter);
 
 // Public routes
 app.get('/api/health', (req, res) => res.json({
-  status: 'ok', app: 'Stu', version: '4.9.2',
+  status: 'ok', app: 'Stu', version: '5.1.0',
   pipeline: {
     // Armed = the daily sourcing/talent/filings crons will actually run tonight.
     // ── ONE definition of "armed", shared with the scheduler ──
