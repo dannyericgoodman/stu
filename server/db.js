@@ -243,7 +243,43 @@ db.exec(`
 // Now: "duplicate column name" is the ONLY tolerated error. Everything else is
 // re-thrown, which converts 102 silent failure modes into one loud one.
 // ══════════════════════════════════════════════════════════════════════════
-function addColumn(table, col, type) {
+// ══════════════════════════════════════════════════════════════════════════
+// DEFERRED COLUMNS — the fresh-database bug.
+//
+// This file interleaves ALTER TABLE (addColumn) with CREATE TABLE, and two of the
+// ALTERs sit ABOVE the CREATE for their own table: company_sources.signals_extracted_at
+// at ~line 405 against a table created at ~641, and decisions.saw_score_first at ~612
+// against ~944. On any database that already has those tables the order is invisible.
+// On an EMPTY one the ALTER runs first, "no such table" is not a duplicate-column
+// error, and the hardening above correctly refuses to boot.
+//
+// That is exactly what happened the first time Stu was deployed to a brand-new host:
+// every previous deploy inherited a volume that already had the schema, so a bug that
+// had been latent for months surfaced the one time it mattered.
+//
+// Fix: a missing TABLE is not an error here, it is an ordering fact. Queue it and
+// replay after every CREATE TABLE has run (flushDeferredColumns, end of this file).
+// A column that is still unplaceable at that point is a real schema bug and throws
+// there, so nothing is quietly skipped — the loud-failure property is preserved,
+// just moved to the moment where the answer is actually knowable.
+// ══════════════════════════════════════════════════════════════════════════
+const DEFERRED_COLUMNS = [];
+// Indexes have the same ordering hazard as columns — an index cannot attach to a
+// table that does not exist yet, and CREATE INDEX IF NOT EXISTS does NOT forgive a
+// missing table (the IF NOT EXISTS guards the index name, not the table).
+const DEFERRED_INDEXES = [];
+// One-time data backfills that read tables created later in this file.
+const DEFERRED_BACKFILLS = [];
+
+function tableExists(table) {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+}
+
+function addColumn(table, col, type, { deferred = false } = {}) {
+  if (!deferred && !tableExists(table)) {
+    DEFERRED_COLUMNS.push({ table, col, type });
+    return;
+  }
   try {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
   } catch (e) {
@@ -253,6 +289,22 @@ function addColumn(table, col, type) {
     // to boot is recoverable; booting with a missing column is not.
     throw new Error(`Migration failed — ${table}.${col} (${type}): ${e.message}`);
   }
+}
+
+// Replay anything queued above. Called once, after the last CREATE TABLE.
+function flushDeferredColumns() {
+  for (const { table, col, type } of DEFERRED_COLUMNS) {
+    if (!tableExists(table)) {
+      throw new Error(`Migration failed — ${table}.${col} (${type}): table does not exist even after all CREATE TABLE statements ran`);
+    }
+    addColumn(table, col, type, { deferred: true });
+  }
+  DEFERRED_COLUMNS.length = 0;
+  for (const sql of DEFERRED_INDEXES) db.exec(sql);
+  DEFERRED_INDEXES.length = 0;
+  // Backfills last: they depend on both the columns and the tables above.
+  for (const sql of DEFERRED_BACKFILLS) db.exec(sql);
+  DEFERRED_BACKFILLS.length = 0;
 }
 
 // Track flags
@@ -347,7 +399,7 @@ addColumn('founders', 'airtable_synced_at', 'DATETIME');
 // EVERY card: mirrored from Airtable where a record exists, derived from the old
 // deal_status where one doesn't.
 addColumn('founders', 'stage_status', 'TEXT');
-db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_stage_status ON founders(stage_status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_stage_status ON founders(stage_status);`);
 
 // ── ONCE DANNY TOUCHES A BADGE, STU OWNS IT ──
 // Danny: "I'm comfortable with you publishing stage updates to Airtable. But
@@ -389,7 +441,7 @@ addColumn('founders', 'tracks_set_by_user_at', 'DATETIME');
 // "Not Yet" are form placeholders, not companies. Three unrelated founders share
 // "Not Yet". Grouping by name alone would merge strangers.
 addColumn('founders', 'represented_by_founder_id', 'INTEGER REFERENCES founders(id)');
-db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_represented_by ON founders(represented_by_founder_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_represented_by ON founders(represented_by_founder_id);`);
 
 // ── "HAS THIS SOURCE BEEN READ?" IS NOT "DID IT PRODUCE SIGNALS?" ──
 // The extraction queue is "sources nothing has read yet". Defining that as "sources
@@ -403,7 +455,10 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_represented_by ON founders(repr
 // timestamp means read, including "read, and there was nothing in it". Clearing it
 // is how a deliberate re-read is requested.
 addColumn('company_sources', 'signals_extracted_at', 'DATETIME');
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sources_extracted ON company_sources(signals_extracted_at);`);
+// Deferred for the same reason as the column above: company_sources is created
+// further down this file, so on a fresh database this index has no table to attach
+// to yet. Queued and replayed by flushDeferredColumns().
+DEFERRED_INDEXES.push('CREATE INDEX IF NOT EXISTS idx_sources_extracted ON company_sources(signals_extracted_at);');
 
 // ── FOUNDER SLOPE — the pre-seed signal Danny cares most about ──
 // GitHub trajectory (star velocity, inflection, commit acceleration) — the
@@ -447,9 +502,9 @@ addColumn('sourced_founders', 'fit_scored_at', 'DATETIME');
 addColumn('sourced_founders', 'fit_rubric_version', 'TEXT');
 // The inbox's exact access path: one user's live queue, best first. Without this the
 // LIMIT would still make SQLite walk every pending row to sort it.
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_inbox
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_inbox
   ON sourced_founders(user_id, status, list_scope, fit_tier, fit_priority DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_fit_stale ON sourced_founders(user_id, fit_scored_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_fit_stale ON sourced_founders(user_id, fit_scored_at);`);
 
 // ── THE FALSIFIABLE LEARNING LOOP ──
 // The quant red-teamer's core point: "will attract tier-1 tomorrow" is unfalsifiable
@@ -504,7 +559,10 @@ db.exec(`
 // the gap for the 60 sources extracted before this column existed — without it the
 // first run after deploy would pay to read every one of them a second time.
 // Sources with no signals stay NULL and get read once, properly.
-db.exec(`
+// Deferred: this backfill reads company_sources and company_signals, both created
+// further down. On an existing database that is invisible; on a fresh one it is a
+// crash. Queued and replayed once the schema is complete.
+DEFERRED_BACKFILLS.push(`
   UPDATE company_sources SET signals_extracted_at = CURRENT_TIMESTAMP
   WHERE signals_extracted_at IS NULL
     AND EXISTS (SELECT 1 FROM company_signals g WHERE g.source_id = company_sources.id);
@@ -571,7 +629,7 @@ db.exec(`
     content_hash TEXT NOT NULL
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_company_snapshots_founder
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_company_snapshots_founder
          ON company_snapshots (founder_id, source, taken_at DESC)`);
 
 // ── The free half: what the public record says (lib/edgar.js, lib/hiring.js) ──
@@ -775,7 +833,7 @@ db.exec(`
     completed_at DATETIME
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_steward_op_assessment ON steward_operator_evaluations(assessment_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_steward_op_assessment ON steward_operator_evaluations(assessment_id);`);
 
 // ── Migrate old "resident" track → "admissions" track ──
 // Move resident_status → admissions_status where not already set
@@ -971,7 +1029,7 @@ db.exec(`
     ran_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_job_runs ON job_runs(job, ran_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_job_runs ON job_runs(job, ran_at DESC);`);
 
 // R2: entity filings source (new)
 db.exec(`
@@ -991,8 +1049,8 @@ db.exec(`
     UNIQUE(source, filing_id)
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_filings_filed_at ON entity_filings(filed_at DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_filings_state ON entity_filings(state);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_filings_filed_at ON entity_filings(filed_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_filings_state ON entity_filings(state);`);
 addColumn('users', 'onboarding_complete', 'INTEGER DEFAULT 0');
 addColumn('users', 'has_paid', 'INTEGER DEFAULT 0');
 addColumn('users', 'stripe_customer_id', 'TEXT');
@@ -1259,7 +1317,7 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tpc_user ON talent_portfolio_companies(user_id, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tpc_user ON talent_portfolio_companies(user_id, is_deleted);`);
 
 // Open roles (per portfolio company)
 db.exec(`
@@ -1293,8 +1351,8 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tr_user ON talent_roles(user_id, is_deleted);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tr_company ON talent_roles(portfolio_company_id, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tr_user ON talent_roles(user_id, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tr_company ON talent_roles(portfolio_company_id, is_deleted);`);
 
 // Sourced candidates (engineers / operators — NOT founders)
 db.exec(`
@@ -1340,9 +1398,9 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tcand_user ON talent_candidates(user_id, is_deleted, status);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tcand_score ON talent_candidates(user_id, overall_score DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tcand_linkedin ON talent_candidates(linkedin_url);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tcand_user ON talent_candidates(user_id, is_deleted, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tcand_score ON talent_candidates(user_id, overall_score DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tcand_linkedin ON talent_candidates(linkedin_url);`);
 
 // Candidate ↔ Role matches
 db.exec(`
@@ -1365,9 +1423,9 @@ db.exec(`
     UNIQUE(candidate_id, role_id)
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tm_user ON talent_matches(user_id, is_deleted, status);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tm_role ON talent_matches(role_id, match_score DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_tm_candidate ON talent_matches(candidate_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tm_user ON talent_matches(user_id, is_deleted, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tm_role ON talent_matches(role_id, match_score DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_tm_candidate ON talent_matches(candidate_id);`);
 
 // Role function/archetype — drives which caliber rubric and sourcing queries apply.
 // Defaults to 'engineering' so existing roles keep their current (eng-centric) behavior.
@@ -1395,11 +1453,11 @@ addColumn('sourced_founders', 'list_scope', "TEXT DEFAULT 'pipeline'");
 
 // Indices on the two largest / hottest tables (founders ~5k+ rows, sourced_founders grows
 // with every sweep). Without these, dedup + inbox + scoping queries are full scans.
-db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_user ON founders(created_by, is_deleted);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_linkedin ON founders(linkedin_url);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_user_status ON sourced_founders(user_id, status);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_linkedin ON sourced_founders(linkedin_url);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_user_scope ON sourced_founders(user_id, list_scope, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_user ON founders(created_by, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_linkedin ON founders(linkedin_url);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_user_status ON sourced_founders(user_id, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_linkedin ON sourced_founders(linkedin_url);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_user_scope ON sourced_founders(user_id, list_scope, status);`);
 
 // YC founder-resolution cache: which company pages we've already crawled for founders, so the
 // daily source cron never re-fetches a page it has already parsed.
@@ -1414,7 +1472,7 @@ addColumn('sourced_founders', 'linkedin_data', 'TEXT');
 // founder so any view can sort by "who looks most like a breakout / future top-program admit".
 addColumn('sourced_founders', 'breakout_score', 'INTEGER');
 addColumn('sourced_founders', 'breakout_signals', 'TEXT');
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_breakout ON sourced_founders(user_id, breakout_score);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_breakout ON sourced_founders(user_id, breakout_score);`);
 
 // ── Indexes added 2026-07-15 after measuring, not guessing ──
 // EXPLAIN QUERY PLAN showed 7 of PIPELINE_SQL's 9 correlated subqueries doing a
@@ -1425,18 +1483,18 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_breakout ON sourced_founders(user_id,
 // Honest note: 8ms is imperceptible and was never the lag Danny felt (that was
 // 600KB of uncompressed transport). This is here because it's free and because
 // the cost grows with the inbox, not because it fixes anything today.
-db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_promoted ON sourced_founders(promoted_to_founder_id, created_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_promoted ON sourced_founders(promoted_to_founder_id, created_at);`);
 
 // This one is a real fix. services/airtable-import.js looks up every incoming
 // record by airtable_founder_record_id, and without an index that's a full scan
 // of all 5,515 founders PER RECORD — the loop is O(records × founders) and blocks
 // the event loop because better-sqlite3 is synchronous.
-db.exec(`CREATE INDEX IF NOT EXISTS idx_founders_airtable_rec ON founders(airtable_founder_record_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_airtable_rec ON founders(airtable_founder_record_id);`);
 
 // Insurance against growth: both are free today (assessments 18 rows, decisions 0)
 // but every attention check and every pipeline row joins through them.
-db.exec(`CREATE INDEX IF NOT EXISTS idx_oa_founder ON opportunity_assessments(founder_id, is_deleted, assessment_type, status);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_decisions_founder ON decisions(founder_id, decided_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_oa_founder ON opportunity_assessments(founder_id, is_deleted, assessment_type, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_decisions_founder ON decisions(founder_id, decided_at DESC);`);
 
 // Meeting Prep reuses opportunity_assessments (same intake/ingestion: decks, transcripts,
 // URLs, notes, founder CRM context) with a type discriminator, rather than a parallel
@@ -1472,7 +1530,7 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_thesis_notes_user ON thesis_notes(created_by, created_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_thesis_notes_user ON thesis_notes(created_by, created_at);`);
 
 // ── Newsletter / Daily Brief ──
 // One row per extracted newsletter issue. Stu reads a Gmail label over IMAP, extracts
@@ -1500,7 +1558,7 @@ db.exec(`
   );
 `);
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_news_msg ON newsletter_items(user_id, message_id);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_news_brief ON newsletter_items(user_id, brief_date, relevance_score DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_news_brief ON newsletter_items(user_id, brief_date, relevance_score DESC);`);
 
 // Newsletter sources — a managed list so the user adds a newsletter once (RSS feed
 // or email sender) and it flows in forever, no manual Gmail labeling required.
@@ -1519,7 +1577,7 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_news_sources ON newsletter_sources(user_id, enabled, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_news_sources ON newsletter_sources(user_id, enabled, is_deleted);`);
 // Track which source an item came from
 addColumn('newsletter_items', 'source_id', 'INTEGER');
 
@@ -1546,7 +1604,7 @@ db.exec(`
   );
 `);
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_url ON brief_archive_posts(user_id, url);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_archive_rotation ON brief_archive_posts(user_id, archive_key, shown_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_archive_rotation ON brief_archive_posts(user_id, archive_key, shown_at);`);
 
 // The single source of truth for a day's digest. Built ONCE (the build advances the
 // archive rotation + marks classics shown), then both the in-platform Daily Brief tab and
@@ -1575,7 +1633,7 @@ db.exec(`
     sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_brief_log ON daily_brief_log(user_id, brief_date);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_brief_log ON daily_brief_log(user_id, brief_date);`);
 
 // Talent criteria (sourcing config — global or per-portfolio-co)
 db.exec(`
@@ -1725,8 +1783,8 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hr_user ON hiring_roles(user_id, is_deleted, status);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hr_founder ON hiring_roles(founder_id, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hr_user ON hiring_roles(user_id, is_deleted, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hr_founder ON hiring_roles(founder_id, is_deleted);`);
 
 // The candidate pool — warm and cold in one table, tier + provenance on every row.
 db.exec(`
@@ -1768,10 +1826,10 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_user ON hiring_candidates(user_id, is_deleted, tier);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_linkedin ON hiring_candidates(user_id, linkedin_url);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_github ON hiring_candidates(user_id, github_url);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hc_external ON hiring_candidates(user_id, external_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hc_user ON hiring_candidates(user_id, is_deleted, tier);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hc_linkedin ON hiring_candidates(user_id, linkedin_url);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hc_github ON hiring_candidates(user_id, github_url);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hc_external ON hiring_candidates(user_id, external_id);`);
 
 // The shortlist: candidate ↔ role, with the grounded rationale and the handoff status.
 db.exec(`
@@ -1797,9 +1855,9 @@ db.exec(`
     UNIQUE(role_id, candidate_id)
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_role ON hiring_matches(role_id, is_deleted, rank_score DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_candidate ON hiring_matches(candidate_id);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hm_user ON hiring_matches(user_id, is_deleted, status);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hm_role ON hiring_matches(role_id, is_deleted, rank_score DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hm_candidate ON hiring_matches(candidate_id);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hm_user ON hiring_matches(user_id, is_deleted, status);`);
 
 // Run log — one row per match/discovery run, role-scoped. Counts are reported, never
 // silent: "12 warm + 40 cold considered → 6 shortlisted" is how Danny trusts a run.
@@ -1817,7 +1875,7 @@ db.exec(`
     run_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_hrun_role ON hiring_runs(role_id, run_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_hrun_role ON hiring_runs(role_id, run_at DESC);`);
 // Sourcing runs in the background (Exa + GitHub take 20-40s); the client polls this
 // row's status. 'running' → 'done' | 'error'. `found` is a live tally so the UI can
 // say "found 6 so far" while it works.
@@ -1844,7 +1902,7 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_user_day ON usage_events(user_id, created_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_usage_user_day ON usage_events(user_id, created_at);`);
 
 // MCP access tokens — long-lived but revocable, separate from the 7-day web JWT.
 // We store only the hash; the plaintext token is shown once at creation.
@@ -1860,7 +1918,7 @@ db.exec(`
     revoked_at DATETIME
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id, revoked_at);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_mcp_tokens_user ON mcp_tokens(user_id, revoked_at);`);
 
 // Signal monitors (universe → snapshot → diff → classify → alert). Each row is one
 // monitor a user has configured (e.g. "YC founders who just left"). Runs on the
@@ -1880,7 +1938,7 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors(user_id, enabled, is_deleted);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors(user_id, enabled, is_deleted);`);
 
 // One detected transition (a hit) for a monitor.
 db.exec(`
@@ -1899,8 +1957,12 @@ db.exec(`
     dismissed INTEGER DEFAULT 0
   );
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_monitor_hits ON monitor_hits(monitor_id, detected_at DESC);`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_monitor_hits_user ON monitor_hits(user_id, dismissed, detected_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitor_hits ON monitor_hits(monitor_id, detected_at DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitor_hits_user ON monitor_hits(user_id, dismissed, detected_at DESC);`);
+
+// Every table now exists. Replay the ALTERs that were queued because their table
+// had not been created yet when they were reached. See addColumn above.
+flushDeferredColumns();
 
 // ── One-time: encrypt any plaintext provider keys already in user_settings ──
 // Only runs once a SETTINGS_ENC_KEY is configured. Idempotent: encrypt() skips
