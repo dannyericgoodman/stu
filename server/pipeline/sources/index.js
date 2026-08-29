@@ -13,7 +13,6 @@
  */
 const db = require('../../db');
 const { userGeoCriteria, geoPartition, hasPreference } = require('../../lib/geoFilter');
-const { breakoutScore } = require('../../lib/breakoutScore');
 const { loadUserApiKeys, assertWithinBudget } = require('../../lib/providerKeys');
 
 const REGISTRY = {};
@@ -155,12 +154,18 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
           // location_type is what the Pipeline/queue display filter reads (VALID_TIE_TYPES);
           // write the verified IL tie type so IL-tied cohort/YC founders actually surface.
           const tieType = (p.tie && p.tie.type && p.tie.type !== 'broad') ? p.tie.type : null;
-          // Breakout pedigree score from everything we know about the person (bio/headline/company).
-          const bk = breakoutScore([p.headline, p.bio, p.evidence, p._evidence, p.company, p.summary].filter(Boolean).join(' '));
+          // NO SECOND SCORER HERE. This used to compute a `breakoutScore` — a regex over
+          // a text blob that rewarded a technical title, the word "dropped out", and an
+          // elite school, then sat in the API payload next to fit_tier as a competing
+          // opinion. Every one of those three is contradicted by outcome data (about
+          // half of unicorn founding CEOs are non-technical; the median founder is 34,
+          // not a dropout; school splits ~36/28/36 across top-10 / middle / outside
+          // top-100). lib/founderFit is the one ranking, and lib/fitIndex writes it
+          // right after this — with structured LinkedIn employment instead of a blob.
           insert.run(userId, p.name || p.company || 'Unknown', p.company || null, p.role || null, p.headline || null,
             p.linkedin_url || null, p.website_url || null, c.key, JSON.stringify([c.emits]),
             p.unicorn_score ?? null, enr, p.why || null, p.chicago_connection || null, tieType, scope,
-            bk.score, JSON.stringify(bk.signals));
+            null, null);
           n++;
         } catch { /* skip dupes/bad rows */ }
       }

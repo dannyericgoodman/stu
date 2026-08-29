@@ -413,6 +413,68 @@ function buildDefensibility(a) {
 }
 
 // ── GET /api/assessments/:id/inputs — all inputs for an assessment ──
+// ══════════════════════════════════════════════════════════════════════════
+// GET /api/assessments/:id/memo.docx — the editable memo.
+//
+// Danny: "As long as the Assess feature is genuinely strong I can get up the field
+// on memo writing. Perhaps there could be a download function from Assess that
+// produces as close to memo as possible (fully cited, accurate, written in my
+// voice, produced as a docx file so I can edit it)."
+//
+// "In my voice" is satisfied by NOT touching the prose. The run already writes in
+// his voice; lib/memoDocx assembles that text into the house memo shape and calls
+// no model. Re-generating here would turn verified, quote-checked prose into fresh
+// unverified prose — the one thing that would make this export worse than useless.
+// ══════════════════════════════════════════════════════════════════════════
+router.get('/:id/memo.docx', async (req, res) => {
+  const a = db.prepare(`
+    SELECT a.*,
+      f.name as founder_name, f.company as founder_company, f.role as founder_role,
+      f.website_url, f.location_city, f.location_state, f.stage, f.company_one_liner,
+      f.round_size, f.valuation, f.security_type, f.arr
+    FROM opportunity_assessments a
+    LEFT JOIN founders f ON a.founder_id = f.id
+    WHERE a.id = ? AND a.is_deleted = 0 AND a.created_by = ?
+  `).get(req.params.id, req.user.id);
+  if (!a) return res.status(404).json({ error: 'Assessment not found' });
+
+  // An unfinished run has nothing to assemble. Say that, rather than shipping a
+  // handsome document with empty sections.
+  if (!['complete', 'partial'].includes(a.status)) {
+    return res.status(409).json({ error: `This assessment is ${a.status}. Run it to completion before exporting a memo.` });
+  }
+
+  const memo7m = buildMemo7M(a);
+  if (!memo7m.length) {
+    return res.status(409).json({ error: 'This assessment produced no memo sections — there is nothing to export yet.' });
+  }
+
+  const sources = db.prepare(
+    'SELECT input_type, label, source_url, file_name FROM assessment_inputs WHERE assessment_id = ? ORDER BY id'
+  ).all(a.id);
+
+  try {
+    const { memoDocxBuffer } = require('../lib/memoDocx');
+    const buf = await memoDocxBuffer(a, {
+      memo7m,
+      defensibility: buildDefensibility(a),
+      sources,
+    });
+    const safe = String(a.founder_company || 'Company').replace(/[^\w .-]+/g, '').trim() || 'Company';
+    const name = `${safe} — Investment Memo (draft ${new Date().toISOString().slice(0, 10)}).docx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    // filename* (RFC 5987) carries the em dash and any non-ASCII in the company name;
+    // the plain filename= stays ASCII for older clients.
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${safe} Investment Memo.docx"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.setHeader('Content-Length', buf.length);
+    return res.send(buf);
+  } catch (e) {
+    console.error('[memo.docx] failed:', e);
+    return res.status(500).json({ error: `Could not build the memo: ${e.message}` });
+  }
+});
+
 router.get('/:id/inputs', (req, res) => {
   // Verify assessment ownership before returning inputs
   const assessment = db.prepare('SELECT id FROM opportunity_assessments WHERE id = ? AND is_deleted = 0 AND created_by = ?').get(req.params.id, req.user.id);

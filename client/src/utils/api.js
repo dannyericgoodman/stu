@@ -442,6 +442,34 @@ export const api = {
   // dispatch goes through each product's own existing route so there is one code path
   // per agent, not a home-screen copy of three workflows.
   getAgents: (opts) => cachedGet('/today/agents', opts),
+  // The morning ranked list. Capped and evaluated at read time — see routes/pipeline.js.
+  getShortlist: (opts) => cachedGet('/pipeline/shortlist', opts),
+
+  // The memo download. A plain <a href> cannot carry the Bearer token, so this
+  // fetches the bytes, hands the browser a blob URL, and revokes it — otherwise the
+  // request 401s and the button looks broken for a reason nobody can see.
+  downloadMemoDocx: async (assessmentId) => {
+    const r = await fetch(`${API_BASE}/assessments/${assessmentId}/memo.docx`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!r.ok) {
+      let msg = `Export failed (${r.status})`;
+      try { const b = await r.json(); if (b.error) msg = b.error; } catch { /* not JSON */ }
+      throw new Error(msg);
+    }
+    // Prefer the filename the server chose (RFC 5987), so the em dash survives.
+    const cd = r.headers.get('Content-Disposition') || '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    const plain = /filename="([^"]+)"/i.exec(cd);
+    const filename = star ? decodeURIComponent(star[1]) : (plain ? plain[1] : 'Investment Memo.docx');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('a');
+    el.href = url; el.download = filename;
+    document.body.appendChild(el); el.click(); el.remove();
+    URL.revokeObjectURL(url);
+    return filename;
+  },
   addTodayItem: (body) => after(request('/today/items', { method: 'POST', body: JSON.stringify(body) }), '/today'),
   updateTodayItem: (id, body) => after(request(`/today/items/${id}`, { method: 'PATCH', body: JSON.stringify(body) }), '/today'),
   deleteTodayItem: (id) => after(request(`/today/items/${id}`, { method: 'DELETE' }), '/today'),

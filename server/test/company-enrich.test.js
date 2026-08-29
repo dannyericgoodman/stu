@@ -221,7 +221,12 @@ test('roster yields who they are, when they joined, and where they were before',
 });
 
 test('the curve is derived from start dates — zero extra API calls', () => {
-  const c = curveFromPeople(rosterToPeople(PERMUTE, 'Permute AI'));
+  // Pinned clock. The fixture joins are 2025-07, 2025-08 and 2026-03, so the
+  // assertions below only hold inside a window that starts in 2025-07 (one person)
+  // and ends after 2026-03 (all three). With a live `new Date()` this test silently
+  // changed answer as those months aged out of the trailing 12 — it began failing on
+  // wall-clock time rather than on a code change.
+  const c = curveFromPeople(rosterToPeople(PERMUTE, 'Permute AI'), { asOf: new Date('2026-07-15T00:00:00Z') });
   assert.equal(c.now, 3);
   assert.equal(c.delta, 2);
   assert.equal(c.series.length, 13, 'one point per month, not 4 sampled guesses');

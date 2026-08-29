@@ -229,10 +229,32 @@ const HYPERSCALERS = [
   'palantir', 'tesla', 'spacex', 'uber', 'airbnb', 'coinbase', 'ramp', 'figma',
   'deepmind', 'salesforce', 'linkedin', 'doordash', 'instacart', 'robinhood',
 ];
+// National elite schools. Kept SEPARATE from the IL list and scored lower, because
+// they do a different job: an IL school is both a graduation signal and a live
+// network for Danny, a national one is only the former.
+const NAT_ELITE_SCHOOLS = [
+  'stanford', 'harvard', 'massachusetts institute of technology', 'mit',
+  'carnegie mellon', 'uc berkeley', 'university of california, berkeley', 'caltech',
+  'california institute of technology', 'princeton', 'yale', 'columbia university',
+  'cornell', 'university of pennsylvania', 'wharton', 'university of waterloo',
+  'university of oxford', 'university of cambridge',
+];
 const IL_ELITE_SCHOOLS = [
   'northwestern', 'university of chicago', 'uchicago', 'booth', 'kellogg',
   'university of illinois', 'uiuc', 'illinois institute of technology', 'illinois tech',
 ];
+
+// The sentence containing `idx`. Attribution ("whose exit is this?") is carried by
+// the clause, not by a character radius — see prior_exit.
+function sentenceAround(text, idx) {
+  const t = String(text);
+  const BREAK = /[.!?•|\n]/;
+  let start = idx;
+  while (start > 0 && !BREAK.test(t[start - 1])) start--;
+  let end = idx;
+  while (end < t.length && !BREAK.test(t[end])) end++;
+  return t.slice(start, end);
+}
 
 function firstMatch(t, re) {
   const m = String(t).match(re);
@@ -397,21 +419,102 @@ function assessVentureScale(text, ctx = {}, row = {}) {
   return { lifestyle: false };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ACADEMIC, NOT OPERATING — the professor gate.
+//
+// `il_school_discovery` is the highest-yield IL source, and its failure mode is that
+// searching "University of Illinois founder" returns the university's most
+// distinguished FACULTY. Ken Suslick is the case: 500 papers, 71 patents, elected to
+// the National Academy of Sciences, and a `role` field that says "Founder" because
+// the connector guessed it.
+//
+// Deep tech and lab spinouts are explicitly IN scope, so this cannot be "academic →
+// out". A professor who actually spun a company out is exactly who Danny wants. The
+// cut is academic WITH NO OPERATING EVIDENCE — no company, no venture signal, no
+// founding frame anywhere. Same conservative shape as the lifestyle gate: absent
+// clear evidence, assume operator.
+// ══════════════════════════════════════════════════════════════════════════
+const ACADEMIC_RE = /\b(professor|prof\.|faculty|emeritus|department chair|dept chair|postdoc|post[- ]doctoral|principal investigator|dean of|lecturer|academic appointment|tenure[d]?|h-index|published (more than )?\d+ (scientific )?(papers|articles)|national academy of (sciences|engineering|medicine)|research group|my lab\b)\b/i;
+// Evidence the person actually operates a company, which overrides the academic read.
+const OPERATING_RE = /\b(co[- ]?founder|founder (of|at|and)|founded|ceo|cto|chief executive|raised|pre[- ]?seed|seed round|series [a-e]|y[- ]?combinator|\byc\b|speedrun|stealth|building (a|an|the)|shipped|launched|customers|revenue|arr|mrr|spin[- ]?out|spun out|incorporated)\b/i;
+
+function assessAcademic(text, ctx = {}, row = {}) {
+  const t = String(text || '');
+  if (!ACADEMIC_RE.test(t)) return { academic: false };
+  // A real company on the row is operating evidence on its own.
+  if (row && row.company && String(row.company).trim()) return { academic: false };
+  // A structured founder/CEO title anywhere in employment history is operating evidence.
+  const founderRole = (ctx.employers || []).find((e) => /found|ceo|cto|chief exec/i.test(e.title || ''));
+  if (founderRole) return { academic: false };
+  if (OPERATING_RE.test(t)) return { academic: false };
+  const m = t.match(ACADEMIC_RE);
+  return { academic: true, evidence: m ? m[0].trim() : 'academic profile, no operating evidence' };
+}
+
 const MARKERS = [
   {
     key: 'prior_exit',
     label: 'Exited a startup',
     weight: 10, // "better to me than previous founding experience"
+    // ── ATTRIBUTION, not just occurrence ──
+    // This is the highest-weighted marker in the rubric and it used to fire on the
+    // bare phrase "was acquired" anywhere in the blob. Ken Suslick — a UIUC chemistry
+    // professor, h-index 134, National Academy of Sciences, zero operating history —
+    // reached MUST-MEET because his bio says he "was the lead consultant for Molecular
+    // Biosystems Inc.", which "was acquired". The company exited. He consulted for it.
+    //
+    // The module already solved this shape once for employment (employedAtInText +
+    // EMPLOYMENT_VETO): a company MENTION is not a job. The same rule applies here —
+    // an exit mention is not YOUR exit. So an unattributed phrase now needs a
+    // first-person/founder frame, and any advisory/consulting/investor framing next to
+    // it vetoes the marker outright.
     detect(t) {
-      const m = String(t).match(/\b(acquired by [a-z0-9][\w .&-]{1,40}|was acquired|got acquired|successful(ly)? (exit|sold)|prior exit|previously exited|sold (my|our|the|his|her|a) (company|startup|business)|ipo'?d)\b/i);
-      if (!m) return null;
-      const big = /\$\s?\d{2,}\s?(m|mm|million|b|bn|billion)\b/i.test(t) || /\b(unicorn|nine[- ]figure)\b/i.test(t);
-      return { quote: m[0].trim(), label: big ? 'Exited a startup (significant)' : 'Exited a startup' };
+      const text = String(t);
+      // Self-attributed forms — the subject is unambiguous. These stand alone.
+      const OWNED = /\b(sold (my|our|his|her) (company|startup|business)|my (company|startup) was acquired|our (company|startup) was acquired|prior exit|previously exited|successful(ly)? exit(ed)?|founder with (a )?successful exit|\d+x exited founder|founded [a-z0-9][\w .&-]{1,40} \((acquired|exited)[^)]*\)|co[- ]?founded [a-z0-9][\w .&-]{1,40} \((acquired|exited)[^)]*\))/i;
+      let m = text.match(OWNED);
+      let scope = null;
+      if (!m) {
+        // Unattributed forms ("was acquired", "acquired by X", "IPO'd"). Only count
+        // these when a FOUNDER/OWNER frame appears in the SAME SENTENCE — otherwise the
+        // exit may belong to a client, an employer, a portfolio company or a competitor.
+        //
+        // Sentence scope, not a character window. A fixed lookback of 90 chars dropped
+        // Valentin Saportas — "I co-founded Revvin ... a digital mortgage platform that
+        // grew to serve more than 150 financial institutions before being acquired by
+        // Maxwell in 2023" — where the founding verb and the exit are one clause apart
+        // but ~130 characters apart. The sentence is the unit that actually carries
+        // attribution; character distance is a proxy that fails on any real bio.
+        const LOOSE = /\b(acquired by [a-z0-9][\w .&-]{1,40}|was acquired|got acquired|ipo'?d)\b/i;
+        m = text.match(LOOSE);
+        if (!m) return null;
+        scope = sentenceAround(text, m.index || 0);
+        const FOUNDER_FRAME = /\b(founder|co[- ]?founder|founded|started|my|our|i built|built and sold)\b/i;
+        if (!FOUNDER_FRAME.test(scope)) return null;
+      }
+      // Veto frames: the exit belongs to someone the person merely ADVISED, invested
+      // in, consulted for, or wrote about. Checked over the same sentence.
+      if (scope === null) scope = sentenceAround(text, m.index || 0);
+      const EXIT_VETO = /\b(consultant|consulting|advis(or|er|ory|ed|ing)|board member|investor|angel|portfolio (company|co)|client|customer|research(ed|er)?|licensed)\b/i;
+      if (EXIT_VETO.test(scope)) return null;
+      // Scale is reported as a FACT, not as a better grade. The outcome data says the
+      // predictive prior exit is the modest one (~$10M) — 42% of billion-dollar
+      // founders vs 24% of a funded control — so a nine-figure exit is not a stronger
+      // version of this signal, just a different one.
+      const big = /\$\s?\d{2,}\s?(m|mm|million|b|bn|billion)\b/i.test(text) || /\b(unicorn|nine[- ]figure)\b/i.test(text);
+      return { quote: m[0].trim(), label: big ? 'Exited a startup (large outcome)' : 'Exited a startup' };
     },
   },
   {
     key: 'yc',
     label: 'YC',
+    // 8, and deliberately ABOVE the other programs. YC is the only accelerator with
+    // published outcome data that separates it: ~4.5% of YC companies become unicorns
+    // vs ~2.5% for comparable venture-backed seed startups, and ~45% raise a Series A
+    // against a ~33% baseline (PitchBook). Techstars is 2.2%, MassChallenge 1.8%,
+    // 500 Global 1.5%. The Series A number is the one that matters to a pre-seed fund
+    // whose return depends on somebody else marking us up.
+    // See Brain/02 Frameworks/Sourcing Score — Evidence Check.md.
     weight: 8,
     // Must catch the bare phrasing too — "YC alum", "YC-backed", "(YC S24)" and
     // "Y Combinator" are all the same signal. The cohort-code-only version silently
@@ -421,13 +524,17 @@ const MARKERS = [
   {
     key: 'speedrun_zfellows',
     label: 'a16z Speedrun / Z Fellows',
-    weight: 8,
+    // 6, not 8. These are real filters run by serious people, but neither has
+    // published graduation or outcome data. Weighting an unmeasured program equal to
+    // YC asserts a lift nobody has demonstrated. Strong signal, honest weight.
+    weight: 6,
     detect(t) { return firstMatch(t, /a16z\s+speedrun|andreessen\s+speedrun|\bspeedrun\b|\bz[- ]?fellows?\b|\bzfellows\b/i); },
   },
   {
     key: 'spc',
     label: 'South Park Commons',
-    weight: 7,
+    weight: 6, // same reasoning as Speedrun/Z — no published outcome data.
+
     detect(t) { return firstMatch(t, /south\s+park\s+commons|\bspc\b/i); },
   },
   {
@@ -477,9 +584,71 @@ const MARKERS = [
     },
   },
   {
+    // ══════════════════════════════════════════════════════════════════════
+    // RECENTLY DEPARTED — the access marker, and the one that is actually ours.
+    //
+    // This used to live only in the STAGE GATE, where "just left" helped a founder
+    // qualify and then contributed nothing to where they ranked. That is backwards
+    // for this fund. Everything else in this list is a quality signal that every
+    // other firm can also read off the same public profile. The week someone leaves
+    // is the week they are reachable and unpriced, and it decays fast.
+    //
+    // So it ranks. Not because a departure predicts a good company — it does not —
+    // but because it predicts that a warm, early conversation is still available.
+    // Labelled as timing in the UI so it is never mistaken for a quality read.
+    // ══════════════════════════════════════════════════════════════════════
+    key: 'recently_departed',
+    label: 'Just left — reachable now',
+    weight: 5,
+    timing: true,
+    // MODIFIER on purpose. A departure is not evidence anyone is good, so it must not
+    // put a founder on the shortlist by itself, and it must not be one of the two
+    // "independent signals" that earn must-meet. It boosts where a qualified founder
+    // RANKS, which is the whole point: among people worth meeting, see the reachable
+    // ones first.
+    modifier: true,
+    detect(t, ctx = {}) {
+      // Structured first: the ingest taxonomy already types this (builderSignals
+      // 'just_departed'), and a typed signal beats a phrase match.
+      if (/\bjust_departed\b/i.test(String(t))) {
+        return { quote: 'just_departed', label: 'Just left a role — reachable now', structured: true };
+      }
+      return firstMatch(t, /\b(just left|recently left|just departed|recently departed|last day at|wrapp(ed|ing) up my time at|stepping (away|down) from|after \d+ (great )?years at|departing|left [a-z0-9][\w .&-]{1,30} to (build|start|found))\b/i);
+    },
+  },
+  {
+    key: 'nat_elite_school',
+    label: 'Elite school',
+    weight: 3,
+    modifier: true,
+    graduation: true,
+    structured: true,
+    detect(t, ctx = {}) {
+      for (const school of ctx.schools || []) {
+        const lc = normText(school);
+        for (const sname of NAT_ELITE_SCHOOLS) {
+          if (lc.includes(normText(sname))) {
+            return { quote: school, label: `${cap(sname)} (next-round signal)`, structured: true };
+          }
+        }
+      }
+      return null;
+    },
+  },
+  {
     key: 'il_elite_school',
     label: 'Elite Illinois school',
+    // ── WHAT THIS WEIGHT MEANS, because it is not what it looks like ──
+    // School does NOT predict the company. Founders of billion-dollar companies split
+    // roughly 36% top-10 school / 28% middle / 36% outside the top 100 — near flat.
+    // But top firms put 60–78% of their money into elite-school founders, so the
+    // credential strongly predicts THE NEXT ROUND. For a pre-seed fund that gets paid
+    // when somebody else marks us up, that is worth real points and it is a
+    // GRADUATION signal, not a quality one. It stays a modifier — it can raise a
+    // founder's rank, it can never put one on the shortlist alone.
+    // See Brain/02 Frameworks/Sourcing Score — Evidence Check.md.
     weight: 5,
+    graduation: true,
     // A MODIFIER, not a qualifier. Danny: "they went to a prestigious Chicago/IL
     // school AND have a track record that lends itself to building outliers." The
     // school boosts priority but never makes the shortlist on its own — a degree is
@@ -542,7 +711,14 @@ function markersFor(row) {
     // verbatim gate, which is exactly where invention is possible.
     const isStructured = typeof hit === 'object' && hit.structured;
     if (!isStructured && !verbatimIn(quote, text)) continue; // the receipt has to be real
-    out.push({ key: m.key, label, weight: m.weight, evidence: quote, modifier: !!m.modifier, structured: !!isStructured });
+    out.push({
+      key: m.key, label, weight: m.weight, evidence: quote,
+      modifier: !!m.modifier, structured: !!isStructured,
+      // Kind is carried so the UI can say WHY a marker counts. A graduation signal
+      // ("the Series A market likes this") and a quality signal ("this person has
+      // done it before") must never render as the same kind of claim.
+      kind: m.graduation ? 'graduation' : (m.timing ? 'timing' : 'quality'),
+    });
   }
   // ── FOUNDER-MARKET FIT — has this person worked in the domain they're building? ──
   const fmf = assessMarketFit(text, ctx, row);
@@ -660,8 +836,10 @@ function evaluate(row) {
   // Venture-scale gate. A lifestyle/services founder (café, agency, consultancy) is
   // not who Danny is sourcing, regardless of how many "serial founder" tags fire.
   const venture = assessVentureScale(text, ctx, row);
+  // Academic-with-no-operating-evidence gate. See assessAcademic above.
+  const academic = assessAcademic(text, ctx, row);
 
-  const meetWorthy = !stage.tooLate && !venture.lifestyle && coreMarkers.length > 0;
+  const meetWorthy = !stage.tooLate && !venture.lifestyle && !academic.academic && coreMarkers.length > 0;
   // Past-earliest founders keep a residual score (so the board can still show them,
   // sorted below), but they can never sit among the earliest-stage names Danny is
   // hunting for. Multiply, don't zero, so ranking within the excluded set is stable.
@@ -680,6 +858,8 @@ function evaluate(row) {
     stageEvidence: stage.evidence,
     lifestyle: venture.lifestyle,
     lifestyleEvidence: venture.evidence || null,
+    academic: academic.academic,
+    academicEvidence: academic.evidence || null,
     markers,
     coreMarkerCount: coreMarkers.length,
     why: markers.map((m) => m.label),
@@ -687,7 +867,22 @@ function evaluate(row) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// RUBRIC_VERSION — bump this on ANY change to markers, weights, gates or tiers.
+//
+// Stored verdicts are a CACHE (lib/fitIndex). Staleness was keyed only on the row
+// changing — enrichment landing, the slope scorer running. So a change to the RUBRIC
+// itself invalidated nothing: every already-scored founder kept the old answer
+// forever, and the morning list would have quietly ranked on retired weights while
+// the code said otherwise. The version is the missing key. fitIndex.rescoreStale()
+// re-scores anything carried at an older version, so a rubric edit self-heals on the
+// next nightly scout instead of needing someone to remember.
+// ══════════════════════════════════════════════════════════════════════════
+const RUBRIC_VERSION = '2026-08-28.evidence-check.3';
+
 module.exports = {
+  RUBRIC_VERSION,
   evaluate, markersFor, classifyStage, tierOf, profileText, verbatimIn, assessMarketFit,
+  assessAcademic, assessVentureScale,
   MARKERS, HYPERSCALERS, IL_ELITE_SCHOOLS, PEDIGREE_KEYS, DOMAINS,
 };

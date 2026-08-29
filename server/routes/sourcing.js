@@ -77,7 +77,10 @@ router.get('/queue', (req, res) => {
     : sort === 'fit'
       ? 'confidence_score DESC, created_at DESC'
       : sort === 'breakout'
-        ? 'COALESCE(breakout_score, 0) DESC, created_at DESC'
+        // Same control, one ranking behind it. fit_priority is lib/founderFit's
+        // weighted marker sum (written by lib/fitIndex); breakout_score was a
+        // competing regex scorer and is retired.
+        ? 'COALESCE(fit_priority, 0) DESC, created_at DESC'
         : `${caliberRank} DESC, COALESCE(affinity_score,0) DESC, confidence_score DESC, created_at DESC`;
   const founders = db.prepare(`SELECT * FROM sourced_founders WHERE ${where} ORDER BY ${sortCol}`).all(...params);
 

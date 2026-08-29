@@ -50,6 +50,7 @@ export default function Home() {
   const [stats, setStats] = useState(null);
   const [today, setToday] = useState(null);
   const [agents, setAgents] = useState(null);
+  const [shortlist, setShortlist] = useState(null);
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);   // what was just set running
@@ -60,6 +61,7 @@ export default function Home() {
     api.getAttention().then(setAttention).catch((e) => setErr(e.message));
     api.getPipelineStats().then(setStats).catch(() => {});
     api.getToday().then(setToday).catch(() => {});
+    api.getShortlist().then(setShortlist).catch(() => {});
     loadAgents();
   }, []);
 
@@ -218,10 +220,17 @@ export default function Home() {
           )}
         </div>
 
-        {/* ── 2. THE AGENTS ── */}
+        {/* ── 2. THIS MORNING'S FOUNDERS ── the ranked list, capped.
+            Danny: "a full funnel inbox of top founder candidates as well as a
+            prioritized, ranked list — both updated in the morning before I wake up."
+            The inbox lives on Source and holds everything that cleared the gates.
+            This is the short one: the handful worth his attention today. */}
+        <Shortlist data={shortlist} nav={nav} />
+
+        {/* ── 3. THE AGENTS ── */}
         <Agents data={agents} note={note} onClearNote={() => setNote(null)} onRun={dispatch} nav={nav} />
 
-        {/* ── 3. WHAT NEEDS HIM ── only rows that are a task. */}
+        {/* ── 4. WHAT NEEDS HIM ── only rows that are a task. */}
         <div className="border border-line-2 rounded-md bg-ground mb-4">
           <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
             <span className="text-micro font-semibold uppercase text-ink-4">Needs you</span>
@@ -274,6 +283,104 @@ export default function Home() {
 //
 // An agent with no valid target says WHY rather than rendering an empty menu.
 // ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// Shortlist — the ten founders worth looking at this morning.
+//
+// The one rule that shapes this component: a reason is shown WITH ITS KIND.
+// "Exited a startup" and "Northwestern" are both true and they are not the same
+// claim — the first says this person has built something, the second says the
+// Series A market tends to fund people like this. Outcome data puts unicorn
+// founders at ~36% top-10 school / ~36% outside the top 100, so school predicts
+// the next ROUND, not the company. Rendering both in the same grey pill is how a
+// fund ends up with a pedigree portfolio it never chose.
+//
+// So: quality signals read normally, graduation signals are muted and suffixed,
+// and "reachable now" gets its own mark because timing decays and nothing else here
+// does.
+// ══════════════════════════════════════════════════════════════════════════
+function Shortlist({ data, nav }) {
+  if (!data) {
+    return (
+      <div className="border border-line-2 rounded-md bg-ground mb-4">
+        <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
+          <span className="text-micro font-semibold uppercase text-ink-4">This morning</span>
+        </div>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="row px-3"><span className="block h-2 w-56 bg-ground-3 rounded-sm" /></div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-line-2 rounded-md bg-ground mb-4">
+      <div className="px-3 h-6 flex items-center border-b border-line bg-ground-3">
+        <span className="text-micro font-semibold uppercase text-ink-4">This morning</span>
+        <div className="flex-1" />
+        {data.count > 0 && (
+          <span className="num text-micro text-ink-4">
+            {data.new_today > 0 ? `${data.new_today} new · ${data.count}` : data.count}
+          </span>
+        )}
+      </div>
+
+      {data.count === 0 ? (
+        // Silence must mean "I looked". An empty list states that it ran.
+        <div className="px-3 py-2 text-mini text-ink-3">{data.empty_reason}</div>
+      ) : (
+        data.founders.map((f) => (
+          <div key={f.id} className="border-b border-line last:border-b-0 px-3 py-1.5">
+            <div className="flex items-baseline gap-2">
+              {f.is_new && <span className="text-micro text-accent flex-none" title="New since last night's scout">new</span>}
+              <span className="text-small text-ink font-medium flex-none">{f.name}</span>
+              <span className="text-mini text-ink-3 truncate flex-1 min-w-0">
+                {f.company || f.one_liner || '—'}
+              </span>
+              <span
+                className={`text-micro flex-none ${f.tier === 'must-meet' ? 'text-accent' : 'text-ink-4'}`}
+                title={f.why || ''}
+              >
+                {f.tier === 'must-meet' ? 'Must meet' : 'Strong'}
+              </span>
+              <button className="btn-secondary h-5 text-mini flex-none" onClick={() => nav('/source')}>
+                Open
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+              {f.reachable_now && (
+                <span className="text-micro text-accent" title="Recently left a role — the window where a first conversation is easiest">
+                  reachable now
+                </span>
+              )}
+              {f.signals.map((sig, i) => (
+                <span
+                  key={i}
+                  className={`text-micro ${sig.kind === 'quality' ? 'text-ink-3' : 'text-ink-4'}`}
+                  title={
+                    sig.kind === 'graduation'
+                      ? `Next-round signal, not a quality signal — evidence: ${sig.evidence}`
+                      : sig.evidence
+                  }
+                >
+                  {sig.label}{sig.kind === 'graduation' ? ' ·' : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+
+      <div className="px-3 h-6 flex items-center border-t border-line text-micro text-ink-4">
+        <span className="flex-1 truncate">
+          Ranked on quality signals · school and employer shown as next-round signals only
+        </span>
+        <button className="text-ink-4 hover:text-ink-2" onClick={() => nav('/source')}>Full inbox →</button>
+      </div>
+    </div>
+  );
+}
+
 function Agents({ data, note, onClearNote, onRun, nav }) {
   const [picking, setPicking] = useState(null);
 

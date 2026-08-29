@@ -252,6 +252,109 @@ router.get('/', (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// GET /api/pipeline/shortlist — the morning list.
+//
+// Danny: "a full funnel inbox of top founder candidates AS WELL AS a prioritized,
+// ranked list — both updated in the morning before I wake up."
+//
+// Two surfaces, not one, because they answer different questions. The inbox is
+// "everything that cleared the gates, let me sift." The shortlist is "it is 6am,
+// who are the ten people worth my attention today." A list you scroll is a queue;
+// a list you finish is a decision.
+//
+// THREE THINGS THIS DOES THAT THE INBOX DOES NOT:
+//
+//  1. It is CAPPED. Ten, not two hundred. The 101-unread lesson: a wall teaches you
+//     to scroll past the thing that matters most.
+//  2. It says WHAT KIND of signal each reason is. A prior exit is evidence the
+//     founder is good. An elite school is evidence the SERIES A MARKET will like
+//     them — those are different claims and rendering them identically is how a
+//     fund talks itself into a pedigree portfolio. Markers carry `kind`
+//     (quality | graduation | timing) and the row shows it.
+//  3. It computes the full marker set for these ten rows only. The stored verdict
+//     (lib/fitIndex) holds labels, not kinds, and it exists because scoring 2,000
+//     rows per page load was slow. Ten rows is ~5ms, so the shortlist pays for
+//     fidelity where it is cheap and reads the index where it is not.
+// ══════════════════════════════════════════════════════════════════════════
+router.get('/shortlist', (req, res) => {
+  const uid = req.user.id;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+
+  // When did the scout last run? Anything newer than that is "new this morning".
+  const lastRun = db.prepare(
+    `SELECT ran_at FROM job_runs WHERE job = 'nightly_scout' AND user_id = ?
+      ORDER BY ran_at DESC LIMIT 1`
+  ).get(uid)?.ran_at || db.prepare(`SELECT datetime('now','-1 day') AS t`).get().t;
+
+  // Step 1 — pick the ids off the INDEX. No blobs touched.
+  const picked = db.prepare(`
+    SELECT id FROM sourced_founders
+     WHERE user_id = ? AND status IN ('pending','starred')
+       AND COALESCE(do_not_resurface, 0) = 0
+       AND list_scope = 'pipeline'
+       AND fit_meet = 1
+       AND COALESCE(fit_stage_late, 0) = 0
+     ORDER BY CASE fit_tier WHEN 'must-meet' THEN 2 WHEN 'strong' THEN 1 ELSE 0 END DESC,
+              COALESCE(fit_priority, 0) DESC,
+              created_at DESC
+     LIMIT ?
+  `).all(uid, limit).map((r) => r.id);
+
+  if (!picked.length) {
+    return res.json({ generated_at: new Date().toISOString(), last_run: lastRun, count: 0, founders: [], empty_reason: 'Nothing cleared the gates. That is an answer, not a failure — the scout ran and found no one new worth the top of the list.' });
+  }
+
+  // Step 2 — full evaluation, but only for the handful being shown.
+  const ff = require('../lib/founderFit');
+  const rows = db.prepare(
+    `SELECT * FROM sourced_founders WHERE id IN (${picked.map(() => '?').join(',')})`
+  ).all(...picked);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  const founders = picked.map((id) => {
+    const r = byId.get(id);
+    if (!r) return null;
+    const v = ff.evaluate(r);
+    const signals = v.markers.map((m) => ({
+      label: m.label,
+      kind: m.kind || 'quality',
+      evidence: m.evidence,
+      structured: !!m.structured,
+    }));
+    return {
+      id: r.id,
+      name: r.name,
+      company: r.company || null,
+      one_liner: r.company_one_liner || r.headline || null,
+      role: r.role || null,
+      source: r.source || null,
+      linkedin_url: r.linkedin_url || null,
+      website_url: r.website_url || null,
+      github_url: r.github_url || null,
+      il_tie: r.chicago_connection || null,
+      tier: v.tier,
+      why: v.tierReason,
+      priority: v.priority,
+      stage: v.stage,
+      is_new: r.created_at >= lastRun,
+      signals,
+      // The honest split, precomputed so the UI cannot accidentally merge them.
+      quality_signals: signals.filter((x) => x.kind === 'quality').length,
+      graduation_signals: signals.filter((x) => x.kind === 'graduation').length,
+      reachable_now: signals.some((x) => x.kind === 'timing'),
+    };
+  }).filter(Boolean);
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    last_run: lastRun,
+    count: founders.length,
+    new_today: founders.filter((f) => f.is_new).length,
+    founders,
+  });
+});
+
 // GET /api/pipeline/inbox — the connective tissue.
 //
 // Danny: "I want connective tissue between a high-quality sourcing engine and a
@@ -353,7 +456,7 @@ router.get('/inbox', (req, res) => {
   const rows = db.prepare(`
     SELECT id, name, company, company_one_liner, role, source, headline,
            confidence_score, confidence_rationale, chicago_connection, location_city,
-           location_type, caliber_tier, caliber_score, breakout_score, linkedin_url,
+           location_type, caliber_tier, caliber_score, linkedin_url,
            github_url, website_url, list_scope, status, created_at,
            evidence_map, caliber_signals, builder_signals, pedigree_signals, tags,
            github_slope_score,

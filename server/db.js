@@ -442,6 +442,9 @@ addColumn('sourced_founders', 'fit_lifestyle', 'INTEGER');     // failed the ven
 addColumn('sourced_founders', 'fit_why', 'TEXT');              // JSON array of marker labels
 addColumn('sourced_founders', 'fit_marker_count', 'INTEGER');
 addColumn('sourced_founders', 'fit_scored_at', 'DATETIME');
+// Which rubric produced the stored verdict. A rubric edit must invalidate the cache;
+// without this it never did. See lib/founderFit RUBRIC_VERSION.
+addColumn('sourced_founders', 'fit_rubric_version', 'TEXT');
 // The inbox's exact access path: one user's live queue, best first. Without this the
 // LIMIT would still make SQLite walk every pending row to sort it.
 db.exec(`CREATE INDEX IF NOT EXISTS idx_sf_inbox

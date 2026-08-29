@@ -29,11 +29,12 @@
 
 const db = require('../db');
 const ff = require('./founderFit');
+const RUBRIC_VERSION = ff.RUBRIC_VERSION;
 
 // Everything founderFit.evaluate() reads. Kept here so the one place that pays the
 // blob cost is this file, and the inbox never selects a blob again.
 const SCORING_COLS = `
-  id, name, company, company_one_liner, role, source, headline,
+  id, name, company, company_one_liner, role, source, headline, fit_rubric_version,
   chicago_connection, location_type, previous_company_norm,
   caliber_signals, builder_signals, pedigree_signals, tags,
   raw_data, enriched_data, linkedin_data,
@@ -44,7 +45,8 @@ const WRITE = `
   UPDATE sourced_founders SET
     fit_meet = ?, fit_tier = ?, fit_reason = ?, fit_priority = ?,
     fit_stage = ?, fit_stage_late = ?, fit_lifestyle = ?,
-    fit_why = ?, fit_marker_count = ?, fit_scored_at = CURRENT_TIMESTAMP
+    fit_why = ?, fit_marker_count = ?, fit_scored_at = CURRENT_TIMESTAMP,
+    fit_rubric_version = '2026-08-28.evidence-check.3'
   WHERE id = ?
 `;
 
@@ -100,9 +102,12 @@ function rescoreStale({ userId = 1, limit = 5000 } = {}) {
         fit_scored_at IS NULL
         OR (linkedin_enriched_at IS NOT NULL AND fit_scored_at < linkedin_enriched_at)
         OR (github_slope_scored_at IS NOT NULL AND fit_scored_at < github_slope_scored_at)
+        -- The rubric itself moved. Without this clause a weight change never reaches
+        -- an already-scored founder, and the inbox ranks on retired logic in silence.
+        OR COALESCE(fit_rubric_version, '') != ?
       )
     LIMIT ?
-  `).all(userId, limit);
+  `).all(userId, RUBRIC_VERSION, limit);
 
   const write = db.prepare(WRITE);
   const tx = db.transaction((batch) => {

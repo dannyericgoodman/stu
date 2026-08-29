@@ -605,6 +605,8 @@ function Docks({ conv }) {
 function Memo({ a }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [dlErr, setDlErr] = useState(null);
   // New assessments carry the POV report (in synthesis_output); the sections above ARE
   // the memo, so here we just offer the export. Pre-report assessments still show the
   // old 7-M inline.
@@ -616,6 +618,20 @@ function Memo({ a }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard denied — the text is on screen either way */ }
+  }
+
+  async function downloadMemo() {
+    setDlErr(null);
+    setDownloading(true);
+    try {
+      await api.downloadMemoDocx(a.id);
+    } catch (e) {
+      // The server refuses a run that has nothing to assemble; show its reason
+      // rather than a generic failure, because the reason is actionable.
+      setDlErr(e.message);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   if (!hasReport && !a.memo_7m?.length) return null;
@@ -634,7 +650,19 @@ function Memo({ a }) {
         <button onClick={copy} className="text-mini text-accent hover:text-accent-hover">
           {copied ? 'Copied — paste into Obsidian' : 'Copy full POV as markdown'}
         </button>
+        {/* The Word draft. Danny: "as close to memo as possible ... produced as a
+            docx file so I can edit it." It assembles this run's own prose into the
+            house memo shape — Decision Header, the 7 Ms, the room, sources — with
+            [DANNY: …] blanks where the call is his. Nothing is re-generated. */}
+        <button
+          onClick={downloadMemo}
+          disabled={downloading}
+          className="text-mini text-accent hover:text-accent-hover disabled:text-ink-4"
+        >
+          {downloading ? 'Building…' : 'Download memo (.docx)'}
+        </button>
       </div>
+      {dlErr && <div className="text-mini text-danger mt-1">{dlErr}</div>}
       {!hasReport && open && <MemoBody a={a} />}
     </div>
   );

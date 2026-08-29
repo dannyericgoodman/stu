@@ -172,13 +172,18 @@ function rosterToPeople(employees, companyName) {
  * The exact curve, derived from start dates. Zero extra API calls.
  * Returns one point per month for `months` back, plus the delta.
  */
-function curveFromPeople(people, { months = 12 } = {}) {
+// `now` is injectable so the curve is testable. It used to read the wall clock
+// directly, which made the shape of the series depend on the day you ran it — the
+// fixture test asserting delta === 2 passed until Scott's 2025-07 start date aged
+// out of the trailing window, then failed for a reason that had nothing to do with
+// the code. A function whose output changes overnight needs its clock passed in.
+function curveFromPeople(people, { months = 12, asOf = new Date() } = {}) {
   const dated = people.filter((p) => p.joined);
   if (!dated.length) return null;
 
   const series = [];
   for (let i = months; i >= 0; i--) {
-    const d = new Date();
+    const d = new Date(asOf.getTime());
     d.setMonth(d.getMonth() - i);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     // Headcount at month M = everyone whose start month is <= M. Leavers are out

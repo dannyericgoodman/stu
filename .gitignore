@@ -10,3 +10,4 @@ dist
 
 # Backup snapshots — they live on the persistent volume, never in git.
 server/backups/
+server/.scratch/

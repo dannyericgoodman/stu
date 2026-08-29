@@ -17,7 +17,6 @@ const https = require('https');
 const db = require('../db');
 const { userGeoCriteria } = require('../lib/geoFilter');
 const { verifyLocation } = require('./sourcing-engine');
-const { breakoutScore } = require('../lib/breakoutScore');
 
 let resolveKey, recordCost;
 try { ({ resolveKey, recordCost } = require('../lib/providerKeys')); } catch { resolveKey = () => null; recordCost = () => {}; }
@@ -107,13 +106,11 @@ async function runLinkedInEnrichment({ userId = 1, limit = 25, deps = {} } = {})
     if (userId != null) recordCost(userId, { provider: 'enrichlayer', feature: 'linkedin-enrich', estCostUsd: 0.01 });
     if (!profile) continue;
     const a = assessProfile(profile, criteria);
-    // Sharpen the breakout score with the real LinkedIn data (prior companies + schools).
-    try {
-      const exps = (profile.experiences || []).map(e => e && (e.company || e.company_name)).filter(Boolean);
-      const blob = `${profile.headline || ''} ${profile.summary || ''} ${a.title || ''} ${exps.join(' ')} ${(a.schools || []).join(' ')}`;
-      const bk = breakoutScore(blob);
-      rescore.run(bk.score, JSON.stringify(bk.signals), r.id);
-    } catch { /* keep the persist-time score */ }
+    // The re-score after enrichment now belongs to lib/fitIndex, which the nightly
+    // scout runs immediately after this step (Arm 4) and which re-reads exactly the
+    // rows enrichment just touched. Scoring here as well produced a SECOND, weaker
+    // verdict from a flattened blob — the thing that made "hyperscale experience"
+    // hallucinate off customer logos. founderFit reads experiences[] structurally.
     if (a.tie && a.tie.verified && a.tie.type !== 'broad' && r.list_scope === 'watchlist') {
       promote.run(a.tie.type, `${a.tie.type}: ${a.tie.location}`, r.id);
       promoted++;
