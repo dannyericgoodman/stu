@@ -297,7 +297,25 @@ export default function Home() {
 // So: quality signals read normally, graduation signals are muted and suffixed,
 // and "reachable now" gets its own mark because timing decays and nothing else here
 // does.
+//
+// The row's action is LINKEDIN. Danny: "when I click Open it does nothing... I want
+// it to take me to their LinkedIn. So the homepage lets me get right to the business
+// of sourcing." The morning list exists to start conversations, and the first thing
+// you do with a stranger's name is read their LinkedIn.
 // ══════════════════════════════════════════════════════════════════════════
+
+// A scheme-less URL ("linkedin.com/in/x") in an href is a RELATIVE path: React Router
+// would swallow it, miss every route, and the catch-all would bounce you to "/" —
+// which is precisely the dead-click this component was just fixed for. The stored data
+// is clean today (932 rows, 0 without a scheme), so this guards the next bad writer,
+// not the current one.
+function externalUrl(u) {
+  if (!u) return null;
+  const t = String(u).trim();
+  if (!t) return null;
+  return /^https?:\/\//i.test(t) ? t : `https://${t.replace(/^\/+/, '')}`;
+}
+
 function Shortlist({ data, nav }) {
   if (!data) {
     return (
@@ -342,9 +360,29 @@ function Shortlist({ data, nav }) {
               >
                 {f.tier === 'must-meet' ? 'Must meet' : 'Strong'}
               </span>
-              <button className="btn-secondary h-5 text-mini flex-none" onClick={() => nav('/source')}>
-                Open
-              </button>
+              {/* Never render a control that cannot act. With a LinkedIn on file this
+                  is a real anchor (middle-click and ⌘-click work, which a button's
+                  onClick never did); without one it says so and falls back to the
+                  inbox rather than pretending. */}
+              {externalUrl(f.linkedin_url) ? (
+                <a
+                  href={externalUrl(f.linkedin_url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-secondary h-5 text-mini flex-none"
+                  title={`Open ${f.name} on LinkedIn`}
+                >
+                  Open ↗
+                </a>
+              ) : (
+                <button
+                  className="btn-secondary h-5 text-mini flex-none"
+                  onClick={() => nav('/sourcing')}
+                  title="No LinkedIn on file for this founder — opens the sourcing inbox instead"
+                >
+                  Inbox
+                </button>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
@@ -375,7 +413,9 @@ function Shortlist({ data, nav }) {
         <span className="flex-1 truncate">
           Ranked on quality signals · school and employer shown as next-round signals only
         </span>
-        <button className="text-ink-4 hover:text-ink-2" onClick={() => nav('/source')}>Full inbox →</button>
+        {/* "/source" is not a route. The catch-all redirected it to "/", so this
+            silently reloaded the home page — the same dead click as Open. */}
+        <button className="text-ink-4 hover:text-ink-2" onClick={() => nav('/sourcing')}>Full inbox →</button>
       </div>
     </div>
   );
