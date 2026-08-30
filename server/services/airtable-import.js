@@ -62,6 +62,7 @@
 
 const db = require('../db');
 const https = require('https');
+const { normalizeStage } = require('../lib/fundingStage');
 
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const BASE_ID = 'appfE9DVrSUOrkkpu';
@@ -231,7 +232,12 @@ function desiredFrom(f) {
   const rawNext = sel(f['Next Step Description']);
   const { admissions_status, status } = mapAdmissionStatus(rawAdm, rawNext);
   const { city, state } = parseLocation(f['HQ']);
-  const rawStage = sel(f['Current Stage']) || 'Pre-seed';
+  // Airtable spells this field its own way and this sync runs every morning at
+  // 5:45. Passing the raw value through is how 84 rows ended up spelled 'Pre-Seed'
+  // while 5,339 said 'Pre-seed' — two values, one stage, and every case-sensitive
+  // `WHERE stage = ?` quietly wrong. Normalizing HERE (not just in the one-time
+  // db.js migration) is what stops tomorrow's run from re-splitting them.
+  const rawStage = normalizeStage(sel(f['Current Stage'])) || 'Pre-seed';
 
   return {
     company: (f['Company Name'] || '').trim() || null,
@@ -239,8 +245,12 @@ function desiredFrom(f) {
     source: sel(f['Source']),
     location_city: city,
     location_state: state,
-    // 'Service' isn't a fundraising stage; Stu's `stage` column only speaks rounds.
-    stage: rawStage === 'Service' ? 'Pre-seed' : rawStage,
+    // The 'Service' → 'Pre-seed' fold used to sit inline here ("'Service' isn't a
+    // fundraising stage; Stu's `stage` column only speaks rounds"). It now lives in
+    // lib/fundingStage's ALIASES, applied by the normalizeStage above, so the same
+    // rule covers migrate-from-airtable and any future importer instead of being
+    // re-typed at each edge.
+    stage: rawStage,
     previous_companies: f['Previous Companies'] || null,
     pipeline_tracks: tracks.join(','),
     admissions_status,

@@ -478,6 +478,26 @@ addColumn('sourced_founders', 'github_slope_scored_at', 'DATETIME');
 // resolver re-searching the same founder every run. See pipeline/github-resolve.
 addColumn('sourced_founders', 'github_resolve_reason', 'TEXT');
 
+// The SAME two columns on founders. Not a copy-paste — the dedupe step in
+// pipeline/github-source runs against BOTH pools, because a founder the scout finds
+// on GitHub may already have been promoted out of sourced_founders onto the board.
+// When it matches there it back-fills the slope it just computed (github-source.js
+// ~line 125) so the work isn't thrown away.
+//
+// Those columns were only ever declared on sourced_founders, so that UPDATE threw
+// `no such column: github_slope_score` — and because it runs inside the discover
+// step, it took the whole nightly slope refresh down with it every single night
+// (`slope_refresh · error · errors: discover: no such column: github_slope_score`).
+// The failure was invisible: GitHub momentum, a real ranking input, silently stopped
+// updating and nothing surfaced it.
+//
+// Deliberately NOT given github_slope_scored_at. Staleness-driven RE-scoring is a
+// sourced_founders concept — github-activity.js only ever selects its work queue
+// from that pool. On founders these two columns are a back-fill destination, not a
+// scoring queue, and adding a timestamp nothing reads would imply otherwise.
+addColumn('founders', 'github_slope_score', 'INTEGER');
+addColumn('founders', 'github_slope_data', 'TEXT');
+
 // ── THE STORED FIT VERDICT — see lib/fitIndex for why this exists ──
 // The founder-quality rubric used to run on every row on every inbox load, which
 // meant SELECTing 23 KB of scrape blobs per row (51 MB in production) purely to
@@ -1963,6 +1983,38 @@ DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitor_hits_user ON monit
 // Every table now exists. Replay the ALTERs that were queued because their table
 // had not been created yet when they were reached. See addColumn above.
 flushDeferredColumns();
+
+// ── Collapse funding-stage spellings to one value each ──
+// Production held 'Pre-seed' (5,339 rows) and 'Pre-Seed' (84 rows) as two distinct
+// values. SQLite compares TEXT case-sensitively, so every `WHERE stage = 'Pre-seed'`
+// and every GROUP BY split them — no error, just a count quietly short by 84.
+//
+// NOT flag-guarded, unlike the encrypt migration below. A one-time flag fixes the
+// rows that exist today and lets the column drift again the moment some path writes
+// a new spelling. This is self-healing instead: it reads the DISTINCT stages (a
+// handful of rows, off an indexed column) and only issues an UPDATE for a spelling
+// that actually differs from its canonical form. On a clean database it does no
+// writes at all, so the cost of running it every boot is one cheap SELECT.
+//
+// The daily Airtable sync is normalized at its own edge (services/airtable-import),
+// which is what stops the 5:45am run from re-introducing 'Pre-Seed' tomorrow. This
+// half repairs history; that half stops the bleeding. Neither is sufficient alone.
+{
+  const { normalizeStage } = require('./lib/fundingStage');
+  const distinct = db.prepare('SELECT DISTINCT stage FROM founders WHERE stage IS NOT NULL').all();
+  const drift = distinct
+    .map((r) => ({ from: r.stage, to: normalizeStage(r.stage) }))
+    .filter((d) => d.to && d.to !== d.from);
+  if (drift.length) {
+    const upd = db.prepare('UPDATE founders SET stage = ? WHERE stage = ?');
+    let n = 0;
+    db.transaction(() => { for (const d of drift) n += upd.run(d.to, d.from).changes; })();
+    console.log(
+      `[DB] Normalized ${n} founder stage value(s): ` +
+      drift.map((d) => `'${d.from}' -> '${d.to}'`).join(', ')
+    );
+  }
+}
 
 // ── One-time: encrypt any plaintext provider keys already in user_settings ──
 // Only runs once a SETTINGS_ENC_KEY is configured. Idempotent: encrypt() skips

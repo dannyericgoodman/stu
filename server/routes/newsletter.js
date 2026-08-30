@@ -57,14 +57,20 @@ router.post('/sources', async (req, res) => {
   try {
     if (t === 'email') {
       if (!sender) return res.status(400).json({ error: 'Sender email required for an email source.' });
-      const r = db.prepare('INSERT INTO newsletter_sources (user_id, name, type, sender_match, enabled) VALUES (?, ?, "email", ?, 1)')
+      // Single quotes, not double. SQL spells a string literal '...'; "..." is an
+      // IDENTIFIER, and better-sqlite3 ships with the double-quoted-string-literal
+      // fallback turned off, so this threw `no such column: "email"` on every call.
+      // BOTH branches of this handler had it, which means adding a newsletter source
+      // has never once succeeded — that, not disinterest, is why newsletter_sources
+      // and newsletter_items are empty tables.
+      const r = db.prepare("INSERT INTO newsletter_sources (user_id, name, type, sender_match, enabled) VALUES (?, ?, 'email', ?, 1)")
         .run(req.user.id, name || sender, sender.trim());
       return res.json(db.prepare('SELECT * FROM newsletter_sources WHERE id = ?').get(r.lastInsertRowid));
     }
     if (!url) return res.status(400).json({ error: 'A newsletter URL or RSS feed is required.' });
     const found = await discoverFeedUrl(url);
     if (!found) return res.status(422).json({ error: `Couldn't find an RSS feed at "${url}". Try the newsletter's Substack/site URL, or add it as an email source instead.` });
-    const r = db.prepare('INSERT INTO newsletter_sources (user_id, name, type, feed_url, enabled) VALUES (?, ?, "rss", ?, 1)')
+    const r = db.prepare("INSERT INTO newsletter_sources (user_id, name, type, feed_url, enabled) VALUES (?, ?, 'rss', ?, 1)")
       .run(req.user.id, name || found.title || url, found.feedUrl);
     res.json(db.prepare('SELECT * FROM newsletter_sources WHERE id = ?').get(r.lastInsertRowid));
   } catch (err) {
