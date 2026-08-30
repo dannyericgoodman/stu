@@ -35,7 +35,21 @@
 // editing TABLE here, deliberately.
 // ══════════════════════════════════════════════════════════════════════════
 
-const DEFAULT_BASE_ID = 'appfE9DVrSUOrkkpu';
+// ── THE BASE MOVED (2026-08-30) ──
+// Danny scoped Stu to `appxd2l3BXJAdTWSQ` ("Superior Studios Ecosystem"). The base
+// Stu had always read, `appfE9DVrSUOrkkpu`, is the one his team has since renamed
+// "[OLD] Superior Studios Ecosystem" — and the two credentials are disjoint: the
+// old PAT can see only the old base, the new PAT only the new one. So this was not
+// a permission widening, it was a cutover, and there is no window where both work.
+//
+// It is also NOT a base-id swap. The old base was an ADMISSIONS funnel keyed on
+// founder name, with one combined `Admission Status` ("Stage 3: Evaluating
+// (Investment + Resident)"). The new base is an INVESTMENT CRM keyed on company,
+// and it splits that single axis into two orthogonal ones — `Investment Status`
+// and `Resident Status` — with a `Pipeline Stage` formula composing them. Every
+// field name Stu read also changed. lib/airtableVocab carries the new vocabulary;
+// services/airtable-import carries the new field names.
+const DEFAULT_BASE_ID = 'appxd2l3BXJAdTWSQ';
 
 const BASE_ID = (process.env.AIRTABLE_BASE_ID || DEFAULT_BASE_ID).trim();
 
@@ -43,10 +57,32 @@ const BASE_ID = (process.env.AIRTABLE_BASE_ID || DEFAULT_BASE_ID).trim();
 // (re-read 2026-08-30 via the meta/tables endpoint, which is why the comments
 // carry row-shape rather than guesses).
 const TABLE = {
-  FOUNDERS: 'tblWkJzy5qpw7FP2M',        // Superior Founder Ecosystem — the funnel
-  DEALS: 'tblCWTVyowHgp4YuR',           // Investment Pipeline
-  TALENT: 'tblyt6dR0VIVuk5yg',          // Talent Database — hiring-warm's warm pool
-  MASTER_CONTACTS: 'tblN8XIy0s5oOqWAL', // Master Contacts
+  // The funnel AND the deal board, in one table. The old base kept these apart
+  // (Founder Ecosystem + Investment Pipeline, joined by hand); here one row is a
+  // company with both a Resident Status and an Investment Status. FOUNDERS and
+  // DEALS are kept as aliases so existing call sites read naturally, but they are
+  // deliberately the SAME id — there is no second table to drift from.
+  PIPELINE: 'tbl9MulpgagFUmNQf',          // Pipeline — 205 rows, primary field "Company / Founder"
+  FOUNDERS: 'tbl9MulpgagFUmNQf',          // alias of PIPELINE
+  DEALS: 'tbl9MulpgagFUmNQf',             // alias of PIPELINE
+  PORTFOLIO: 'tblNTDbEFvNldghAR',         // Portfolio — 8 rows, the executed investments
+  PORTFOLIO_UPDATES: 'tblExMxA9WRhSQkCD', // Portfolio Updates — 11 rows
+  FOUNDER_ASKS: 'tblOGkUswaHwQgatb',      // Founder Asks — 5 rows, the action board
+  ADVISOR_NETWORK: 'tbldAFI0vzfRdFaRm',   // Advisor Network — 11 rows
+  INVESTOR_NETWORK: 'tblgbIBQyFeDDBCbF',  // Investor Network — 99 rows
+};
+
+// ── TABLES THAT NO LONGER EXIST ──
+// The old base carried `Talent Database` (tblyt6dR0VIVuk5yg) and `Master Contacts`
+// (tblN8XIy0s5oOqWAL); pipeline/hiring-warm.js read both to build the warm pool.
+// The authorized base has NEITHER. Naming them here — rather than deleting the
+// knowledge — is what lets hiring-warm fail with "the warm-pool tables are not in
+// the authorized base" instead of a bare 404 nobody can diagnose. It also stops a
+// future reader from "restoring" them as TABLE entries and issuing requests for
+// tables that are not there.
+const ABSENT_TABLES = {
+  TALENT: 'Talent Database — not present in appxd2l3BXJAdTWSQ (was tblyt6dR0VIVuk5yg in the old base)',
+  MASTER_CONTACTS: 'Master Contacts — not present in appxd2l3BXJAdTWSQ (was tblN8XIy0s5oOqWAL in the old base)',
 };
 
 // The API key lives here too, so "is Airtable configured at all" is one question
@@ -93,6 +129,6 @@ function authHeaders(extra = {}) {
 }
 
 module.exports = {
-  BASE_ID, DEFAULT_BASE_ID, TABLE, API_KEY,
+  BASE_ID, DEFAULT_BASE_ID, TABLE, ABSENT_TABLES, API_KEY,
   isConfigured, recordsUrl, recordUrl, authHeaders,
 };

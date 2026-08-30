@@ -113,13 +113,32 @@ async function pushStage(founder, stage, opts = {}) {
   if (!recordId) return { skipped: 'no_airtable_record' };
   if (!vocab.isStage(stage)) return { skipped: 'not_a_valid_stage', stage };
 
+  // `Pipeline Stage` is a FORMULA in the authorized base — patching it is a 422.
+  // Every drag has to be decomposed back into the axis that produced it, which is
+  // what stageWriteFor owns. This used to send `{ [FIELD.ADMISSION_STATUS]: stage }`;
+  // that key no longer exists in the new base's vocabulary, so the computed
+  // property evaluated to the literal string "undefined" and every push 422'd.
+  const write = vocab.stageWriteFor(stage, { investmentStatus: founder.deal_status });
+  if (!write) return { skipped: 'not_a_valid_stage', stage };
+
+  // The precedence trap: Investment Status wins over Resident Status in the
+  // formula. Writing a resident stage onto a row that already carries an
+  // investment status changes the stored cell but NOT the stage the board shows.
+  // Returning { pushed: true } there would tell Danny his drag landed while the
+  // card visibly sat still, which is the exact class of lie this codebase keeps
+  // producing. Refuse instead, and name what is shadowing it.
+  if (write.shadowed) {
+    return { skipped: 'shadowed_by_investment_status', stage, shadowedBy: write.shadowedBy };
+  }
+
   const patch = opts.patch || patchAirtableRecord;
+  const fieldLabel = write.axis === 'investment' ? 'Investment Status' : 'Resident Status';
   try {
-    await patch(vocab.FOUNDER_TABLE, recordId, { [vocab.FIELD.ADMISSION_STATUS]: stage });
-    logSync(founder.id, 'founder_ecosystem', 'Admission Status', founder.stage_status, stage, recordId, 'success', null);
-    return { pushed: true, stage };
+    await patch(vocab.FOUNDER_TABLE, recordId, { [write.field]: write.value });
+    logSync(founder.id, 'pipeline', fieldLabel, founder.stage_status, stage, recordId, 'success', null);
+    return { pushed: true, stage, field: write.field, value: write.value, axis: write.axis };
   } catch (err) {
-    logSync(founder.id, 'founder_ecosystem', 'Admission Status', founder.stage_status, stage, recordId, 'failed', err.message);
+    logSync(founder.id, 'pipeline', fieldLabel, founder.stage_status, stage, recordId, 'failed', err.message);
     console.error(`[AirtableSync] ✗ ${founder.name} stage push failed:`, err.message);
     return { error: err.message };
   }

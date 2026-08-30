@@ -1,8 +1,39 @@
 /**
  * Airtable → Stu sync
  *
- * Airtable's "Superior Founder Ecosystem" is the team's CRM and the source of
- * truth for where a founder stands. Danny maintains it by hand. This pulls it in.
+ * Airtable's "Pipeline" table is the team's CRM and the source of truth for where
+ * a founder stands. Danny maintains it by hand. This pulls it in.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ * THE BASE CHANGED UNDER THIS FILE (2026-08-30)
+ *
+ * Stu read `appfE9DVrSUOrkkpu` / "Superior Founder Ecosystem" until Danny scoped
+ * it to `appxd2l3BXJAdTWSQ` / "Superior Studios Ecosystem". Not a wider grant — a
+ * cutover: the two PATs are disjoint, so the old base is now unreadable, and its
+ * name in Danny's own workspace is "[OLD] Superior Studios Ecosystem".
+ *
+ * Every field name this file read changed, and so did the shape of the funnel:
+ *
+ *   Company Name          → Company / Founder      (and it is the PRIMARY field)
+ *   Founder Name          → Founder                (blank on 24 of 205 rows)
+ *   Company One-Liner     → One-liner
+ *   Company Website       → Website
+ *   Current Stage         → Stage
+ *   Next Step Description → Next Step
+ *   Next Action / Notes   → Touchpoint Notes
+ *   Pipeline              → Track
+ *   Source                → Sourced By  (see FIELD OWNERSHIP — the false friend resolved)
+ *   Previous Companies    → GONE. No equivalent exists.
+ *   Admission Status      → SPLIT into `Investment Status` + `Resident Status`,
+ *                           composed by a read-only `Pipeline Stage` formula.
+ *
+ * That last one is the substantive change. The old base fused residency and
+ * investment into one string ("Stage 3: Evaluating (Investment + Resident)"); the
+ * new base keeps them as independent axes, either of which may be blank. Stu
+ * already had columns for exactly this — `resident_status` (empty until now) and
+ * `deal_status` (already spelling 'Under Consideration' / 'Passed' in Airtable's
+ * own words) — so the two axes land in them directly, and `stage_status` holds the
+ * composed stage the board sorts on. See lib/airtableVocab.
  *
  * ══════════════════════════════════════════════════════════════════════════
  * WHY THIS FILE WAS REWRITTEN (2026-07-16)
@@ -36,17 +67,36 @@
  * FIELD OWNERSHIP — the only interesting decision here
  *
  * AUTHORITATIVE (Airtable always wins, every run, and the change is logged):
- *   the funnel facts Danny curates in Airtable and nowhere else — admission
- *   status, next step, company name, one-liner, HQ, current stage, previous
- *   companies. A BLANK Airtable cell is never authoritative: it means "unset",
- *   not "delete what Stu knows".
+ *   the funnel facts Danny curates in Airtable and nowhere else — the two status
+ *   axes, the composed stage, next step, company name, one-liner, HQ, funding
+ *   stage. A BLANK Airtable cell is never authoritative: it means "unset", not
+ *   "delete what Stu knows". That rule is enforced in the reconcile loop, and it
+ *   is why this list can safely contain fields the new base leaves empty on a
+ *   third to a half of its rows.
+ *
+ *   The rule has one edge that bit: a DEFAULT is not a blank. `stage` used to be
+ *   computed as `normalizeStage(...) || 'Pre-seed'`, so the 84 rows with no Stage
+ *   arrived as a confident 'Pre-seed' and overwrote whatever Stu knew — Seed and
+ *   Series A companies quietly demoted every morning. Blank in, blank out; the
+ *   default is gone.
  *
  * FILL-IF-EMPTY (Airtable may fill a blank, never clobber a value):
- *   email, linkedin_url, website_url, next_action, source. Stu is where Danny
- *   types, and `next_action` in particular carries context from his own pipeline
- *   dumps that has no Airtable equivalent. Overwriting it would delete his work.
- *   `source` is here because Stu's and Airtable's are false friends — Stu's says
- *   WHO ("Danny Goodman"), Airtable's says the CHANNEL ("Outbound").
+ *   email, linkedin_url, website_url, next_action. Stu is where Danny types, and
+ *   `next_action` in particular carries context from his own pipeline dumps that
+ *   has no Airtable equivalent. Overwriting it would delete his work.
+ *
+ *   `source` moved OUT of this bucket and into AUTHORITATIVE, because the false
+ *   friend that put it here is gone. The old base had one `Source` column holding
+ *   the CHANNEL ("Outbound", "Founder Referral") while Stu's `source` holds WHO
+ *   ("Danny Goodman") — same word, different question, so Airtable's answer was
+ *   refused. The new base asks both questions separately: `Source Channel` is the
+ *   channel and `Sourced By` is the person. Stu's `source` now reads `Sourced By`,
+ *   which is finally the same question.
+ *
+ * DROPPED: previous_companies. The authorized base has no such field on any of
+ *   its 205 rows. It stays a Stu-owned column that Airtable simply never speaks
+ *   to; leaving it in AUTHORITATIVE would have been harmless only by accident of
+ *   the blank rule, and silently dead is how the last three bugs here started.
  *
  * UNIONED: pipeline_tracks. Airtable can add a founder to a board; only Danny
  *   takes one off. See mergeTracks().
@@ -268,6 +318,49 @@ function desiredFrom(f) {
   };
 }
 
+// Every Airtable field name the read path depends on. Kept as one list so the
+// preflight and the reader cannot drift: if you add an `f['Something']` below,
+// add it here or the guard is lying about what it checked.
+//
+// Deliberately NOT derived by grepping this file at runtime — the point is to
+// state the contract independently of the code, so a rename breaks the assertion
+// rather than being silently absorbed by it.
+const REQUIRED_AIRTABLE_FIELDS = [
+  'Founder Name',
+  'Company Name',
+  'Admission Status',
+  'Next Step Description',
+  'Pipeline',
+];
+
+/**
+ * Returns an error string if the fetched records don't carry the fields this
+ * importer reads, or null if the schema looks right.
+ *
+ * Checked against the UNION of keys across all records, not any single one:
+ * Airtable omits empty cells from the REST payload entirely, so a field that is
+ * blank on one row is simply absent there. Only a name absent from EVERY row is
+ * evidence the field does not exist.
+ */
+function checkSchema(records) {
+  if (!records.length) return null;   // nothing fetched is a different problem
+
+  const seen = new Set();
+  for (const r of records) for (const k of Object.keys(r.fields || {})) seen.add(k);
+
+  const missing = REQUIRED_AIRTABLE_FIELDS.filter(f => !seen.has(f));
+  if (!missing.length) return null;
+
+  const { BASE_ID } = require('../lib/airtableBase');
+  return (
+    `Airtable base ${BASE_ID} is missing ${missing.length} field(s) this importer reads: ` +
+    `${missing.map(m => `"${m}"`).join(', ')}. Refusing to run rather than silently ` +
+    `importing nothing. If the base was changed on purpose, update desiredFrom() and ` +
+    `REQUIRED_AIRTABLE_FIELDS in services/airtable-import.js together. ` +
+    `Fields actually present: ${[...seen].sort().join(', ')}`
+  );
+}
+
 function logChange(founderId, field, oldValue, newValue, recordId) {
   try {
     db.prepare(`
@@ -295,6 +388,27 @@ async function syncFromAirtable(opts = {}) {
 
   const records = await fetchAirtable(FOUNDER_TABLE);
   console.log(`[AirtableImport] Fetched ${records.length} records from Airtable${dryRun ? ' (DRY RUN)' : ''}`);
+
+  // ── SCHEMA PREFLIGHT ──
+  // The read path below addresses Airtable by FIELD NAME, and the 2026-08-30 base
+  // cutover renamed almost all of them. A name that does not exist reads
+  // `undefined`, which is indistinguishable from an empty cell — so a base with the
+  // wrong schema does not error, it quietly agrees with everything.
+  //
+  // Specifically: `Founder Name` is gone (it is `Founder` now), so every record
+  // fails the blank-name check on the next loop and the run reports
+  // "0 imported, 0 updated, 205 skipped" — a clean bill of health for a sync that
+  // read nothing. That is the same class of bug as the "skipped/discarded" one this
+  // file was rewritten to kill, and a silent no-op on the CRM feeding the whole
+  // board is worse than a crash. So: verify the names are really there, and refuse
+  // loudly if they are not.
+  const schemaError = checkSchema(records);
+  if (schemaError) {
+    console.error(`[AirtableImport] ✗ ${schemaError}`);
+    const err = new Error(schemaError);
+    err.code = 'AIRTABLE_SCHEMA_MISMATCH';
+    throw err;
+  }
 
   let imported = 0, updated = 0, unchanged = 0, skipped = 0;
   const changes = [];
