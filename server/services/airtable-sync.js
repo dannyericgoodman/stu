@@ -9,15 +9,18 @@ const https = require('https');
 const db = require('../db');
 const { stuAdmissionsToAirtable, stuDealToAirtable } = require('./stage-mapping');
 
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const BASE_ID = 'appfE9DVrSUOrkkpu';
-const FOUNDER_TABLE = 'tblWkJzy5qpw7FP2M';
-const DEAL_TABLE = 'tblCWTVyowHgp4YuR';
+// This is the only module in Stu that WRITES to Airtable, so it is the one that
+// most needs its target to be unambiguous. Base id, table ids and key come from
+// lib/airtableBase; recordUrl refuses to address a table that isn't in scope.
+const { TABLE, recordUrl, API_KEY: AIRTABLE_API_KEY } = require('../lib/airtableBase');
+
+const FOUNDER_TABLE = TABLE.FOUNDERS;
+const DEAL_TABLE = TABLE.DEALS;
 
 function patchAirtableRecord(tableId, recordId, fields) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({ fields });
-    const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${tableId}/${recordId}`);
+    const url = recordUrl(tableId, recordId);
 
     const req = https.request({
       hostname: url.hostname,

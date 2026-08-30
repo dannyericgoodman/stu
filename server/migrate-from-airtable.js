@@ -23,16 +23,14 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const BASE_ID = 'appfE9DVrSUOrkkpu';
+const { TABLE, recordsUrl, authHeaders } = require('./lib/airtableBase');
 
 function fetchAirtable(tableId) {
   return new Promise((resolve, reject) => {
     const records = [];
     function fetchPage(offset) {
-      let url = `https://api.airtable.com/v0/${BASE_ID}/${tableId}?pageSize=100`;
-      if (offset) url += `&offset=${offset}`;
-      const req = https.get(url, { headers: { 'Authorization': `Bearer ${AIRTABLE_API_KEY}` } }, (res) => {
+      const url = recordsUrl(tableId, { pageSize: 100, offset: offset || undefined });
+      const req = https.get(url, { headers: authHeaders() }, (res) => {
         let body = '';
         res.on('data', chunk => body += chunk);
         res.on('end', () => {
@@ -64,8 +62,8 @@ try {
 async function runMigration() {
 if (!founders || !deals) {
   console.log('Fetching data from Airtable API...');
-  founders = await fetchAirtable('tblWkJzy5qpw7FP2M');
-  deals = await fetchAirtable('tblCWTVyowHgp4YuR');
+  founders = await fetchAirtable(TABLE.FOUNDERS);
+  deals = await fetchAirtable(TABLE.DEALS);
 }
 
 console.log(`Loaded ${founders.length} founders and ${deals.length} deals from Airtable.\n`);

@@ -27,9 +27,11 @@ const https = require('https');
 const db = require('../db');
 const { verifyIlTie } = require('../lib/ilTie');
 
-const BASE_ID = 'appfE9DVrSUOrkkpu';
-const TALENT_DB = 'tblyt6dR0VIVuk5yg';
-const MASTER_CONTACTS = 'tblN8XIy0s5oOqWAL';
+// Base and table ids come from lib/airtableBase, not from a literal re-typed here.
+const { TABLE, recordsUrl } = require('../lib/airtableBase');
+
+const TALENT_DB = TABLE.TALENT;
+const MASTER_CONTACTS = TABLE.MASTER_CONTACTS;
 
 // A row is warm only if its provenance is a real touchpoint. Everything the old
 // engine wrote back carries this exact string — the one value we exclude.
@@ -68,8 +70,7 @@ function fetchTable(tableId, apiKey) {
   return new Promise((resolve, reject) => {
     const rows = [];
     function page(offset) {
-      let url = `https://api.airtable.com/v0/${BASE_ID}/${tableId}?pageSize=100`;
-      if (offset) url += `&offset=${offset}`;
+      const url = recordsUrl(tableId, { pageSize: 100, offset: offset || undefined });
       https.get(url, { headers: { Authorization: `Bearer ${apiKey}` } }, (res) => {
         let b = '';
         res.on('data', (d) => (b += d));

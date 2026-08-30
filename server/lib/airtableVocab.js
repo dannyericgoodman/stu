@@ -19,8 +19,13 @@
 // this cannot rot quietly.
 // ══════════════════════════════════════════════════════════════════════════
 
-const BASE_ID = 'appfE9DVrSUOrkkpu';
-const FOUNDER_TABLE = 'tblWkJzy5qpw7FP2M';
+// The header above says "the ONLY copy," and for the VALUES below that was true.
+// It was not true of the ADDRESS: this file declared the base and table literals,
+// and so did five other files. That half now lives in lib/airtableBase and is
+// re-exported here, so existing importers keep working and the claim stops being
+// aspirational.
+const { BASE_ID, TABLE } = require('./airtableBase');
+const FOUNDER_TABLE = TABLE.FOUNDERS;
 
 // Field ids, so a rename in Airtable's UI doesn't break the write path.
 const FIELD = {
