@@ -53,6 +53,10 @@ const ALLOWED = new Set([
   'talent_matches',
   'talent_portfolio_companies',
   'talent_criteria',
+  // Decks, call notes and filings. Also absent from the original snapshot, and the
+  // reason "Evaluate a Founder" had no targets: readTargets requires a company_sources
+  // row with content_text, and there were none to require.
+  'company_sources',
 ]);
 
 function tokenOk(header) {
