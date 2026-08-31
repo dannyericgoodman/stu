@@ -143,14 +143,24 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
   let persisted = 0, watchlisted = 0;
   if (persist) {
     const insert = db.prepare(`INSERT INTO sourced_founders
-      (user_id, name, company, role, headline, linkedin_url, website_url, source, status, builder_signals, signal_captured_at, unicorn_score, enrichment, company_one_liner, chicago_connection, location_type, list_scope, breakout_score, breakout_signals)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      (user_id, name, company, role, headline, linkedin_url, website_url, source, status, builder_signals, signal_captured_at, unicorn_score, enrichment, raw_data, company_one_liner, chicago_connection, location_type, list_scope, breakout_score, breakout_signals)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const persistRows = db.transaction((rows, scope) => {
       let n = 0;
       for (const p of rows) {
         try {
           if (isDupe(p)) continue;
+          const evidenceText = p.bio || p._evidence || '';
           const enr = JSON.stringify({ summary: p.summary || null, why: p.why || null, contactability: p.contactability || null, evidence: p._evidence || null });
+          // lib/founderFit.profileText() — the ONE reader for every downstream ranking
+          // decision — pulls bio text from raw_data/enriched_data/linkedin_data. It has
+          // never read `enrichment` (a different column, written above). So every
+          // connector's evidence text — the bio a page fetch actually returned — was
+          // being persisted somewhere the rubric could never see it: fitIndex scored
+          // these rows against headline + company_one_liner alone, nothing else. Same
+          // {headline, text} shape sourcing-engine.js's INSERT already uses, so this is
+          // the one place profileText() looks, not a second copy of the convention.
+          const rawData = evidenceText ? JSON.stringify({ headline: p.headline || null, text: evidenceText }) : null;
           // location_type is what the Pipeline/queue display filter reads (VALID_TIE_TYPES);
           // write the verified IL tie type so IL-tied cohort/YC founders actually surface.
           const tieType = (p.tie && p.tie.type && p.tie.type !== 'broad') ? p.tie.type : null;
@@ -164,7 +174,7 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
           // right after this — with structured LinkedIn employment instead of a blob.
           insert.run(userId, p.name || p.company || 'Unknown', p.company || null, p.role || null, p.headline || null,
             p.linkedin_url || null, p.website_url || null, c.key, JSON.stringify([c.emits]),
-            p.unicorn_score ?? null, enr, p.why || null, p.chicago_connection || null, tieType, scope,
+            p.unicorn_score ?? null, enr, rawData, p.why || null, p.chicago_connection || null, tieType, scope,
             null, null);
           n++;
         } catch { /* skip dupes/bad rows */ }
