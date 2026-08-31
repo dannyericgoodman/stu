@@ -18,6 +18,7 @@
 const db = require('../db');
 const https = require('https');
 const { MODEL } = require('../lib/providerKeys');
+const { hasDisqualifyingFlag } = require('../lib/redFlags');
 
 // ── API Clients ──
 
@@ -590,18 +591,6 @@ function reconcileCaliber(det, llmTier, llmScore) {
   if (score < lo) score = lo;
   if (score > hi) score = hi;
   return { tier, score };
-}
-
-// Red flags that hard-clamp relevance to a pass and cap caliber.
-const DISQUALIFYING_FLAGS = [
-  'student', 'recruiter', 'consultant', 'service provider', 'agency',
-  'job seeker', 'job-seeker', 'no commercial', 'series a', 'series b',
-  'fractional', 'coach', 'advisor only',
-];
-function hasDisqualifyingFlag(redFlags = []) {
-  return (redFlags || []).some(rf =>
-    DISQUALIFYING_FLAGS.some(d => String(rf).toLowerCase().includes(d))
-  );
 }
 
 // ── FOUNDER GATE ──

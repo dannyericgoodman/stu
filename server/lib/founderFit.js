@@ -38,6 +38,8 @@
 // a receipt.
 // ══════════════════════════════════════════════════════════════════════════
 
+const { hasDisqualifyingFlag, parseRedFlags } = require('./redFlags');
+
 // ── Text plumbing ──
 function normText(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -451,6 +453,27 @@ function assessAcademic(text, ctx = {}, row = {}) {
   return { academic: true, evidence: m ? m[0].trim() : 'academic profile, no operating evidence' };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// DISQUALIFYING FLAGS — the gate the scoring pass already enforces, wired in.
+//
+// pipeline/sourcing-engine.js's LLM scoring pass computes red_flags[] and checks it
+// with hasDisqualifyingFlag() against a fixed list (student, recruiter, consultant,
+// service provider, agency, job seeker, no commercial, series a/b, fractional, coach,
+// advisor only) — clamping confidence_score/caliber_tier when it fires (STU-34/35).
+// That never reached this rubric, so a row the scoring pass had already flagged as
+// "not a fundable founder" could still land must-meet here.
+//
+// red_flags is STRUCTURED and already enforced elsewhere — not narrative prose like
+// score_rationale/confidence_rationale, which profileText() deliberately excludes
+// (see the comment above profileText). So this is a hard gate, same shape as the
+// stage/lifestyle/academic gates, not a text signal fed into a marker.
+// ══════════════════════════════════════════════════════════════════════════
+function assessDisqualifyingFlags(row = {}) {
+  const flags = parseRedFlags(row.red_flags);
+  if (!flags.length || !hasDisqualifyingFlag(flags)) return { disqualified: false };
+  return { disqualified: true, evidence: flags.join('; ') };
+}
+
 const MARKERS = [
   {
     key: 'prior_exit',
@@ -838,12 +861,15 @@ function evaluate(row) {
   const venture = assessVentureScale(text, ctx, row);
   // Academic-with-no-operating-evidence gate. See assessAcademic above.
   const academic = assessAcademic(text, ctx, row);
+  // Already-computed disqualifier from the scoring pass. See assessDisqualifyingFlags above.
+  const disq = assessDisqualifyingFlags(row);
 
-  const meetWorthy = !stage.tooLate && !venture.lifestyle && !academic.academic && coreMarkers.length > 0;
-  // Past-earliest founders keep a residual score (so the board can still show them,
-  // sorted below), but they can never sit among the earliest-stage names Danny is
-  // hunting for. Multiply, don't zero, so ranking within the excluded set is stable.
-  const priority = stage.tooLate ? Math.round(markerScore * 0.1) : markerScore;
+  const meetWorthy = !stage.tooLate && !venture.lifestyle && !academic.academic && !disq.disqualified && coreMarkers.length > 0;
+  // Past-earliest / disqualified founders keep a residual score (so the board can
+  // still show them, sorted below), but they can never sit among the earliest-stage
+  // names Danny is hunting for. Multiply, don't zero, so ranking within the excluded
+  // set is stable.
+  const priority = (stage.tooLate || disq.disqualified) ? Math.round(markerScore * 0.1) : markerScore;
 
   // Tier only applies to meet-worthy founders — the gates come first.
   const { tier, reason } = meetWorthy ? tierOf(coreMarkers) : { tier: null, reason: null };
@@ -860,6 +886,8 @@ function evaluate(row) {
     lifestyleEvidence: venture.evidence || null,
     academic: academic.academic,
     academicEvidence: academic.evidence || null,
+    disqualified: disq.disqualified,
+    disqualifiedEvidence: disq.evidence || null,
     markers,
     coreMarkerCount: coreMarkers.length,
     why: markers.map((m) => m.label),
@@ -878,11 +906,11 @@ function evaluate(row) {
 // re-scores anything carried at an older version, so a rubric edit self-heals on the
 // next nightly scout instead of needing someone to remember.
 // ══════════════════════════════════════════════════════════════════════════
-const RUBRIC_VERSION = '2026-08-28.evidence-check.3';
+const RUBRIC_VERSION = '2026-08-31.red-flag-gate.1';
 
 module.exports = {
   RUBRIC_VERSION,
   evaluate, markersFor, classifyStage, tierOf, profileText, verbatimIn, assessMarketFit,
-  assessAcademic, assessVentureScale,
+  assessAcademic, assessVentureScale, assessDisqualifyingFlags,
   MARKERS, HYPERSCALERS, IL_ELITE_SCHOOLS, PEDIGREE_KEYS, DOMAINS,
 };

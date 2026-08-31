@@ -154,6 +154,51 @@ test('an empty profile yields nothing — no marker without a source', () => {
   assert.equal(v.tier, null);
 });
 
+// ── DISQUALIFYING FLAGS — wired in from the scoring pass (STU-35) ──
+// sourcing-engine.js's LLM scoring pass already computes red_flags[] and clamps
+// confidence/caliber when hasDisqualifyingFlag() fires. That never reached this
+// rubric — a founder the scoring pass had already flagged as "a service provider,
+// not a founder" or "no founding signal" could still land must-meet here.
+test('a red-flagged service provider cannot be meet-worthy, even with strong markers', () => {
+  // The Marcy Capron shape: caliber-clamped as a service provider, but the profile
+  // text alone carries a real core marker (prior exit).
+  const v = ff.evaluate({
+    raw_data: JSON.stringify({ bio: 'Founder, sold my last company. Building in stealth.' }),
+    red_flags: JSON.stringify(['a multi-service consultancy... a service provider, not a founder']),
+  });
+  assert.equal(v.disqualified, true);
+  assert.equal(v.meetWorthy, false, 'a disqualifying flag must override the markers');
+  assert.equal(v.tier, null);
+});
+
+test('a red-flagged non-commercial idea cannot be meet-worthy even with a YC badge', () => {
+  const v = ff.evaluate({
+    raw_data: JSON.stringify({ bio: 'YC alum. Building in stealth.' }),
+    red_flags: JSON.stringify(['no commercial evidence, thin founding signal']),
+  });
+  assert.equal(v.disqualified, true);
+  assert.equal(v.meetWorthy, false);
+});
+
+test('a disqualified founder keeps a residual score, never the full marker score', () => {
+  const clean = ff.evaluate({ raw_data: JSON.stringify({ bio: 'YC alum. Founder, sold my last company. Building in stealth.' }) });
+  const flagged = ff.evaluate({
+    raw_data: JSON.stringify({ bio: 'YC alum. Founder, sold my last company. Building in stealth.' }),
+    red_flags: JSON.stringify(['series a']),
+  });
+  assert.ok(flagged.priority < clean.priority, 'a disqualified row must never outrank the same row unflagged');
+  assert.ok(flagged.priority > 0 || clean.markerScore === 0, 'residual, not zeroed, so ordering within the excluded set stays stable');
+});
+
+test('an empty or non-disqualifying red_flags array does not gate anything', () => {
+  const empty = ff.evaluate({ raw_data: JSON.stringify({ bio: 'YC alum. Founder, sold my last company. Building in stealth.' }), red_flags: '[]' });
+  assert.equal(empty.disqualified, false);
+  assert.equal(empty.meetWorthy, true);
+
+  const benign = ff.evaluate({ raw_data: JSON.stringify({ bio: 'YC alum. Founder, sold my last company. Building in stealth.' }), red_flags: JSON.stringify(['thin evidence base, worth a second look']) });
+  assert.equal(benign.disqualified, false, 'only the fixed disqualifying-flag list should gate — not any red flag at all');
+});
+
 // ── VENTURE-SCALE, NOT LIFESTYLE ──
 // Danny: "I don't want to source people who started consulting firms or an agency or
 // something" — but fintech/health/logistics/defense stay. Catches the CLEAR cases;
