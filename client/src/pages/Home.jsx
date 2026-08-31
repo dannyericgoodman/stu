@@ -220,15 +220,21 @@ export default function Home() {
           )}
         </div>
 
-        {/* ── 2. THIS MORNING'S FOUNDERS ── the ranked list, capped.
+        {/* ── 2. THE AGENTS ── directly under the to-do list.
+            Danny, 2026-08-31: "This box should really be the item under my to-do
+            list (Your List) and before This Morning." The order encodes the morning:
+            what you owe people, then what you can set running while you read, then
+            the founders to read. Starting a scout takes a click and finishes without
+            you, so it belongs BEFORE the list that takes twenty minutes of attention
+            — not after it, where you would reach it having already spent them. */}
+        <Agents data={agents} note={note} onClearNote={() => setNote(null)} onRun={dispatch} nav={nav} />
+
+        {/* ── 3. THIS MORNING'S FOUNDERS ── the ranked list, capped.
             Danny: "a full funnel inbox of top founder candidates as well as a
             prioritized, ranked list — both updated in the morning before I wake up."
             The inbox lives on Source and holds everything that cleared the gates.
             This is the short one: the handful worth his attention today. */}
         <Shortlist data={shortlist} nav={nav} />
-
-        {/* ── 3. THE AGENTS ── */}
-        <Agents data={agents} note={note} onClearNote={() => setNote(null)} onRun={dispatch} nav={nav} />
 
         {/* ── 4. WHAT NEEDS HIM ── only rows that are a task. */}
         <div className="border border-line-2 rounded-md bg-ground mb-4">

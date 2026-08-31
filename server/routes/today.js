@@ -163,19 +163,25 @@ router.get('/agents', (req, res) => {
   `).all(uid);
 
   // ── Read targets: companies with materials on file and no completed read ──
+  // Materials-bearing companies FIRST, because a deck is the best input the panel can
+  // get. But "no documents" is not the same as "nothing to evaluate": the panel
+  // researches public data and returns an honest INDETERMINATE when the evidence is
+  // thin, which is a useful answer and the behaviour it was built for. Gating the
+  // whole agent on company_sources meant that a fresh install — or a migration that
+  // did not carry that table — showed a permanently dead row with no way to act.
+  // So: documents rank first, everyone else is offered and labelled for what it is.
   const readTargets = db.prepare(`
     SELECT f.id, f.company, f.name,
            (SELECT COUNT(*) FROM company_sources cs
              WHERE cs.founder_id = f.id AND cs.content_text IS NOT NULL) AS materials
     FROM founders f
     WHERE f.created_by = ? AND f.is_deleted = 0
-      AND EXISTS (SELECT 1 FROM company_sources cs
-                   WHERE cs.founder_id = f.id AND cs.content_text IS NOT NULL)
+      AND (f.company IS NOT NULL AND TRIM(f.company) <> '')
       AND NOT EXISTS (SELECT 1 FROM opportunity_assessments a
                        WHERE a.founder_id = f.id AND a.is_deleted = 0
                          AND a.status IN ('complete','partial')
                          AND a.assessment_type = 'assessment')
-    ORDER BY f.updated_at DESC, f.id DESC
+    ORDER BY materials DESC, f.updated_at DESC, f.id DESC
     LIMIT 25
   `).all(uid);
 
@@ -210,7 +216,7 @@ router.get('/agents', (req, res) => {
       },
       {
         kind: 'read',
-        label: 'Run a read',
+        label: 'Evaluate a Founder',
         detail: 'Put one company through the nine-lens panel',
         needs_target: true,
         running: runningReads.map((r) => ({
@@ -220,14 +226,16 @@ router.get('/agents', (req, res) => {
         targets: readTargets.map((t) => ({
           id: t.id,
           label: t.company || t.name,
-          detail: `${t.materials} ${t.materials === 1 ? 'document' : 'documents'} on file`,
+          detail: t.materials
+            ? `${t.materials} ${t.materials === 1 ? 'document' : 'documents'} on file`
+            : 'no documents — public data only',
         })),
         // Named so the empty state can be honest about WHY it is empty.
-        empty_reason: 'No company has materials on file without a read. Add a deck or call notes to a card first.',
+        empty_reason: 'Every company on your board already has a read. Add a founder from Source to evaluate one.',
       },
       {
         kind: 'hiring',
-        label: 'Source candidates',
+        label: 'Portfolio Sourcing',
         detail: 'Find people for one open role at a portfolio company',
         needs_target: true,
         running: runningHiring.map((r) => ({

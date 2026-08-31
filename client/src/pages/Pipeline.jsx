@@ -172,7 +172,12 @@ export default function Pipeline() {
   const [params, setParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'kanban');
+  // Default to the flat bank, not the Airtable-shaped board. Danny tracks deal
+  // progress in Airtable; what he wants HERE is the list of founders he picked out of
+  // Source, in one place, so he can keep track of them. A kanban mirroring someone
+  // else's stage vocabulary is a second copy of a system that already exists — and a
+  // second copy is a thing to drift. An existing saved preference still wins.
+  const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'list');
   // '' = the whole board. There is one board now; Investment/Resident narrow it.
   const [track, setTrack] = useState('');
   const [q, setQ] = useState('');

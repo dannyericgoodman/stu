@@ -200,7 +200,19 @@ router.get('/', (req, res) => {
   // nobody identified them — and it is exactly the pipeline inflation Danny refuses
   // to let this product do. Untriaged sourcing output belongs in Sourcing.
   // `?all=1` still returns them, so nothing is hidden, only un-promoted.
-  if (req.query.all !== '1') out = out.filter((r) => !!r.stage_status);
+  //
+  // 2026-08-31 — THE BANK. Danny: "instead of the kanban to mimic my Airtable, it
+  // should be its own bank of the founders I like (and hit add) for in Source. So I
+  // can keep track of them. And then move candidates I speak to into Airtable on my
+  // own." A founder he APPROVED out of the sourcing inbox is a founder he chose, and
+  // choosing is the act this board should record — whether or not Airtable has caught
+  // up and given the row a stage yet. Requiring stage_status meant every Add he made
+  // in Source vanished until Airtable was updated, which is exactly backwards: Stu is
+  // where the choosing happens, Airtable is where the deal-making is tracked.
+  //
+  // sourced_from_id is the durable mark of that approval — untriaged scout output has
+  // none, so this still cannot inflate the board with rows nobody looked at.
+  if (req.query.all !== '1') out = out.filter((r) => !!r.stage_status || !!r.sourced_from_id);
 
   // ── ONE CARD PER COMPANY ──
   // Danny: "Eric Mills and Scott Nelson are both showing for Permute, and Kyle
