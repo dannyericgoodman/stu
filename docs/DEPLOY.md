@@ -118,9 +118,23 @@ migration path if the team moves bases.
   for when there is no shell on the target. Requires a `RESTORE_TOKEN` route that is only
   mounted while that env var is set. Set it, push, then delete the variable.
 
-Both restore paths cover founders, assessments + inputs, notes, memos and call logs. They
-deliberately **do not** restore the sourcing inbox — read the header of
-`restore-snapshot.js` before changing that; the reasoning matters.
+Both restore paths cover founders, assessments + inputs, notes, memos and call logs.
+`push-snapshot.js` additionally restores the **sourcing inbox** (`sourced_founders`);
+`restore-snapshot.js` still skips it.
+
+The inbox is a judgement call, not an oversight. The API crawl could not capture
+`raw_data`, `enriched_data` or `linkedin_data` — the blobs `lib/founderFit` reads to
+compute markers — so a re-score of restored rows will mis-rank them until LinkedIn
+enrichment backfills those blobs. What it *does* capture is 26 of 28 fields, including
+`caliber_tier`, `caliber_score`, the signal sets and `chicago_connection`: everything the
+Source board reads to render and filter. An inbox that is read-only-accurate beats an
+empty one, which is why this changed on 2026-08-31.
+
+**If you restore the inbox, stamp `user_id`.** The snapshot has no such field (the read
+API never exposed it) and the inbox query is
+`WHERE user_id = ? AND status IN ('pending','starred') AND list_scope = ?`. Rows inserted
+without it are invisible to every user — which is indistinguishable from the restore
+having silently done nothing. `push-snapshot.js --owner=<id>` handles this, defaulting to 1.
 
 ---
 

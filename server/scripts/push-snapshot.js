@@ -95,6 +95,38 @@ async function pushRows(table, rows, { skip = [], batch = 50 } = {}) {
     for (const [kind, rows] of Object.entries(buckets)) await pushRows(tableFor[kind], rows, { batch: 50 });
   }
 
+  // ── 3b. The sourcing inbox ──
+  // Skipped by restore-snapshot.js on purpose (the ranker's blobs did not survive the
+  // API crawl), but an empty inbox is a worse outcome than a read-only one: 26 of the
+  // 28 captured fields DO land, including caliber tier/score, the signal sets and the
+  // Chicago connection, which is everything the Source board reads to render and filter.
+  // What is missing is raw_data/enriched_data/linkedin_data, so a RE-SCORE of these rows
+  // would mis-rank them until LinkedIn enrichment backfills the blobs.
+  //
+  // user_id is stamped here because the snapshot has no such field — the read API never
+  // exposed it — and the inbox query filters on it. Without this every restored row is
+  // invisible to every user, which is indistinguishable from the restore doing nothing.
+  const iDir = path.join(dir, 'inbox');
+  if (fs.existsSync(iDir)) {
+    const ownerId = Number((args.find((a) => a.startsWith('--owner=')) || '--owner=1').split('=')[1]);
+    const rows = [];
+    for (const f of fs.readdirSync(iDir)) {
+      if (!/\.json$/.test(f)) continue;
+      const raw = readJson(path.join(iDir, f));
+      // Derived read-model fields with no column behind them.
+      for (const r of listOf(raw, 'rows', 'inbox', 'candidates')) {
+        const { is_new, fit, ...flat } = r;
+        rows.push({ ...flat, user_id: r.user_id ?? ownerId });
+      }
+    }
+    // The crawl paginated with overlapping windows; dedupe by id so a row is not
+    // counted twice in the reported total.
+    const byId = new Map();
+    for (const r of rows) byId.set(r.id, r);
+    console.log(`  inbox: ${byId.size} unique rows (from ${rows.length} across pages), owner=${ownerId}`);
+    await pushRows('sourced_founders', [...byId.values()], { batch: 50 });
+  }
+
   // ── 4. Make the owner account reachable, then report ──
   const admin = await post('/reset-admin', {});
   console.log(`  admin password reset for ${admin.email}`);

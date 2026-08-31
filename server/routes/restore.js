@@ -35,6 +35,12 @@ const ALLOWED = new Set([
   'founder_notes',
   'founder_memos',
   'call_logs',
+  // The sourcing inbox. Restoring it needs user_id stamped on every row (the inbox
+  // query is `WHERE user_id = ? AND status IN (...) AND list_scope = ?`), and the
+  // snapshot does not carry that column — the read API never exposed it. Rows
+  // inserted without it are invisible to every user, which looks exactly like the
+  // restore silently doing nothing.
+  'sourced_founders',
 ]);
 
 function tokenOk(header) {
@@ -112,6 +118,52 @@ router.post('/reset-admin', (req, res) => {
   if (!row) return res.status(404).json({ error: 'owner user #1 does not exist' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = 1').run(bcrypt.hashSync(pw, 10));
   res.json({ ok: true, email: row.email });
+});
+
+// ── GET /api/restore/diagnostics ──
+// Read-only. Exists because debugging a host you cannot log into means guessing, and
+// guessing is what turns a ten-minute fix into an afternoon. Reports the three things
+// that actually explain a "my data is gone" report: what rows exist, WHO owns them
+// (a board filtered by created_by looks empty when you are signed in as user 2), and
+// what the scout has been doing.
+router.get('/diagnostics', (req, res) => {
+  const out = { counts: {}, users: [], sourcing_runs: [], inbox_by_user: [] };
+
+  const TABLES = [
+    'founders', 'opportunity_assessments', 'assessment_inputs', 'founder_notes',
+    'founder_memos', 'call_logs', 'sourced_founders', 'users', 'decisions', 'commitments',
+  ];
+  for (const t of TABLES) {
+    try {
+      const r = db.prepare(`SELECT COUNT(*) AS c, MIN(id) AS lo, MAX(id) AS hi FROM ${t}`).get();
+      out.counts[t] = { count: r.c, minId: r.lo, maxId: r.hi };
+    } catch (e) { out.counts[t] = null; }
+  }
+
+  try { out.users = db.prepare('SELECT id, email, role, created_at, last_login FROM users ORDER BY id').all(); }
+  catch (e) { out.users = [{ error: e.message }]; }
+
+  // Ownership is the usual culprit, so report it directly rather than making the
+  // reader infer it from totals.
+  try {
+    out.founders_by_owner = db.prepare(
+      'SELECT created_by, COUNT(*) AS c, SUM(is_deleted) AS deleted FROM founders GROUP BY created_by'
+    ).all();
+  } catch (e) { out.founders_by_owner = [{ error: e.message }]; }
+
+  try {
+    out.inbox_by_user = db.prepare(
+      "SELECT user_id, list_scope, status, COUNT(*) AS c FROM sourced_founders GROUP BY user_id, list_scope, status"
+    ).all();
+  } catch (e) { out.inbox_by_user = [{ error: e.message }]; }
+
+  try {
+    out.sourcing_runs = db.prepare(
+      'SELECT id, run_at, founders_found, founders_added, founders_deduplicated, errors FROM sourcing_runs ORDER BY run_at DESC LIMIT 8'
+    ).all();
+  } catch (e) { out.sourcing_runs = [{ error: e.message }]; }
+
+  res.json(out);
 });
 
 module.exports = router;
