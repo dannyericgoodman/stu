@@ -41,6 +41,18 @@ const ALLOWED = new Set([
   // inserted without it are invisible to every user, which looks exactly like the
   // restore silently doing nothing.
   'sourced_founders',
+  // Hiring + Talent. These were never in the original snapshot — snapshot-prod.js
+  // crawled founders, assessments and the inbox and never touched these routes, so
+  // the migration silently left both products empty. Recovered separately on
+  // 2026-08-31 while the old host was still reachable by IP.
+  'hiring_roles',
+  'hiring_candidates',
+  'hiring_matches',
+  'talent_roles',
+  'talent_candidates',
+  'talent_matches',
+  'talent_portfolio_companies',
+  'talent_criteria',
 ]);
 
 function tokenOk(header) {
