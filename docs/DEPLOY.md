@@ -1,6 +1,31 @@
 # Deploying Stu
 
-**Stu runs on Railway. There is one host, and this file is the reason it is that one.**
+> ## ⚠️ SUPERSEDED IN PART — 2026-08-31: Stu is moving off Railway
+>
+> The Railway account that owns production is tied to an email address nobody can sign
+> into. There is no dashboard, no CLI (the token is expired and cannot be renewed), and
+> therefore **no way to deploy to production at all.** Pushing to `origin/main` no longer
+> deploys the live site; it has not since ~2026-08-30.
+>
+> **Decision: Stu moves to Render** (`stu-psnj`, which already auto-deploys this repo).
+> The ordered migration plan lives on issue **STU-30**, document `host-migration-decision`.
+>
+> Two claims in this file are actively dangerous to trust right now:
+> * *"Pushing to `origin/main` IS a production deploy"* — **false today.** It deploys Render
+>   only. Verify per host, per deploy.
+> * *"There is one host"* — **false.** `render.yaml` was deleted but the Render service was
+>   created in the dashboard, so it survived and still builds every push.
+>
+> **Before any DNS change:** production data is reachable *only* through the `www.stu.vc`
+> CNAME (the generated `*.up.railway.app` host 404s). Repointing that record makes the only
+> copy of the database unreachable, with no undo. Run `server/scripts/snapshot-prod.js` and
+> verify its output first. `/data/backups` does not help — those backups sit on the same
+> unreachable volume.
+>
+> Everything below about **the disk, sleep, and `PIPELINE_ENABLED`** remains correct and is
+> host-independent. That is why this file is amended rather than replaced.
+
+**Stu ran on Railway. There is one host, and this file is the reason it is that one.**
 
 Until 2026-08-30 the repo carried two hosting blueprints at once — `railway.json`
 and `render.yaml`, the second with `autoDeploy: true`. Production was Railway the
