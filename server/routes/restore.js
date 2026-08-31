@@ -166,4 +166,39 @@ router.get('/diagnostics', (req, res) => {
   res.json(out);
 });
 
+// ── GET /api/restore/board ──
+// Read-only. Runs the SAME query the Pipeline board runs, plus the counts behind
+// Assess and Hiring, so "the page looks empty" can be answered with the number the
+// page itself would compute rather than by reasoning about what ought to be there.
+router.get('/board', (req, res) => {
+  const userId = Number(req.query.user || 1);
+  const out = { userId };
+
+  // The board's own WHERE clause, verbatim from routes/pipeline.js.
+  try {
+    const rows = db.prepare(
+      'SELECT id, stage, status, is_deleted, investment_amount, deal_status, admissions_status, stage_status FROM founders WHERE created_by = ? AND is_deleted = 0'
+    ).all(userId);
+    const byStage = {};
+    for (const r of rows) { const k = r.stage == null || r.stage === '' ? '(none)' : r.stage; byStage[k] = (byStage[k] || 0) + 1; }
+    out.pipeline_visible_rows = rows.length;
+    out.pipeline_by_stage = byStage;
+    out.pipeline_with_stage = rows.filter((r) => r.stage != null && r.stage !== '').length;
+  } catch (e) { out.pipeline_error = e.message; }
+
+  try {
+    out.assessments_by_status = db.prepare(
+      'SELECT assessment_type, status, COUNT(*) AS c FROM opportunity_assessments WHERE is_deleted = 0 GROUP BY assessment_type, status'
+    ).all();
+  } catch (e) { out.assessments_error = e.message; }
+
+  for (const t of ['hiring_roles', 'hiring_candidates', 'hiring_matches', 'hiring_runs',
+                   'talent_roles', 'talent_candidates', 'talent_matches', 'talent_criteria']) {
+    try { out[t] = db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c; }
+    catch (e) { out[t] = null; }
+  }
+
+  res.json(out);
+});
+
 module.exports = router;
