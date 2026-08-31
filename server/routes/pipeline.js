@@ -38,6 +38,7 @@
 // ══════════════════════════════════════════════════════════════════════════
 
 const express = require('express');
+const { pickShortlist } = require('../lib/morningList');
 const router = express.Router();
 const db = require('../db');
 const vocab = require('../lib/airtableVocab');
@@ -281,25 +282,20 @@ router.get('/shortlist', (req, res) => {
   const uid = req.user.id;
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
 
-  // When did the scout last run? Anything newer than that is "new this morning".
+  // When did the scout last run? Reported as-is, for the "scout ran Nh ago" line.
   const lastRun = db.prepare(
     `SELECT ran_at FROM job_runs WHERE job = 'nightly_scout' AND user_id = ?
       ORDER BY ran_at DESC LIMIT 1`
   ).get(uid)?.ran_at || db.prepare(`SELECT datetime('now','-1 day') AS t`).get().t;
 
   // Step 1 — pick the ids off the INDEX. No blobs touched.
-  const picked = db.prepare(`
-    SELECT id FROM sourced_founders
-     WHERE user_id = ? AND status IN ('pending','starred')
-       AND COALESCE(do_not_resurface, 0) = 0
-       AND list_scope = 'pipeline'
-       AND fit_meet = 1
-       AND COALESCE(fit_stage_late, 0) = 0
-     ORDER BY CASE fit_tier WHEN 'must-meet' THEN 2 WHEN 'strong' THEN 1 ELSE 0 END DESC,
-              COALESCE(fit_priority, 0) DESC,
-              created_at DESC
-     LIMIT ?
-  `).all(uid, limit).map((r) => r.id);
+  //
+  // Arrivals hold reserved slots, and "new" is measured against the PREVIOUS run's
+  // completion rather than this one's. Both are required before a founder sourced
+  // last night can appear here at all — lib/morningList.js has the why. Note this
+  // does NOT reuse `lastRun` above: that is this run's timestamp, which every row
+  // the run inserted predates, and comparing against it is the original bug.
+  const { ids: picked, isNew } = pickShortlist(db, uid, limit);
 
   if (!picked.length) {
     return res.json({ generated_at: new Date().toISOString(), last_run: lastRun, count: 0, founders: [], empty_reason: 'Nothing cleared the gates. That is an answer, not a failure — the scout ran and found no one new worth the top of the list.' });
@@ -337,7 +333,7 @@ router.get('/shortlist', (req, res) => {
       why: v.tierReason,
       priority: v.priority,
       stage: v.stage,
-      is_new: r.created_at >= lastRun,
+      is_new: isNew(r.id),
       signals,
       // The honest split, precomputed so the UI cannot accidentally merge them.
       quality_signals: signals.filter((x) => x.kind === 'quality').length,

@@ -810,36 +810,33 @@ app.listen(PORT, () => {
     console.log('LinkedIn enrichment scheduled (daily 12:00 PM CT — drains the backlog, then idles)');
   }
 
-  // Daily founder digest — 8:00 AM CT, every day. Emails the top under-the-radar
-  // (pre-program / high-breakout) IL founders to reach out to, ranked.
-  // Reuses the Daily Brief Gmail config.
+  // ══════════════════════════════════════════════════════════════════════
+  // THE 8:00 AM FOUNDER DIGEST EMAIL IS NOT SCHEDULED. This is deliberate.
   //
-  // Was Friday-only at 7:00 AM. A weekly send is a digest; a daily one at a fixed hour is
-  // the work queue Danny actually sources from, which is what he asked for. 8:00 CT also
-  // sits behind every upstream job that feeds it (3:45 filings, 4:30 scout, 5:45 Airtable,
-  // 6:30 talent), so the list is fully sourced and scored before it goes out.
-  {
-    const cron = require('node-cron');
-    cron.schedule('0 8 * * *', async () => {
-      console.log('[Cron] Sending daily founder digest...');
-      const { recordJobRun } = require('./services/health');
-      try {
-        const { sendFounderDigest } = require('./services/founder-digest');
-        const r = await sendFounderDigest(1, {});
-        console.log('[Cron][FounderDigest]', JSON.stringify(r));
-        // Record the outcome, not just the fact that we ran. A send failure comes back
-        // as `{ok:false}` rather than a throw, so the catch below never sees it — this
-        // job logged to console only, and console is gone on the next Railway deploy.
-        // A silent morning is exactly the failure nobody notices.
-        if (r && r.ok) recordJobRun('founder_digest', r.skipped ? 'skipped' : 'ok', r.skipped ? r.reason : `sent → ${r.recipient} (${r.count} founders)`, 1);
-        else recordJobRun('founder_digest', 'error', (r && r.error) || 'unknown error', 1);
-      } catch (e) {
-        console.error('[Cron][FounderDigest] failed:', e.message);
-        recordJobRun('founder_digest', 'error', e.message, 1);
-      }
-    }, { timezone: 'America/Chicago' });
-    console.log('Daily founder digest scheduled (8:00 AM CT)');
-  }
+  // Danny, 2026-08-31: "I don't need the newly sourced founders to be emailed to
+  // me. If they could just appear on Stu's homepage every morning that's fine."
+  //
+  // So the delivery moved to the screen he already opens. Worth recording WHY the
+  // email existed at all, because it was carrying something the homepage was not:
+  // the digest ranked a rolling 7-day window by breakout_score, while the homepage
+  // shortlist had no recency term whatsoever. The email was the ONLY surface in
+  // this product that ever showed a newly sourced founder. Deleting it on its own
+  // would have taken away his one view of new names and looked like a simplification.
+  //
+  // The homepage can only replace it because lib/morningList.js now (a) measures
+  // "new" against the previous scout run instead of the one that inserted the rows,
+  // and (b) reserves slots so arrivals are not buried under undispositioned
+  // incumbents. Both landed with this change. Do not re-point this at the homepage
+  // shortlist and re-enable a send without reading that file first.
+  //
+  // Nothing is deleted: services/founder-digest.js and its tests are intact, and
+  // POST /api/sourcing/digest still triggers a manual send. Restoring the daily
+  // email is re-adding a cron.schedule('0 8 * * *', ...) here — not a rebuild.
+  //
+  // This also retires the open question on STU-10 about founder-digest.js bypassing
+  // the Evidence Verifier: an unscheduled pipeline sends no unverified claims.
+  // ══════════════════════════════════════════════════════════════════════
+  console.log('Daily founder digest NOT scheduled — delivered on the homepage instead (Danny, 2026-08-31)');
 
   // ══════════════════════════════════════════════════════════════════════
   // THE READINESS GATE ASKED THE WRONG QUESTION FOR MONTHS.
