@@ -1,8 +1,11 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
 const { geoFilter } = require('../lib/geoFilter');
 const uspto = require('../pipeline/sources/uspto-trademark');
+const { computeCaliber } = require('../pipeline/sourcing-engine');
 
 test('geoFilter broad mode (no criteria) passes everyone', () => {
   const rows = [{ name: 'A', headline: 'Founder in Berlin' }, { name: 'B', headline: 'Founder in SF' }];
@@ -49,4 +52,39 @@ test('USPTO fetch is dormant without an API key', async () => {
   const out = await uspto.fetch({ criteria: { locations: ['chicago'] } });
   assert.deepEqual(out, []);
   if (prev !== undefined) process.env.USPTO_API_KEY = prev;
+});
+
+// ── STU-36: connector rows must not persist with caliber_tier permanently NULL ──
+// founderGate/isTooFarAlong/scoreFounder (the LLM call) only ever ran for source='exa'
+// (sourcing-engine.js's own runSourcingEngine). Every connector — yc_directory,
+// pre_program, il_school_discovery, cohort-rosters, uspto — flowed through this
+// shared ingest() instead, whose INSERT never touched caliber_tier/confidence_score
+// at all, so those columns sat at NULL forever for ~450+ rows and growing weekly.
+// This is a static guard (no live DB write) proving the persist path now runs the
+// same deterministic computeCaliber() used to backfill exa's own pre-caliber rows
+// (migrations/backfill-caliber.js), instead of leaving the column untouched.
+test('sources/index.js persist path computes and inserts caliber_tier (STU-36)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'pipeline', 'sources', 'index.js'), 'utf8');
+  assert.ok(/require\(['"]\.\.\/sourcing-engine['"]\)/.test(src), 'must import computeCaliber from sourcing-engine.js, not reimplement it');
+  assert.ok(/computeCaliber\(/.test(src), 'must call computeCaliber() before persisting');
+  const insertMatch = src.match(/INSERT INTO sourced_founders\s*\(([\s\S]*?)\)/);
+  assert.ok(insertMatch, 'must find the sourced_founders INSERT');
+  const cols = insertMatch[1];
+  for (const col of ['caliber_tier', 'caliber_score', 'caliber_rationale', 'caliber_signals']) {
+    assert.ok(cols.includes(col), `INSERT must write ${col}`);
+  }
+});
+
+test('computeCaliber grades a real connector bio instead of leaving it unscored', () => {
+  // The Navid Aghasadeghi case from STU-34/STU-36: PhD ECE UIUC, ex-Boston Dynamics
+  // Senior Staff, YC S26 — his real bio text is what STU-34 (commit 1bf02b3) wired
+  // into raw_data; this proves that text now actually produces a non-null tier.
+  const c = computeCaliber(
+    'PhD in Electrical & Computer Engineering, UIUC. Previously Senior Staff Engineer at Boston Dynamics.',
+    'Founder, YC S26',
+    []
+  );
+  assert.ok(['S', 'A', 'B', 'C'].includes(c.tier));
+  assert.notEqual(c.tier, null);
+  assert.ok(c.rationale);
 });

@@ -411,6 +411,23 @@ try {
         console.error('[Migration] Promote-metadata backfill error:', err.message);
       }
     }
+
+    // One-time (STU-36): every connector-sourced row (yc_directory, pre_program,
+    // il_school_discovery, cohort-rosters, uspto) persisted with caliber_tier
+    // permanently NULL — their shared ingest() never computed it. The fix stops new
+    // rows from landing that way; this clears the existing backlog with the same
+    // free, deterministic detector, on whatever bio text STU-34's raw_data fix
+    // already made available.
+    const caliberBackfillFlag = db.prepare("SELECT * FROM migration_flags WHERE key = 'caliber_backfill_v1'").get();
+    if (!caliberBackfillFlag) {
+      try {
+        console.log('[Migration] Backfilling caliber_tier for connector-sourced rows...');
+        require('./migrations/backfill-caliber')();
+        db.prepare("INSERT INTO migration_flags (key) VALUES ('caliber_backfill_v1')").run();
+      } catch (err) {
+        console.error('[Migration] Caliber backfill error:', err.message);
+      }
+    }
   } catch (err) {
     console.error('[Migration] Airtable import error:', err.message);
   }

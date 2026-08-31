@@ -1,10 +1,14 @@
 /**
- * Backfill caliber_* for sourced_founders rows created before the caliber axis
- * existed. Uses the deterministic detector over the text we already stored in
- * raw_data ({ headline, text }), plus elite-school and red-flag signals already
- * on the row. Does NOT call the LLM — this is a free, idempotent first pass.
+ * Backfill caliber_* for sourced_founders rows with no caliber verdict yet — originally
+ * rows from before the caliber axis existed, and (STU-36) every connector row
+ * (yc_directory, pre_program, il_school_discovery, cohort-rosters, uspto, ...), whose
+ * shared ingest() persists without ever computing caliber. Uses the deterministic
+ * detector over the text we already stored in raw_data ({ headline, text }), plus
+ * elite-school and red-flag signals already on the row. Does NOT call the LLM — this
+ * is a free, idempotent first pass; it re-runs safely (only touches caliber_tier IS
+ * NULL rows) and is also invoked once at boot as migration 'caliber_backfill_v1'.
  *
- * Run: node server/migrations/backfill-caliber.js
+ * Run standalone: node server/migrations/backfill-caliber.js
  */
 const db = require('../db');
 const { computeCaliber, hasDisqualifyingFlag } = require('../pipeline/sourcing-engine');
@@ -53,6 +57,8 @@ function run() {
   ).all();
   console.log(`[backfill-caliber] updated ${updated} rows. Distribution:`,
     byTier.map(x => `${x.t}:${x.c}`).join(' '));
+  return updated;
 }
 
-run();
+if (require.main === module) run();
+module.exports = run;

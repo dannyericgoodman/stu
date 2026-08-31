@@ -14,6 +14,11 @@
 const db = require('../../db');
 const { userGeoCriteria, geoPartition, hasPreference } = require('../../lib/geoFilter');
 const { loadUserApiKeys, assertWithinBudget } = require('../../lib/providerKeys');
+// computeCaliber is the SAME caliber axis sourcing-engine.js's LLM path writes for
+// `exa` rows (db.js: "the unicorn-grade axis, scored SEPARATELY from confidence/
+// relevance"). It is not a new/competing scorer — see the NO SECOND SCORER note
+// below, which is about a since-removed ad hoc regex blob, not this one.
+const { computeCaliber } = require('../sourcing-engine');
 
 const REGISTRY = {};
 function register(connector) { REGISTRY[connector.key] = connector; return connector; }
@@ -143,8 +148,8 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
   let persisted = 0, watchlisted = 0;
   if (persist) {
     const insert = db.prepare(`INSERT INTO sourced_founders
-      (user_id, name, company, role, headline, linkedin_url, website_url, source, status, builder_signals, signal_captured_at, unicorn_score, enrichment, raw_data, company_one_liner, chicago_connection, location_type, list_scope, breakout_score, breakout_signals)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      (user_id, name, company, role, headline, linkedin_url, website_url, source, status, builder_signals, signal_captured_at, unicorn_score, enrichment, raw_data, company_one_liner, chicago_connection, location_type, list_scope, breakout_score, breakout_signals, caliber_tier, caliber_score, caliber_rationale, caliber_signals)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const persistRows = db.transaction((rows, scope) => {
       let n = 0;
       for (const p of rows) {
@@ -172,10 +177,23 @@ async function ingest(key, { userId, since = null, enrich = true, persist = true
           // not a dropout; school splits ~36/28/36 across top-10 / middle / outside
           // top-100). lib/founderFit is the one ranking, and lib/fitIndex writes it
           // right after this — with structured LinkedIn employment instead of a blob.
+          //
+          // caliber_tier/caliber_score are a DIFFERENT axis (db.js: "unicorn-grade
+          // builder", scored separately from fit/relevance) that this ingest path never
+          // wrote (STU-36) — every connector row sat at caliber_tier = NULL forever,
+          // same as confidence_score, because founderGate/scoreFounder only ever ran
+          // for source='exa'. Full LLM parity (confidence_score/red_flags) needs a
+          // per-row Claude call and a budget call that isn't this ingest path's to make;
+          // computeCaliber() is the free, deterministic half of that pipeline already
+          // used to backfill exa's own pre-caliber rows (migrations/backfill-caliber.js)
+          // — same function, run here instead of after the fact, on the bio text this
+          // row already carries. confidence_score/red_flags stay NULL: no LLM ran, so
+          // there is no verdict to report for those columns, only for caliber.
+          const caliber = computeCaliber(evidenceText, p.headline || '', []);
           insert.run(userId, p.name || p.company || 'Unknown', p.company || null, p.role || null, p.headline || null,
             p.linkedin_url || null, p.website_url || null, c.key, JSON.stringify([c.emits]),
             p.unicorn_score ?? null, enr, rawData, p.why || null, p.chicago_connection || null, tieType, scope,
-            null, null);
+            null, null, caliber.tier, caliber.score, caliber.rationale, JSON.stringify(caliber.signals));
           n++;
         } catch { /* skip dupes/bad rows */ }
       }
