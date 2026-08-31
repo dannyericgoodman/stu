@@ -70,8 +70,13 @@ function insertRow(table, row, skip = []) {
 router.get('/status', (req, res) => {
   const counts = {};
   for (const t of ALLOWED) {
-    try { counts[t] = db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get().c; }
-    catch (e) { counts[t] = null; } // table absent in this schema version
+    // Ranges matter as much as totals here: the snapshot is inserted at its ORIGINAL
+    // ids so notes and assessments stay attached to the right founder, which is only
+    // safe if this host's own auto-sourced rows do not already occupy those ids.
+    try {
+      const r = db.prepare(`SELECT COUNT(*) AS c, MIN(id) AS lo, MAX(id) AS hi FROM ${t}`).get();
+      counts[t] = { count: r.c, minId: r.lo, maxId: r.hi };
+    } catch (e) { counts[t] = null; } // table absent in this schema version
   }
   res.json({ ok: true, counts });
 });
