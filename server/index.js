@@ -440,20 +440,40 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
   : ['http://localhost:5173', 'http://localhost:5175', 'http://localhost:5176', 'http://localhost:3001'];
 
-// In production, the client is served from the same origin — CORS is permissive for same-origin
-// For explicit cross-origin requests, check against allowed list
-app.use(cors({
-  origin: (origin, cb) => {
-    // Same-origin requests (no origin header) or production domain
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    // Allow the production app over HTTPS only (no plaintext, no arbitrary subdomains).
-    if (/^https:\/\/(www\.|app\.)?stu\.vc$/.test(origin)) return cb(null, true);
-    // Allow any localhost port in development
-    if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) return cb(null, true);
-    cb(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
+// In production the client is served from the same origin, and for explicit
+// cross-origin requests we check against the allow list.
+//
+// "Same-origin" cannot mean "sent no Origin header", which is what this used to
+// assume. index.html loads its bundle via <script crossorigin>, and that makes the
+// browser send an Origin header on a request the page is making to ITSELF. So on any
+// host not literally stu.vc, the app rejected its own JavaScript, the rejection
+// surfaced as a 500, and the site rendered as a blank white page while /api/health
+// still answered perfectly — the whole app, invisible, on a box reporting itself
+// healthy. That is how it presented on Render before the domain moved.
+//
+// Comparing the Origin's host to the request's own Host settles it directly: a page
+// asking its own host for an asset is same-origin whatever the deployment is called,
+// so this no longer needs a new env var every time Stu changes address.
+const corsDelegate = (req, done) => {
+  const host = req.headers.host;
+  const sameHost = (() => {
+    const o = req.headers.origin;
+    if (!o || !host) return false;
+    try { return new URL(o).host === host; } catch (e) { return false; }
+  })();
+  done(null, {
+    credentials: true,
+    origin: (origin, cb) => {
+      if (!origin || sameHost || allowedOrigins.includes(origin)) return cb(null, true);
+      // Allow the production app over HTTPS only (no plaintext, no arbitrary subdomains).
+      if (/^https:\/\/(www\.|app\.)?stu\.vc$/.test(origin)) return cb(null, true);
+      // Allow any localhost port in development
+      if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) return cb(null, true);
+      cb(new Error('Not allowed by CORS'));
+    },
+  });
+};
+app.use(cors(corsDelegate));
 
 // Stripe webhook needs raw body for signature verification — must be before express.json()
 const payments = require('./routes/payments');
