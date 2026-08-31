@@ -302,6 +302,15 @@ router.post('/run', async (req, res) => {
         const connectorAdded = rows.reduce((n, x) => n + (x?.persisted || 0), 0);
         const connectorFetched = rows.reduce((n, x) => n + (x?.fetched || 0), 0);
         const exaAdded = exa?.totalAdded || 0;
+        // The funnel, not just the survivors. Reporting Exa's SAVED count beside the
+        // connectors' "saved of fetched" made a healthy run indistinguishable from a
+        // dead API key: "exa 0" reads as "Exa returned nothing" when it usually means
+        // "Exa returned plenty and the Illinois gate rejected all of it" — which is
+        // this engine's normal behaviour, since production averaged 12 saved per run
+        // across every source. Both readings sent us hunting a key that was fine.
+        const exaFound = exa?.totalFound || 0;
+        const exaFiltered = exa?.totalFiltered || 0;
+        const exaDeduped = exa?.totalDeduped || 0;
         const errors = [...(exa?.errors || []), ...rows.filter((x) => x?.error).map((x) => `${x.source}: ${x.error}`)];
 
         // Per-connector, so a source that produces nothing is VISIBLE as producing
@@ -315,7 +324,8 @@ router.post('/run', async (req, res) => {
         recordJobRun(
           'sourcing_run',
           errors.length ? 'partial' : 'ok',
-          `+${exaAdded + connectorAdded} added (exa ${exaAdded}, connectors ${connectorAdded} of ${connectorFetched} fetched)` +
+          `+${exaAdded + connectorAdded} added — exa: ${exaFound} fetched → ${exaDeduped} dup, ${exaFiltered} filtered, ${exaAdded} saved` +
+            ` · connectors: ${connectorAdded} of ${connectorFetched} fetched` +
             (breakdown ? ` — ${breakdown}` : '') +
             (errors.length ? ` — ${errors.length} errors` : ''),
           uid
