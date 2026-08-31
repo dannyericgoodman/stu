@@ -1,10 +1,16 @@
 /**
- * founder-digest.js — the Friday "Breakout Radar" email.
+ * founder-digest.js — the daily 8:00 AM CT "Breakout Radar" email.
  *
- * Every Friday morning, email Danny the top UNDER-THE-RADAR founders sourced that week: IL-tied
- * builders with the highest breakout-pedigree score, led by the pre-program names (elite background,
- * no program tag yet) — the people to reach out to before YC/Speedrun does. Reuses the Daily Brief's
- * Gmail SMTP path (loadNewsletterConfig), so no new email config. Idempotent per week.
+ * Every morning, email Danny the top UNDER-THE-RADAR founders to reach out to: IL-tied builders
+ * with the highest breakout-pedigree score, led by the pre-program names (elite background, no
+ * program tag yet) — the people to reach before YC/Speedrun does. Reuses the Daily Brief's Gmail
+ * SMTP path (loadNewsletterConfig), so no new email config. Idempotent per CT day.
+ *
+ * The ranking window stays 7 days while the send cadence is daily: a single day of sourcing is
+ * too thin to rank meaningfully, so each morning re-ranks a rolling week and surfaces the current
+ * best. A founder Danny hasn't acted on can therefore recur across mornings — that is deliberate
+ * (an unactioned high scorer is still today's best call), but per-recipient send suppression is
+ * tracked separately in STU-18.
  */
 const db = require('../db');
 const { loadNewsletterConfig } = require('./newsletter');
@@ -18,7 +24,7 @@ const PROGRAM_LABEL = {
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function label(src) { return PROGRAM_LABEL[src] || src || 'Sourced'; }
 
-// Gather the week's breakout founders + a few counts.
+// Gather the rolling 7-day window of breakout founders + a few counts.
 function gather(userId, { days = 7, limit = 15, minScore = 25 } = {}) {
   const since = `datetime('now','-${days} days')`;
   const top = db.prepare(`
@@ -55,13 +61,13 @@ function renderHtml({ top, counts }) {
       ${r.linkedin_url ? `<a href="${esc(r.linkedin_url)}" style="font-size:13px;color:#2563eb;text-decoration:none;font-weight:500;">Open LinkedIn →</a>` : ''}
     </div>`;
   };
-  const list = top.length ? top.map(card).join('') : `<p style="color:#9ca3af;font-size:14px;">No new breakout founders crossed the bar this week.</p>`;
+  const list = top.length ? top.map(card).join('') : `<p style="color:#9ca3af;font-size:14px;">No breakout founders crossed the bar in the last 7 days.</p>`;
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f3f4f6;">
   <div style="max-width:640px;margin:0 auto;padding:28px 20px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-    <div style="font-size:22px;font-weight:700;color:#111827;">Breakout Radar — this week</div>
+    <div style="font-size:22px;font-weight:700;color:#111827;">Breakout Radar — who to meet today</div>
     <div style="color:#9ca3af;font-size:14px;margin-bottom:14px;">${dateLabel}</div>
     <div style="background:#eef2ff;border-radius:8px;padding:10px 14px;font-size:13px;color:#4338ca;margin-bottom:20px;">
-      ${counts.ilWeek} IL-tied founders sourced this week · ${counts.preProgram} under-the-radar (pre-program) · ${counts.totalWeek} total across all sources.
+      ${counts.ilWeek} IL-tied founders sourced in the last 7 days · ${counts.preProgram} under-the-radar (pre-program) · ${counts.totalWeek} total across all sources.
     </div>
     <h2 style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#6b7280;margin:0 0 12px;">Top to reach out to — ranked by breakout pedigree</h2>
     ${list}
@@ -69,17 +75,28 @@ function renderHtml({ top, counts }) {
   </div></body></html>`;
 }
 
-// Send the Friday digest. Reuses the Daily Brief Gmail config. Idempotent per ISO week.
+// The CT calendar day, as YYYY-MM-DD. The digest is scheduled in America/Chicago, so its
+// idempotency key has to be a Chicago day too — a UTC key rolls over at 6/7 PM CT and would
+// let a single morning send twice, or block one, depending on the season.
+function ctDayKey() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
+// Send the daily digest. Reuses the Daily Brief Gmail config. Idempotent per CT day.
+//
+// Was idempotent per *week* (a 6-day cooldown), which paired with the old Friday-only cron.
+// On a daily schedule that cooldown is the bug: the 8:00 AM job would send Monday, then
+// silently return `skipped` for the next six mornings.
 async function sendFounderDigest(userId = 1, { force = false, days = 7 } = {}) {
   const cfg = loadNewsletterConfig(userId);
   const recipient = db.prepare("SELECT setting_value FROM user_settings WHERE user_id=? AND setting_key='brief_recipient'").get(userId)?.setting_value || (cfg && cfg.address);
   if (!cfg || !cfg.address || !cfg.appPassword) return { ok: false, error: 'No Gmail app password configured (Settings).' };
   if (!recipient) return { ok: false, error: 'No recipient configured.' };
 
-  const weekKey = new Date().toISOString().slice(0, 10);
+  const dayKey = ctDayKey();
   if (!force) {
     const last = db.prepare("SELECT setting_value FROM user_settings WHERE user_id=? AND setting_key='founder_digest_last_sent'").get(userId)?.setting_value;
-    if (last && (Date.now() - new Date(last).getTime()) < 6 * 24 * 3600 * 1000) return { ok: true, skipped: true, reason: 'already sent this week' };
+    if (last === dayKey) return { ok: true, skipped: true, reason: 'already sent today' };
   }
 
   const data = gather(userId, { days });
@@ -92,11 +109,11 @@ async function sendFounderDigest(userId = 1, { force = false, days = 7 } = {}) {
     await transport.sendMail({
       from: `"Stu · Breakout Radar" <${cfg.address}>`,
       to: recipient,
-      subject: `Breakout Radar — ${data.counts.preProgram} under-the-radar founders this week`,
+      subject: `Breakout Radar — ${data.top.length} founders to meet today`,
       html: renderHtml(data),
     });
     db.prepare(`INSERT INTO user_settings (user_id, setting_key, setting_value, updated_at) VALUES (?, 'founder_digest_last_sent', ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`).run(userId, weekKey);
+      ON CONFLICT(user_id, setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`).run(userId, dayKey);
     return { ok: true, recipient, count: data.top.length, preProgram: data.counts.preProgram };
   } catch (e) { return { ok: false, error: e.message }; }
 }

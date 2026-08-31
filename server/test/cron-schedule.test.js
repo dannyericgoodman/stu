@@ -62,3 +62,34 @@ test('the morning jobs all finish before Danny is up (5am CT)', () => {
   assert.ok(all.includes('45 3 * * *'), 'filings 3:45 CT');
   assert.ok(all.includes('30 4 * * *'), 'scout 4:30 CT');
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// The founder digest is the one scheduled thing Danny asked for by name: a
+// prioritized list of founders to meet, every day at 8am. It shipped as a
+// Friday-only send, so six mornings in seven were silent.
+//
+// Two independent things have to hold, and the pair is the point — the cron
+// can fire daily while the service still refuses to send. Reverting either one
+// alone restores the weekly behaviour with no other visible symptom.
+// ══════════════════════════════════════════════════════════════════════════
+test('the founder digest goes out every morning at 8 CT — not weekly', () => {
+  const digest = schedules().find((s) => s.expr === '0 8 * * *');
+  assert.ok(digest, 'the 8:00 AM CT daily founder digest cron must exist');
+  assert.strictEqual(digest.tz, 'America/Chicago');
+
+  // A day-of-week field that is not `*` means the digest skips mornings.
+  assert.strictEqual(digest.expr.split(' ')[4], '*', 'the digest must not be pinned to one weekday');
+});
+
+test('the digest is idempotent per DAY, not per week', () => {
+  const svc = fs.readFileSync(path.join(__dirname, '..', 'services', 'founder-digest.js'), 'utf8');
+  assert.ok(
+    !/6 \* 24 \* 3600 \* 1000/.test(svc),
+    'the 6-day cooldown paired with a Friday cron; on a daily schedule it silently skips six mornings'
+  );
+  assert.ok(/already sent today/.test(svc), 'the skip reason must be same-day, not same-week');
+  assert.ok(
+    /timeZone: 'America\/Chicago'/.test(svc),
+    "the idempotency key must be a Chicago day — a UTC key rolls over mid-evening CT and can double- or skip-send"
+  );
+});

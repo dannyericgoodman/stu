@@ -810,12 +810,18 @@ app.listen(PORT, () => {
     console.log('LinkedIn enrichment scheduled (daily 12:00 PM CT — drains the backlog, then idles)');
   }
 
-  // Weekly founder digest — Friday 7:00 AM CT. Emails the week's top under-the-radar
-  // (pre-program / high-breakout) IL founders. Reuses the Daily Brief Gmail config.
+  // Daily founder digest — 8:00 AM CT, every day. Emails the top under-the-radar
+  // (pre-program / high-breakout) IL founders to reach out to, ranked.
+  // Reuses the Daily Brief Gmail config.
+  //
+  // Was Friday-only at 7:00 AM. A weekly send is a digest; a daily one at a fixed hour is
+  // the work queue Danny actually sources from, which is what he asked for. 8:00 CT also
+  // sits behind every upstream job that feeds it (3:45 filings, 4:30 scout, 5:45 Airtable,
+  // 6:30 talent), so the list is fully sourced and scored before it goes out.
   {
     const cron = require('node-cron');
-    cron.schedule('0 7 * * 5', async () => {
-      console.log('[Cron] Sending weekly founder digest...');
+    cron.schedule('0 8 * * *', async () => {
+      console.log('[Cron] Sending daily founder digest...');
       const { recordJobRun } = require('./services/health');
       try {
         const { sendFounderDigest } = require('./services/founder-digest');
@@ -823,7 +829,7 @@ app.listen(PORT, () => {
         console.log('[Cron][FounderDigest]', JSON.stringify(r));
       } catch (e) { console.error('[Cron][FounderDigest] failed:', e.message); }
     }, { timezone: 'America/Chicago' });
-    console.log('Weekly founder digest scheduled (Fri 7:00 AM CT)');
+    console.log('Daily founder digest scheduled (8:00 AM CT)');
   }
 
   // ══════════════════════════════════════════════════════════════════════
