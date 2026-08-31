@@ -63,6 +63,11 @@ const PIPELINE_SQL = `
     -- investment_amount and company_linkedin_url scars documented below. If you add
     -- a column the board reasons about, it goes here.
     f.represented_by_founder_id,
+    -- Load-bearing, and the FOURTH casualty of this exact omission. The board now
+    -- admits anything approved out of Source, and that test reads this column: left
+    -- out of this list it was undefined for every row, so the membership rule
+    -- silently kept only the Airtable-staged rows it was written to widen.
+    f.sourced_from_id,
     f.chicago_connection, f.caliber_tier, f.next_action, f.arr,
     f.deal_entered_at, f.created_at,
     -- Load-bearing: stageOf() derives the invested stage from this. Omitting it
@@ -123,7 +128,7 @@ const PIPELINE_SQL = `
     (SELECT sf.source FROM sourced_founders sf WHERE sf.promoted_to_founder_id = f.id
       ORDER BY sf.created_at ASC LIMIT 1) AS sourced_via,
     (SELECT sf.id FROM sourced_founders sf WHERE sf.promoted_to_founder_id = f.id
-      ORDER BY sf.created_at ASC LIMIT 1) AS sourced_id
+      ORDER BY sf.created_at ASC LIMIT 1) AS sourced_id,
     -- His own call on this founder, if he has made one. Selected here rather than
     -- joined in JS so the board can show what he already decided without a second
     -- round trip per row.
