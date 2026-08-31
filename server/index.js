@@ -489,8 +489,38 @@ app.use(require('compression')());
 
 app.use(express.json({ limit: '2mb' }));
 
+// ══════════════════════════════════════════════════════════════════════════
+// TRUST THE PLATFORM PROXY — one line, and the rate limiter stops being a
+// self-inflicted outage.
+//
+// Render (like Railway before it) terminates TLS at its own proxy and forwards
+// to this process over the private network. So without `trust proxy`, `req.ip`
+// is the PROXY's address for every request on earth, and express-rate-limit keys
+// its bucket on that one value: the entire internet shares a single 200-per-15min
+// allowance. Any burst — a snapshot crawl, an open dashboard, a scraper — exhausts
+// it for everyone.
+//
+// Which is how a rate limiter came to kill healthy servers. `/api/health` is
+// mounted under `/api`, so once the shared bucket emptied, the liveness probe got
+// a 429, Render concluded the instance was down, and replaced it. That happened
+// TWICE on 2026-08-31 (instances `jrljz` at 9:13 and `wtlc8` at 9:29 —
+// "HTTP health check failed with status code 429").
+//
+// `1` trusts exactly one hop — the platform's proxy — and no further, so a
+// client-supplied X-Forwarded-For cannot spoof its way to a private bucket.
+// ══════════════════════════════════════════════════════════════════════════
+app.set('trust proxy', 1);
+
+// The liveness probe is NEVER rate limited. Even correctly keyed per-IP, the
+// platform's health checker is a single IP hitting one route on a schedule, which
+// is precisely the shape a limiter punishes — and the cost of throttling it is not
+// a slow response, it is a terminated instance. Scoped to the bare endpoint by
+// original URL (mount-independent); /api/health/full and /health/drift are
+// authenticated and stay inside the bucket.
+const isLivenessProbe = (req) => req.originalUrl.split('?')[0] === '/api/health';
+
 // Rate limiting
-app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
+app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 200, skip: isLivenessProbe, standardHeaders: true, legacyHeaders: false }));
 // LLM chat surfaces (ai.js + stu.js tool-loop) — frequency-cap separately from the global bucket.
 const aiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false });
 app.use('/api/ai', aiLimiter);
