@@ -1037,6 +1037,38 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_decisions_resolve ON decisions(resolved_at, resolve_by);
 `);
 
+// ── Triage: the sourcing feedback loop ──────────────────────────────────────
+// Deliberately NOT the `decisions` table above. That one requires a dated,
+// falsifiable prediction because an investment call should cost something to make.
+// This is a different act: "is this person worth an hour of mine", answered a
+// hundred times a morning against sourcing output. Forcing a prediction onto that
+// volume would mean it never gets used, and an unused loop teaches nothing.
+//
+// Two acts, two stores, one rule each: decisions are about being RIGHT, triage is
+// about what Danny actually WANTS. The rubric can only learn from the second.
+//
+// rubric_* is a SNAPSHOT of what the engine said at the moment of the call, not a
+// join. The rubric changes — RUBRIC_VERSION is bumped deliberately and often — and a
+// calibration set that reads today's verdict for yesterday's decision measures the
+// wrong thing, silently and forever. This is the difference between "the rubric was
+// wrong then" and "the rubric would be wrong now."
+db.exec(`
+  CREATE TABLE IF NOT EXISTS founder_triage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    founder_id INTEGER NOT NULL REFERENCES founders(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    verdict TEXT NOT NULL,              -- advance | watch | pass
+    reason TEXT,                        -- optional one-liner, in his words
+    rubric_tier TEXT,                   -- what the rubric said, AT THE TIME
+    rubric_priority INTEGER,
+    rubric_version TEXT,
+    signals TEXT,                       -- JSON array of the labels it fired on
+    triaged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(founder_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_triage_user ON founder_triage(user_id, verdict);
+`);
+
 // Job run log — every scheduled/triggered job records its outcome here so failures are
 // durable and surfaced (not swallowed in console). Powers the healthcheck board.
 db.exec(`

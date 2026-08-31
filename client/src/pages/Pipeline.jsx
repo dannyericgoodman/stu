@@ -66,6 +66,109 @@ const BAND_LABEL = { anchor: 'Anchor', memo: 'Memo', monitor: 'Monitor', pass: '
 
 // The band renders as weight and position on the ink ramp, never as color. A
 // colored verdict tells him what to think before he's read the evidence.
+// ══════════════════════════════════════════════════════════════════════════
+// TRIAGE — three keys, no dialog.
+//
+// This is the only thing on the board that teaches the rubric anything, so the cost
+// of using it has to be near zero: at a hundred rows a morning, any control that
+// opens something gets abandoned by row nine, and an abandoned loop teaches nothing.
+// Reason is optional and lives on the card, not here.
+//
+// Stops propagation because the row itself navigates — triaging a founder should not
+// also open him.
+// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// WHAT HE ACTUALLY ADVANCES — the calibration panel.
+//
+// The rubric has always been argued into its current shape. This is the first thing
+// in Stu that can contradict it with evidence: each signal's advance rate against the
+// base rate, computed only from founders Danny personally ruled on.
+//
+// Two refusals, both deliberate:
+//   * nothing is shown below 30 calls. A lift table built on nine decisions is a
+//     horoscope, and the danger is not that it is wrong — it is that it is specific,
+//     which is what makes a wrong thing get acted on.
+//   * disagreements are shown FIRST. Where the rubric and Danny agree, there is
+//     nothing to learn; the whole value is in the rows where one of them is wrong.
+// ══════════════════════════════════════════════════════════════════════════
+function Learning({ data, onClose }) {
+  if (!data) return null;
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const d = data.disagreement || {};
+  return (
+    <div className="border-b border-line-2 bg-ground-2 px-3 py-2">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-micro font-semibold uppercase text-ink-4">What you actually advance</span>
+        <span className="text-mini text-ink-4">
+          {data.decided} calls · {pct(data.base_advance_rate || 0)} advance rate
+        </span>
+        <div className="flex-1" />
+        <button className="text-mini text-ink-4 hover:text-ink-2" onClick={onClose}>Hide</button>
+      </div>
+
+      {!data.enough_to_read ? (
+        <div className="text-mini text-ink-3">
+          {data.decided} of 30 calls. Below that this is anecdote, so it is not shown — triage
+          from the board and it fills in.
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-4 mb-2 text-mini">
+            <span className="text-ink-2">
+              Rubric said must-meet, you passed: <span className="num font-medium">{d.rubric_said_meet_he_passed}</span>
+            </span>
+            <span className="text-ink-2">
+              Rubric said no, you advanced: <span className="num font-medium">{d.rubric_said_no_he_advanced}</span>
+            </span>
+            <span className="text-ink-4">No rubric verdict: <span className="num">{d.no_rubric_verdict}</span></span>
+          </div>
+          <div className="flex flex-col gap-px">
+            {(data.signals || []).slice(0, 10).map((sig) => (
+              <div key={sig.signal} className="flex items-center gap-2 text-mini">
+                <span className="w-64 truncate text-ink-2">{sig.signal}</span>
+                <span className="num w-10 text-right text-ink-3">{sig.n}</span>
+                <span className="num w-12 text-right text-ink">{pct(sig.rate)}</span>
+                <span className={`num w-12 text-right ${sig.lift >= 1.2 ? 'text-accent' : sig.lift <= 0.8 ? 'text-ink-4' : 'text-ink-3'}`}>
+                  {sig.lift == null ? '—' : `${sig.lift.toFixed(1)}x`}
+                </span>
+              </div>
+            ))}
+            {!(data.signals || []).length && (
+              <span className="text-mini text-ink-3">No signal has been seen five times yet.</span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Triage({ row, onSet }) {
+  const opts = [
+    { k: 'advance', label: '→', title: 'Advance — worth my time' },
+    { k: 'watch', label: '~', title: 'Watch — not now' },
+    { k: 'pass', label: '×', title: 'Pass — not for us' },
+  ];
+  return (
+    <span className="w-20 flex items-center justify-end gap-px flex-none">
+      {opts.map((o) => (
+        <button
+          key={o.k}
+          title={o.title}
+          onClick={(e) => { e.stopPropagation(); onSet(row.id, row.triage === o.k ? null : o.k); }}
+          className={`w-5 h-5 rounded text-mini leading-none transition ${
+            row.triage === o.k
+              ? 'bg-accent-soft text-accent font-semibold'
+              : 'text-ink-4 hover:text-ink-2 hover:bg-ground-3'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function Band({ band, score, muted }) {
   if (!band) return <span className="text-ink-4">—</span>;
   return (
@@ -178,6 +281,10 @@ export default function Pipeline() {
   // else's stage vocabulary is a second copy of a system that already exists — and a
   // second copy is a thing to drift. An existing saved preference still wins.
   const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'list');
+  // Null until asked for. The panel is opt-in because the honest answer early on is
+  // "not enough calls yet", and a dashboard that says that on every load is furniture.
+  const [learning, setLearning] = useState(null);
+  const [showLearning, setShowLearning] = useState(false);
   // '' = the whole board. There is one board now; Investment/Resident narrow it.
   const [track, setTrack] = useState('');
   const [q, setQ] = useState('');
@@ -296,6 +403,22 @@ export default function Pipeline() {
     }
   }
 
+  // Optimistic: the row flips instantly and reverts if the write fails. The whole
+  // point of this control is that it costs nothing to use, and a spinner per click
+  // across a hundred rows is not nothing.
+  async function onTriage(founderId, verdict) {
+    const prev = data?.rows?.find((r) => r.id === founderId)?.triage ?? null;
+    setData((d) => ({ ...d, rows: d.rows.map((r) => (r.id === founderId ? { ...r, triage: verdict } : r)) }));
+    try {
+      if (verdict) await api.triageFounder(founderId, verdict);
+      else await api.triageFounder(founderId, 'watch');
+      setLearning(null); // force the panel to re-read; his call just changed the set
+    } catch (e) {
+      setData((d) => ({ ...d, rows: d.rows.map((r) => (r.id === founderId ? { ...r, triage: prev } : r)) }));
+      setErr(e.message);
+    }
+  }
+
   async function onUndo() {
     if (!undo) return;
     try {
@@ -394,8 +517,23 @@ export default function Pipeline() {
             </button>
           ))}
         </div>
+        <button
+          className={`ml-2 px-2 h-6 rounded text-mini font-medium transition ${
+            showLearning ? 'bg-ground-4 text-ink' : 'text-ink-3 hover:text-ink hover:bg-ground-3'
+          }`}
+          onClick={async () => {
+            const next = !showLearning;
+            setShowLearning(next);
+            if (next && !learning) {
+              try { setLearning(await api.getPipelineLearning()); } catch (e) { setErr(e.message); }
+            }
+          }}
+        >
+          What you advance
+        </button>
         <span className="num text-mini text-ink-4 pl-2">{rows.length}</span>
       </div>
+      {showLearning && <Learning data={learning} onClose={() => setShowLearning(false)} />}
 
       {!data ? (
         <div className="flex-1 p-3">
@@ -463,6 +601,7 @@ export default function Pipeline() {
                       : r.i_owe > 0 ? <span className="text-ink-2">{r.i_owe}</span>
                       : <span className="text-ink-4">—</span>}
                   </span>
+                  <Triage row={r} onSet={onTriage} />
                 </div>
               ))
             )}

@@ -422,6 +422,12 @@ export const api = {
   // Run a conviction read from the sources already on the card — no re-uploading.
   runCardRead: (id) =>
     after(request(`/companies/${id}/read`, { method: 'POST' }), '/pipeline', '/assessments'),
+  // Triage — the sourcing feedback loop. Invalidates /pipeline so the row's own
+  // verdict comes back from the server rather than being guessed locally.
+  triageFounder: (id, verdict, reason) =>
+    after(request(`/pipeline/${id}/triage`, { method: 'POST', body: JSON.stringify({ verdict, reason }) }),
+      '/pipeline', '/pipeline/learning'),
+  getPipelineLearning: () => request('/pipeline/learning'),
   addCompanyNote: (id, body) =>
     after(request(`/pipeline/${id}/notes`, { method: 'POST', body: JSON.stringify(body) }), `/pipeline/${id}`),
   updateCompanyNote: (id, noteId, body) =>

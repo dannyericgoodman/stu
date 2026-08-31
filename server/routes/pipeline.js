@@ -124,6 +124,11 @@ const PIPELINE_SQL = `
       ORDER BY sf.created_at ASC LIMIT 1) AS sourced_via,
     (SELECT sf.id FROM sourced_founders sf WHERE sf.promoted_to_founder_id = f.id
       ORDER BY sf.created_at ASC LIMIT 1) AS sourced_id
+    -- His own call on this founder, if he has made one. Selected here rather than
+    -- joined in JS so the board can show what he already decided without a second
+    -- round trip per row.
+    (SELECT t.verdict FROM founder_triage t WHERE t.founder_id = f.id AND t.user_id = ?) AS triage,
+    (SELECT t.reason FROM founder_triage t WHERE t.founder_id = f.id AND t.user_id = ?) AS triage_reason
   FROM founders f
   WHERE f.created_by = ? AND f.is_deleted = 0
 `;
@@ -166,7 +171,7 @@ function stageOf(r) {
 
 // ── GET /api/pipeline ──
 router.get('/', (req, res) => {
-  const rows = db.prepare(PIPELINE_SQL).all(req.user.id);
+  const rows = db.prepare(PIPELINE_SQL).all(req.user.id, req.user.id, req.user.id);
 
   const {
     track, // 'investment' | 'admissions'
@@ -177,6 +182,13 @@ router.get('/', (req, res) => {
 
   let out = rows.map((r) => ({
     ...r,
+    // Airtable's stage vocabulary was renamed ("Stage 1: Identified" →
+    // "6 · Resident — Identified"). fromLegacyStage was written for exactly this and
+    // then never called from anywhere, so every row carrying an old value grouped
+    // against a column list that no longer contained it: a board reporting 190 rows
+    // with 0 in every column. Normalising on READ fixes the stored rows and any
+    // future import that arrives speaking the old dialect.
+    stage_status: vocab.fromLegacyStage(r.stage_status) || r.stage_status,
     funnel_stage: stageOf(r),
     person: personName(r),
     // Airtable's words for the badge, derived from Stu's storage. The client never
@@ -597,7 +609,7 @@ router.get('/inbox', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════
 router.get('/stats', (req, res) => {
   const uid = req.user.id;
-  const rows = db.prepare(PIPELINE_SQL).all(uid);
+  const rows = db.prepare(PIPELINE_SQL).all(uid, uid, uid);
   const live = rows.filter((r) => (r.pipeline_tracks || '').includes('investment'));
   const staged = live.map((r) => stageOf(r));
 
@@ -699,6 +711,66 @@ router.get('/predictions', (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     res.json({ scoreboard: P.scoreboard({ userId: req.user.id }), due: P.due({ userId: req.user.id, today }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Registered ahead of '/:id' on purpose: Express matches in definition order, so a
+// parameterised route declared first would swallow this one and answer /learning with
+// "founder 'learning' not found".
+// GET /api/pipeline/learning — what Danny's calls say about the rubric.
+router.get('/learning', (req, res) => {
+  const rows = db.prepare('SELECT * FROM founder_triage WHERE user_id = ?').all(req.user.id);
+  const decided = rows.filter((r) => r.verdict !== 'watch');
+  const advanced = decided.filter((r) => r.verdict === 'advance');
+  const base = decided.length ? advanced.length / decided.length : 0;
+
+  // Per-signal lift. A signal is only reported once it has been SEEN enough times to
+  // mean anything — three calls is a coincidence, and a table of coincidences ranked
+  // by lift is how you end up with a confident theory of nothing.
+  const MIN_N = 5;
+  const seen = new Map();
+  for (const r of decided) {
+    let labels = [];
+    try { labels = JSON.parse(r.signals || '[]'); } catch (e) { labels = []; }
+    for (const raw of new Set(labels.map((x) => String(x)))) {
+      // Graduation signals are stored suffixed ("Stanford (next-round signal)").
+      // Keep the suffix: whether Danny advances on pedigree is exactly the question
+      // this table exists to answer, and merging the two kinds would hide it.
+      const cur = seen.get(raw) || { signal: raw, n: 0, advanced: 0 };
+      cur.n++; if (r.verdict === 'advance') cur.advanced++;
+      seen.set(raw, cur);
+    }
+  }
+  const signals = [...seen.values()]
+    .filter((x) => x.n >= MIN_N)
+    .map((x) => ({ ...x, rate: x.advanced / x.n, lift: base ? (x.advanced / x.n) / base : null }))
+    .sort((a, b) => b.lift - a.lift);
+
+  // Where he and the engine disagree. This is the part worth reading: agreement
+  // teaches nothing, and every bump to RUBRIC_VERSION should have to answer these.
+  const falsePositives = decided.filter((r) => r.verdict === 'pass' && r.rubric_tier === 'must-meet');
+  const falseNegatives = decided.filter((r) => r.verdict === 'advance' && r.rubric_tier && r.rubric_tier !== 'must-meet');
+  const unscored = decided.filter((r) => !r.rubric_tier);
+
+  res.json({
+    triaged: rows.length,
+    decided: decided.length,
+    advanced: advanced.length,
+    base_advance_rate: base,
+    // Below this, treat everything here as anecdote. Named so the number cannot be
+    // quoted as a finding before it is one.
+    enough_to_read: decided.length >= 30,
+    signals,
+    disagreement: {
+      rubric_said_meet_he_passed: falsePositives.length,
+      rubric_said_no_he_advanced: falseNegatives.length,
+      no_rubric_verdict: unscored.length,
+    },
+    by_verdict: {
+      advance: rows.filter((r) => r.verdict === 'advance').length,
+      watch: rows.filter((r) => r.verdict === 'watch').length,
+      pass: rows.filter((r) => r.verdict === 'pass').length,
+    },
+  });
 });
 
 router.get('/:id', (req, res) => {
@@ -1488,6 +1560,49 @@ router.delete('/:id/notes/:noteId', (req, res) => {
   if (!n) return res.status(404).json({ error: 'not found' });
   db.prepare('DELETE FROM founder_notes WHERE id = ?').run(n.id);
   res.json({ id: n.id, deleted: true });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// TRIAGE — the loop that lets the rubric learn what Danny actually wants.
+//
+// The sourcing engine ranks founders. Nothing has ever told it whether the ranking
+// was any good, so RUBRIC_VERSION has only ever moved on argument. These two routes
+// close that: every advance/watch/pass is a labelled example, and the labels are the
+// only thing in the system that carries Danny's taste rather than a proxy for it.
+// ══════════════════════════════════════════════════════════════════════════
+
+// POST /api/pipeline/:id/triage  { verdict, reason? }
+router.post('/:id/triage', (req, res) => {
+  const { verdict, reason } = req.body || {};
+  if (!['advance', 'watch', 'pass'].includes(verdict)) {
+    return res.status(400).json({ error: 'verdict must be advance, watch or pass' });
+  }
+  const f = db.prepare('SELECT id, sourced_from_id FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0')
+    .get(req.params.id, req.user.id);
+  if (!f) return res.status(404).json({ error: 'Founder not found' });
+
+  // Snapshot the engine's verdict AS IT STANDS NOW. Read later via a join it would
+  // silently become whatever the current rubric thinks, and the calibration set would
+  // measure today's rubric against yesterday's decision — always agreeing with itself.
+  let snap = {};
+  if (f.sourced_from_id) {
+    snap = db.prepare(
+      'SELECT fit_tier, fit_priority, fit_rubric_version, fit_why FROM sourced_founders WHERE id = ?'
+    ).get(f.sourced_from_id) || {};
+  }
+
+  db.prepare(`
+    INSERT INTO founder_triage (founder_id, user_id, verdict, reason, rubric_tier, rubric_priority, rubric_version, signals, triaged_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(founder_id, user_id) DO UPDATE SET
+      verdict = excluded.verdict, reason = excluded.reason, triaged_at = CURRENT_TIMESTAMP
+  `).run(
+    f.id, req.user.id, verdict, reason || null,
+    snap.fit_tier || null, snap.fit_priority == null ? null : snap.fit_priority,
+    snap.fit_rubric_version || null, snap.fit_why || null
+  );
+
+  res.json({ ok: true, founder_id: f.id, verdict });
 });
 
 module.exports = router;
