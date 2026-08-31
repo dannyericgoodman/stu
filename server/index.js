@@ -463,7 +463,7 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), pay
 // parser on those paths FIRST (it parses + sets req.body, so the small global parser
 // below no-ops for them). Everything else (incl. /mcp, /api/ai/chat) is capped at 2MB,
 // closing a 50MB memory/cost-amplification DoS surface on the LLM endpoints.
-app.use(['/api/assessments', '/api/import'], express.json({ limit: '50mb' }));
+app.use(['/api/assessments', '/api/import', '/api/restore'], express.json({ limit: '50mb' }));
 // ══════════════════════════════════════════════════════════════════════════
 // Danny, 2026-07-15: "Logged into Stu and it's very laggy. Takes time to load
 // info in." He was right, and it was never the database.
@@ -604,6 +604,16 @@ app.use('/api/search', requireAuth, require('./routes/search'));
 app.use('/api/settings', requireAuth, require('./routes/settings'));
 app.use('/api/admin', requireAuth, require('./routes/admin'));
 app.use('/api/import', requireAuth, require('./routes/import'));
+
+// ── One-time migration import (see routes/restore.js) ──
+// Registered ONLY while RESTORE_TOKEN is set. Unset the variable and this route does
+// not exist — the host migration's write path should not outlive the migration. It
+// carries its own bearer-token check, so it is deliberately not behind requireAuth:
+// the owner account it would authenticate against is the very thing it repairs.
+if (process.env.RESTORE_TOKEN) {
+  app.use('/api/restore', require('./routes/restore'));
+  console.log('[restore] one-time import route is MOUNTED (RESTORE_TOKEN is set)');
+}
 app.use('/api/talent', requireAuth, require('./routes/talent'));
 app.use('/api/hiring', requireAuth, require('./routes/hiring'));
 app.use('/api/newsletter', requireAuth, require('./routes/newsletter'));

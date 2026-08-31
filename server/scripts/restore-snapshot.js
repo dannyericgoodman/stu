@@ -93,4 +93,33 @@ if (fs.existsSync(aDir)) {
   tx(files);
 }
 
-console.log(JSON.stringify({ founders, assessments, inputs }));
+// ── Founder notes (founder-detail/<id>-notes.json) ──
+// These are Danny's own written observations on founders — typed by hand, never
+// regenerable, and the original script dropped them on the floor. Calls and memos
+// are captured by the same crawl but came back empty (0 rows), so they are read
+// with the same loop rather than assumed absent.
+let notes = 0, calls = 0, memos = 0;
+const dDir = path.join(dir, 'founder-detail');
+if (fs.existsSync(dDir)) {
+  const counters = { notes: 0, calls: 0, memos: 0 };
+  const tableFor = { notes: 'founder_notes', calls: 'call_logs', memos: 'founder_memos' };
+  const tx = db.transaction((files) => {
+    for (const f of files) {
+      const m = f.match(/^(\d+)-(notes|calls|memos)\.json$/);
+      if (!m) continue;
+      const [, founderId, kind] = m;
+      const table = tableFor[kind];
+      // A snapshot may carry a kind this schema has no table for — skip, don't throw.
+      try { if (!cols(table).size) continue; } catch (e) { continue; }
+      const raw = readJson(path.join(dDir, f));
+      const rows = Array.isArray(raw) ? raw : (raw[kind] || raw.rows || []);
+      for (const r of rows) {
+        if (insertRow(table, { ...r, founder_id: r.founder_id ?? Number(founderId) })) counters[kind]++;
+      }
+    }
+  });
+  tx(fs.readdirSync(dDir));
+  ({ notes, calls, memos } = counters);
+}
+
+console.log(JSON.stringify({ founders, assessments, inputs, notes, calls, memos }));
