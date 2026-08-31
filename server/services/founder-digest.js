@@ -101,11 +101,10 @@ async function sendFounderDigest(userId = 1, { force = false, days = 7 } = {}) {
 
   const data = gather(userId, { days });
   try {
-    const nodemailer = require('nodemailer');
-    const transport = nodemailer.createTransport({
-      host: 'smtp.gmail.com', port: 465, secure: true, family: 4,
-      auth: { user: cfg.address, pass: cfg.appPassword }, connectionTimeout: 15000, greetingTimeout: 10000,
-    });
+    // Pinned to IPv4 — the `family: 4` that used to sit here never reached DNS. See
+    // server/services/smtp.js for why Railway + nodemailer 8 needs a literal address.
+    const { createTransport } = require('./smtp');
+    const transport = await createTransport(cfg);
     await transport.sendMail({
       from: `"Stu · Breakout Radar" <${cfg.address}>`,
       to: recipient,

@@ -827,7 +827,16 @@ app.listen(PORT, () => {
         const { sendFounderDigest } = require('./services/founder-digest');
         const r = await sendFounderDigest(1, {});
         console.log('[Cron][FounderDigest]', JSON.stringify(r));
-      } catch (e) { console.error('[Cron][FounderDigest] failed:', e.message); }
+        // Record the outcome, not just the fact that we ran. A send failure comes back
+        // as `{ok:false}` rather than a throw, so the catch below never sees it — this
+        // job logged to console only, and console is gone on the next Railway deploy.
+        // A silent morning is exactly the failure nobody notices.
+        if (r && r.ok) recordJobRun('founder_digest', r.skipped ? 'skipped' : 'ok', r.skipped ? r.reason : `sent → ${r.recipient} (${r.count} founders)`, 1);
+        else recordJobRun('founder_digest', 'error', (r && r.error) || 'unknown error', 1);
+      } catch (e) {
+        console.error('[Cron][FounderDigest] failed:', e.message);
+        recordJobRun('founder_digest', 'error', e.message, 1);
+      }
     }, { timezone: 'America/Chicago' });
     console.log('Daily founder digest scheduled (8:00 AM CT)');
   }

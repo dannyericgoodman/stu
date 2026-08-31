@@ -166,18 +166,11 @@ async function sendDigest(userId, { force = false } = {}) {
   }
 
   try {
-    const nodemailer = require('nodemailer');
-    // Force IPv4: Railway containers can't reach Google's IPv6 SMTP (ENETUNREACH on
-    // 2607:f8b0:…:465). Explicit host/port + family:4 keeps us on the reachable IPv4 path.
-    const transport = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
-      family: 4,
-      auth: { user: cfg.address, pass: cfg.appPassword },
-      connectionTimeout: 15000,
-      greetingTimeout: 10000,
-    });
+    // Pinned to IPv4. Railway has no IPv6 route, and nodemailer's own resolver drops
+    // the A records before it ever queries them — the `family: 4` that used to sit
+    // here was a no-op. See server/services/smtp.js.
+    const { createTransport } = require('./smtp');
+    const transport = await createTransport(cfg);
     await transport.sendMail({
       from: `"Stu Daily Brief" <${cfg.address}>`,
       to: recipient,
