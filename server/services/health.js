@@ -21,7 +21,7 @@ function lastRun(job, userId = null) {
   return db.prepare('SELECT * FROM job_runs WHERE job = ? ORDER BY ran_at DESC LIMIT 1').get(job);
 }
 
-function buildHealthReport(userId) {
+async function buildHealthReport(userId) {
   const checks = [];
   const add = (name, status, detail) => checks.push({ name, status, detail });
 
@@ -29,12 +29,46 @@ function buildHealthReport(userId) {
   try { db.prepare('SELECT 1 AS ok').get(); add('Database', 'green', 'SQLite connected'); }
   catch (e) { add('Database', 'red', e.message); }
 
-  // 2. API keys (user's own key, or the platform env key for the owner)
-  const { resolveKey } = require('../lib/providerKeys');
-  const hasAnthropic = !!resolveKey(userId, 'anthropic');
+  // ══════════════════════════════════════════════════════════════════════
+  // 2. API keys — VERIFIED, not merely present.
+  //
+  // This said `configured`/`green` for any non-empty string, and /api/health's
+  // `has_anthropic` did the same. So when the Anthropic key expired, the board
+  // stayed green while every LLM feature in Stu returned a raw 401: JD parse,
+  // shortlist rationale, Exa extraction, assessments. The one page whose job is
+  // to answer "is anything broken" confidently said no.
+  //
+  // One authenticated GET (models.list, cached 5 min in providerKeys) turns that
+  // into a real answer. A key that resolves but does not work is RED — it is
+  // strictly worse than a missing one, because a missing key at least surfaces
+  // "configure your key" at the call site.
+  // ══════════════════════════════════════════════════════════════════════
+  const { resolveKey, verifyAnthropicKey } = require('../lib/providerKeys');
   const hasExa = !!resolveKey(userId, 'exa');
-  add('Claude API key', hasAnthropic ? 'green' : 'red', hasAnthropic ? 'configured' : 'missing — scoring/extraction will degrade');
+  const ak = await verifyAnthropicKey(userId).catch((e) => ({ configured: true, ok: false, detail: e.message }));
+  add('Claude API key',
+    !ak.configured ? 'red' : ak.ok ? 'green' : 'red',
+    !ak.configured ? 'missing — scoring/extraction will degrade'
+      : ak.ok ? `verified against the API${ak.cached ? ' (cached)' : ''}`
+        : `PRESENT BUT NOT WORKING — ${ak.detail}`);
   add('Exa API key (sourcing)', hasExa ? 'green' : 'yellow', hasExa ? 'configured' : 'missing — sourcing runs will no-op');
+
+  // Hiring — the warm pool has a live source, or it does not. The base cutover
+  // took the Airtable talent tables away and nothing said so; a refresh button
+  // that 500s is not a status.
+  try {
+    const { availableTables } = require('../pipeline/hiring-warm');
+    const warm = db.prepare("SELECT COUNT(*) AS n FROM hiring_candidates WHERE user_id = ? AND tier = 'warm' AND is_deleted = 0").get(userId);
+    const live = availableTables();
+    add('Hiring warm pool',
+      live.length ? 'green' : (warm.n ? 'yellow' : 'red'),
+      live.length
+        ? `${warm.n} warm · source: ${live.map((t) => t.label).join(', ')}`
+        : `${warm.n} warm in Stu, but NO live Airtable source in the authorized base — refreshes cannot add anyone`);
+    const ghToken = !!resolveKey(userId, 'github');
+    add('Hiring cold discovery (GitHub)', ghToken ? 'green' : 'yellow',
+      ghToken ? 'token configured' : 'no GitHub token — the GitHub sourcing arm is skipped on every run');
+  } catch (e) { add('Hiring warm pool', 'red', e.message); }
 
   // 3. Jobs — last run status
   const jobLabels = {

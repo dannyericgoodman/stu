@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../../db');
 const { isOwner } = require('../../lib/providerKeys');
-const { importWarmPool } = require('../../pipeline/hiring-warm');
+const { importWarmPool, availableTables } = require('../../pipeline/hiring-warm');
 
 // POST /api/hiring/warm/import — pull the warm pool from Airtable into hiring_candidates.
 router.post('/import', async (req, res) => {
@@ -29,7 +29,17 @@ router.get('/status', (req, res) => {
     FROM hiring_candidates WHERE user_id = ? AND tier = 'warm' AND is_deleted = 0
   `).get(req.user.id);
   const last = db.prepare(`SELECT run_at, summary FROM hiring_runs WHERE user_id = ? AND kind = 'warm_import' ORDER BY run_at DESC LIMIT 1`).get(req.user.id);
-  res.json({ ...counts, last_import: last || null });
+  // Whether a refresh can do anything. The UI offered a "refresh" affordance with
+  // no way to know the source had been removed from the base, so the only feedback
+  // was a 500 on click. A count with no live source behind it is a frozen pool, and
+  // the screen should say which kind of pool it is.
+  const live = availableTables();
+  res.json({
+    ...counts,
+    last_import: last || null,
+    source_live: live.length > 0,
+    sources: live.map((t) => t.label),
+  });
 });
 
 module.exports = router;

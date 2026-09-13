@@ -49,17 +49,31 @@ export default function HiringRole() {
     if (!progress) setProgress('Sourcing your network + the open web…');
     clearInterval(pollRef.current);
     let ticks = 0;
+    // ── A run that outlasts the poll is not a finished run ──
+    // This stopped at tick 40 (120s) and then announced `st.summary || 'Shortlist
+    // ready'` — the summary of a run still in flight, or a flat success claim. A real
+    // run is warm-ensure + up to 4 Exa searches + chunked extraction + GitHub
+    // discovery + a rank-and-explain pass, which clears 120s comfortably once the
+    // GitHub arm is on (it sleeps 200ms per profile and 1s per search page).
+    // So: a longer ceiling, and when we do hit it we say we stopped WATCHING, not
+    // that the work finished.
+    const MAX_TICKS = 150; // 7.5 min at 3s
     pollRef.current = setInterval(async () => {
       ticks++;
       try {
         const st = await api.getHiringSourceStatus(Number(id));
         if (st.found > 0) setProgress(`Found ${st.found} so far…`);
-        if (st.status === 'done' || st.status === 'error' || ticks > 40) {
+        if (st.status === 'done' || st.status === 'error') {
           clearInterval(pollRef.current);
           setSourcing(false); setProgress('');
           await load();
           if (st.status === 'error') toast({ message: st.error || 'Sourcing hit an error', tone: 'error' });
           else toast({ message: st.summary || 'Shortlist ready' });
+        } else if (ticks > MAX_TICKS) {
+          clearInterval(pollRef.current);
+          setSourcing(false); setProgress('');
+          await load();
+          toast({ message: 'Still sourcing in the background — reopen this role in a minute to see the rest.' });
         } else {
           await load(); // refresh the list as leads land
         }

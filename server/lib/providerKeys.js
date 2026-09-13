@@ -224,6 +224,73 @@ function anthropicFor(userId, feature = null) {
   return meteredClient(resolveKey(userId, 'anthropic'), userId, feature);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// AN EXPIRED KEY SHOULD READ AS AN EXPIRED KEY.
+//
+// Every LLM call site here does `catch (e) { return { error: '... failed: ' +
+// e.message } }`, and the SDK's `e.message` for an auth failure is the raw response
+// body. So the JD-ingest toast in the Hiring UI said, verbatim:
+//
+//   JD parse failed: 401 {"type":"error","error":{"type":"authentication_error",
+//   "message":"API key is invalid."},"request_id":null}
+//
+// which is how "Stu wouldn't parse my job description" gets reported. The JD was
+// fine, the parser was fine, the key was dead — and nothing on screen said so or
+// pointed at Settings. `has_anthropic: true` on /api/health agreed with the UI that
+// everything was configured, because it only ever checked that a string exists.
+//
+// One translator, at the layer that owns the key, so the fix lands everywhere a key
+// can fail rather than once per call site.
+// ══════════════════════════════════════════════════════════════════════════
+function describeLlmError(e, what = 'That call') {
+  const status = e && (e.status || e.statusCode);
+  const raw = String((e && e.message) || 'unknown error');
+  if (e instanceof SpendCapError || e?.code === 'spend_cap_exceeded') return { message: raw, code: 'spend_cap_exceeded' };
+  if (status === 401 || status === 403 || /authentication_error|API key is invalid|invalid x-api-key|permission_error/i.test(raw)) {
+    return {
+      message: 'Your Anthropic API key is invalid or expired. Update it in Settings (or set ANTHROPIC_API_KEY) and try again.',
+      code: 'bad_key',
+    };
+  }
+  if (status === 429 || /rate_limit/i.test(raw)) return { message: 'Anthropic rate-limited this request. Wait a moment and retry.', code: 'rate_limited' };
+  if (status === 529 || /overloaded/i.test(raw)) return { message: 'Anthropic is overloaded right now. Retry in a minute.', code: 'overloaded' };
+  if (/ETIMEDOUT|ECONNRESET|ENOTFOUND|timeout|aborted/i.test(raw)) return { message: `${what} timed out reaching Anthropic. Retry.`, code: 'timeout' };
+  if (status === 404 || /model.*not.*found|invalid.*model/i.test(raw)) {
+    return { message: `The configured model (${MODEL}) was rejected by the API. Set ANTHROPIC_MODEL to a current model id.`, code: 'bad_model' };
+  }
+  return { message: `${what} failed: ${raw}`, code: 'llm_error' };
+}
+
+// Does the configured Anthropic key actually WORK? A presence check cannot answer
+// that, which is the whole bug above. One cheap authenticated GET, cached, so a
+// health board can say "verified" instead of "a string is set".
+const KEY_CHECK_TTL_MS = 5 * 60 * 1000;
+const keyCheckCache = new Map(); // key-fingerprint -> { at, ok, detail }
+
+async function verifyAnthropicKey(userId) {
+  const key = resolveKey(userId, 'anthropic');
+  if (!key) return { configured: false, ok: false, detail: 'No Anthropic key configured.' };
+  // Fingerprint by hash, never by prefix. Every Anthropic key begins "sk-ant-a"
+  // and rotated keys share a length, so a prefix+length fingerprint made a FRESH
+  // key inherit the dead key's cached verdict for five minutes — health stayed
+  // red at exactly the moment someone had just fixed it.
+  const fp = require('crypto').createHash('sha256').update(key).digest('hex').slice(0, 16);
+  const hit = keyCheckCache.get(fp);
+  if (hit && Date.now() - hit.at < KEY_CHECK_TTL_MS) return { configured: true, ok: hit.ok, detail: hit.detail, cached: true };
+  let ok = false;
+  let detail = '';
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: key, timeout: 15000, maxRetries: 0 });
+    await client.models.list({ limit: 1 });
+    ok = true; detail = 'Key verified against the Anthropic API.';
+  } catch (e) {
+    ok = false; detail = describeLlmError(e, 'Key check').message;
+  }
+  keyCheckCache.set(fp, { at: Date.now(), ok, detail });
+  return { configured: true, ok, detail };
+}
+
 module.exports = {
   MODEL,
   isOwner,
@@ -239,4 +306,6 @@ module.exports = {
   dailyCapUsd,
   SpendCapError,
   SETTING_BY_PROVIDER,
+  describeLlmError,
+  verifyAnthropicKey,
 };

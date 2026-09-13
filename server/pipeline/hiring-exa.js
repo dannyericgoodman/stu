@@ -19,7 +19,7 @@
 
 const https = require('https');
 const db = require('../db');
-const { anthropicFor, resolveKey, recordCost, MODEL } = require('../lib/providerKeys');
+const { anthropicFor, resolveKey, recordCost, describeLlmError, MODEL } = require('../lib/providerKeys');
 const { verifyIlTie } = require('../lib/ilTie');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
 
@@ -141,8 +141,12 @@ const FUNCTIONS = ['engineering', 'gtm', 'product', 'design', 'ops', 'data', 'fi
 // ══════════════════════════════════════════════════════════════════════════
 const EXTRACT_CHUNK = 12;
 
+// Returns { rows, errors, extracted, dropped } — the funnel, not just the survivors.
+// `rows` is the graded list; `errors` is why any chunk produced nothing; `dropped` is
+// how many the honesty gate rejected. sourceViaExa puts all of it in the run summary.
 async function extractCandidates({ client, role, results }) {
-  if (!client || !results.length) return [];
+  if (!client) return { rows: [], errors: ['No Anthropic key — candidate extraction cannot run.'], extracted: 0, dropped: 0 };
+  if (!results.length) return { rows: [], errors: [], extracted: 0, dropped: 0 };
   const stack = parseArr(role.must_have_stack).join(', ');
 
   const SYSTEM = `You extract candidate profiles from web search results for a VC helping a portfolio company hire. For each result that is clearly a PERSON who could plausibly fit the role, output a structured record using ONLY facts in that result's text.
@@ -163,6 +167,18 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
   for (let i = 0; i < results.length; i += EXTRACT_CHUNK) chunks.push(i);
 
   const parsedAll = [];
+  // ══════════════════════════════════════════════════════════════════════
+  // A FAILED EXTRACTION AND AN EMPTY ONE LOOK IDENTICAL FROM THE RUN SUMMARY.
+  //
+  // Chunk errors were console.error'd and otherwise swallowed, so a run whose
+  // every chunk 401'd returned zero candidates and reported "Exa: 0 new (60
+  // considered, 0 IL)" — which is also exactly what a healthy run looks like when
+  // the honesty gate rejects everything. That is the bug 9d6061f fixed for founder
+  // sourcing ("'exa 0' could not distinguish a dead key from a working one"), and
+  // this arm still had it. Errors are counted and returned so the run summary can
+  // say which of the two happened.
+  // ══════════════════════════════════════════════════════════════════════
+  const errors = [];
   for (const startIdx of chunks) {
     const slice = results.slice(startIdx, startIdx + EXTRACT_CHUNK);
     const blocks = slice.map((r, j) => `#${startIdx + j}\nURL: ${r.url || ''}\nTITLE: ${r.title || ''}\nTEXT: ${String(r.text || '').slice(0, 1200)}`).join('\n\n');
@@ -175,14 +191,18 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
       const raw = (resp.content?.[0]?.text || '').trim();
       const m = raw.match(/\{[\s\S]*\}/);
       if (m) parsedAll.push(...(JSON.parse(m[0]).candidates || []));
+      else errors.push(describeLlmError(new Error('no JSON in response'), 'Extraction').message);
     } catch (e) {
-      // One bad chunk must not discard the ones that worked.
+      // One bad chunk must not discard the ones that worked — but it must be counted.
+      const d = describeLlmError(e, 'Extraction');
       console.error(`[HiringExa] extract chunk at ${startIdx} failed:`, e.message);
+      errors.push(d.message);
     }
   }
   const parsed = { candidates: parsedAll };
 
   const out = [];
+  let dropped = 0;
   for (const c of (parsed.candidates || [])) {
     const src = results[Number(c.i)];
     if (!src || !c.name) continue;
@@ -190,7 +210,7 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
     // Honesty gate: the alignment must be backed by a quote that's really in the text.
     const idx = buildContextIndex(text);
     const grounded = c.evidence && classifyQuote(String(c.evidence), idx) !== 'unverified';
-    if (!grounded) continue; // no real receipt → drop, don't surface an ungrounded lead
+    if (!grounded) { dropped++; continue; } // no real receipt → drop, don't surface an ungrounded lead
     const tie = verifyIlTie([c.location, text].filter(Boolean).join(' • '));
     const url = String(src.url || '');
     const isLinkedIn = /linkedin\.com\/in\//i.test(url);
@@ -230,18 +250,65 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
       raw_data: JSON.stringify({ aligned: c.aligned, evidence: c.evidence, url }),
     });
   }
-  return out;
+  return { rows: out, errors, extracted: (parsed.candidates || []).length, dropped };
 }
 
 // Upsert a cold Exa candidate by (user_id, external_id), then by linkedin_url so the
 // same person found twice doesn't duplicate.
 const COLS = ['name', 'headline', 'current_role', 'current_company', 'location_city', 'tech_stack', 'role_function', 'linkedin_url', 'website_url', 'tier', 'source', 'il_tie_type', 'il_tie_place', 'il_tie_evidence', 'external_id', 'notes', 'raw_data'];
+
+// ══════════════════════════════════════════════════════════════════════════
+// FINDING SOMEONE ON THE OPEN WEB DOES NOT MAKE THEM A STRANGER.
+//
+// The dedup-by-linkedin_url branch below exists so the same person found twice
+// isn't duplicated — correct. But it then wrote the FULL cold row over whatever
+// was there, `tier = 'cold'` and `source = 'exa'` included. So the first time an
+// Exa query surfaced somebody already in the warm pool, that person stopped being
+// warm: they lost the +12 warm bonus in the ranker, lost the "warm · Permute
+// Hackathon" badge on the card, and lost the "warm — <source>" line in the export
+// Danny sends the founder.
+//
+// This is latent rather than historical — there are no warm/cold URL collisions in
+// the pool today — but it is squarely in the path of normal use. The warm pool is
+// sixteen Chicago engineers; the Exa arm searches for Chicago engineers. Kamil
+// Chmielewski ("CTO/Full Stack, Masters @ UChicago") is exactly who a query for a
+// Chicago full-stack engineer returns, and the warmth would have been deleted by
+// the search that found him — silently, with no way to notice from the UI, and in
+// the direction that destroys the product's only real edge.
+//
+// Warmth is provenance: a fact about Danny's relationship, established elsewhere,
+// that a web search has no standing to revoke. So on a warm row the enrichment is
+// applied (a scraped profile genuinely knows more about their current job than a
+// one-line Airtable bio) and the warmth columns are left alone.
+// ══════════════════════════════════════════════════════════════════════════
+// Warmth and identity are Danny's, established elsewhere; a scrape never rewrites
+// them. `name` and `headline` are his too — his own one-line Airtable bio beats a
+// scraped summary, and a scrape's rendering of a name ("Kamil C.") is often worse.
+const WARM_PRESERVED = new Set(['tier', 'source', 'external_id', 'name', 'headline']);
+
+// An empty JSON array is the extractor saying "the text didn't say", not "they have
+// no stack" — treat it as absent so it can't blank a real value.
+function isEmptyValue(v) {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') { const s = v.trim(); return !s || s === '[]' || s === '{}'; }
+  if (Array.isArray(v)) return !v.length;
+  return false;
+}
+
 function upsert(userId, row) {
-  let existing = db.prepare('SELECT id FROM hiring_candidates WHERE user_id = ? AND external_id = ?').get(userId, row.external_id);
-  if (!existing && row.linkedin_url) existing = db.prepare('SELECT id FROM hiring_candidates WHERE user_id = ? AND linkedin_url = ?').get(userId, row.linkedin_url);
+  let existing = db.prepare('SELECT id, tier FROM hiring_candidates WHERE user_id = ? AND external_id = ?').get(userId, row.external_id);
+  if (!existing && row.linkedin_url) existing = db.prepare('SELECT id, tier FROM hiring_candidates WHERE user_id = ? AND linkedin_url = ?').get(userId, row.linkedin_url);
   if (existing) {
-    const sets = COLS.map((c) => `${c} = ?`).join(', ');
-    db.prepare(`UPDATE hiring_candidates SET ${sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...COLS.map((c) => row[c] ?? null), existing.id);
+    // A cold row is fully owned by this engine — overwrite it. A warm row is only
+    // ENRICHED: fill what's blank and improve what the scrape genuinely knows
+    // better, and never write a null over something we already had. A rescrape that
+    // happened not to mention Chicago must not delete a verified Illinois tie.
+    const cols = existing.tier === 'warm'
+      ? COLS.filter((c) => !WARM_PRESERVED.has(c) && !isEmptyValue(row[c]))
+      : COLS;
+    if (!cols.length) return 'updated'; // warm row, nothing new to add
+    const sets = cols.map((c) => `${c} = ?`).join(', ');
+    db.prepare(`UPDATE hiring_candidates SET ${sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...cols.map((c) => row[c] ?? null), existing.id);
     return 'updated';
   }
   const cols = ['user_id', ...COLS];
@@ -280,12 +347,17 @@ async function sourceViaExa({ userId = 1, role, deps = {} }) {
   out.considered = fresh.length;
   // 36, chunked, rather than 14 in one capped call. This is the number that decides
   // how many real names a founder ever sees.
-  const cands = await extractCandidates({ client, role, results: fresh.slice(0, 36) });
-  for (const row of cands) {
+  const ex = await extractCandidates({ client, role, results: fresh.slice(0, 36) });
+  for (const row of ex.rows) {
     const res = upsert(userId, row);
     out[res]++;
     if (row.il_tie_type) out.il_tied++;
   }
+  // The funnel, so "0 new" can be read. Without these, a dead Anthropic key and a
+  // strict honesty gate produce byte-identical summaries.
+  out.extracted = ex.extracted;
+  out.ungrounded_dropped = ex.dropped;
+  if (ex.errors.length) out.errors = [...new Set(ex.errors)];
   return out;
 }
 

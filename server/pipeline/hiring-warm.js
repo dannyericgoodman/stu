@@ -28,10 +28,58 @@ const db = require('../db');
 const { verifyIlTie } = require('../lib/ilTie');
 
 // Base and table ids come from lib/airtableBase, not from a literal re-typed here.
-const { TABLE, recordsUrl } = require('../lib/airtableBase');
+const { TABLE, ABSENT_TABLES, BASE_ID, recordsUrl } = require('../lib/airtableBase');
 
-const TALENT_DB = TABLE.TALENT;
-const MASTER_CONTACTS = TABLE.MASTER_CONTACTS;
+// ══════════════════════════════════════════════════════════════════════════
+// THE WARM SOURCE IS GONE, AND THIS MODULE HAD NO IDEA.
+//
+// The 2026-08-30 base cutover moved Stu from `appfE9DVrSUOrkkpu` to
+// `appxd2l3BXJAdTWSQ`, and the new base has NEITHER Talent Database nor Master
+// Contacts. lib/airtableBase recorded that correctly — it moved both ids out of
+// TABLE and into ABSENT_TABLES, precisely so a reader would fail with a sentence
+// instead of a 404.
+//
+// This file kept reading `TABLE.TALENT`. That is now `undefined`, so every warm
+// import called `recordsUrl(undefined)` and died inside assertKnownTable:
+//
+//   Warm import failed: [airtableBase] Refusing to build a URL for unknown
+//   table "undefined". Add it to TABLE in lib/airtableBase.js if it is
+//   genuinely part of Stu's scope.
+//
+// A 500 carrying a message about editing a source file is not an error a user can
+// act on, and the advice in it is wrong: the table is not missing from TABLE by
+// oversight, it is missing from the BASE. Adding it back would issue requests for
+// a table that does not exist.
+//
+// Why no test caught it: test/hiring-warm.test.js injects deps.fetchTable, so the
+// table ids are never resolved in test. The unit tests all pass against a source
+// that cannot be reached. There is now a test that resolves the ids themselves.
+//
+// So: resolve the ids ONCE, here, and report their absence as a fact about the
+// base rather than as a crash. The 16 warm rows already in SQLite are untouched —
+// a dead refresh button must not also look like an empty pool.
+// ══════════════════════════════════════════════════════════════════════════
+const TALENT_DB = TABLE.TALENT || null;
+const MASTER_CONTACTS = TABLE.MASTER_CONTACTS || null;
+
+// Which warm tables this base actually has. Empty = the pool has no live source.
+function availableTables() {
+  return [
+    { id: TALENT_DB, key: 'TALENT', label: 'Talent Database', map: mapTalentRow, source: 'airtable_talent_db' },
+    { id: MASTER_CONTACTS, key: 'MASTER_CONTACTS', label: 'Master Contacts', map: mapMasterRow, source: 'airtable_master_contacts' },
+  ].filter((t) => !!t.id);
+}
+
+// The message a human can act on, built from what airtableBase already knows.
+function absentTablesError() {
+  const missing = ['TALENT', 'MASTER_CONTACTS']
+    .filter((k) => !TABLE[k])
+    .map((k) => ABSENT_TABLES[k] || k);
+  return `The warm-pool tables are not in the authorized Airtable base (${BASE_ID}). ${missing.join(' ')} `
+    + `Nothing was changed — the warm candidates already in Stu are intact. `
+    + `To restore refreshes, add a talent table to the authorized base and register it in lib/airtableBase.js, `
+    + `or build the warm pool from the Network module instead.`;
+}
 
 // A row is warm only if its provenance is a real touchpoint. Everything the old
 // engine wrote back carries this exact string — the one value we exclude.
@@ -176,6 +224,15 @@ async function importWarmPool({ userId = 1, apiKey = process.env.AIRTABLE_API_KE
   if (!apiKey) return { error: 'No AIRTABLE_API_KEY configured — warm import needs the Superior base key.' };
   const fetch = deps.fetchTable || fetchTable;
 
+  // No live warm table in this base → say so, and change nothing. This is a stated
+  // fact about the base, not a failure to retry, so it returns `error` + `code`
+  // rather than throwing: the route answers 400 with a sentence, and the existing
+  // warm rows stay exactly as they are.
+  const tables = deps.tables || availableTables();
+  if (!tables.length) {
+    return { error: absentTablesError(), code: 'warm_source_absent', inserted: 0, updated: 0, skipped: 0, il_tied: 0, sources: {} };
+  }
+
   const out = { inserted: 0, updated: 0, skipped: 0, il_tied: 0, sources: {} };
   const tally = (src, res, row) => {
     out[res]++;
@@ -184,31 +241,38 @@ async function importWarmPool({ userId = 1, apiKey = process.env.AIRTABLE_API_KE
     if (row.il_tie_type) out.il_tied++;
   };
 
-  // Talent Database — warm rows only.
-  const talent = await fetch(TALENT_DB, apiKey);
-  for (const rec of talent) {
-    const row = mapTalentRow(rec);
-    if (!row) { out.skipped++; continue; }
-    tally('airtable_talent_db', upsert(userId, row), row);
-  }
-
-  // Master Contacts — all rows are warm (they exist because Danny added them).
-  let master = [];
-  try { master = await fetch(MASTER_CONTACTS, apiKey); } catch (e) { out.master_contacts_error = e.message; }
-  for (const rec of master) {
-    const row = mapMasterRow(rec);
-    if (!row) { out.skipped++; continue; }
-    tally('airtable_master_contacts', upsert(userId, row), row);
+  // Each table is best-effort and reported by name. One table erroring must not
+  // discard the rows another already imported, and must not be silent either —
+  // a warm refresh that half-worked has to say which half.
+  let considered = 0;
+  for (const t of tables) {
+    let recs = [];
+    try { recs = await fetch(t.id, apiKey); }
+    catch (e) {
+      out.errors = out.errors || {};
+      out.errors[t.label] = e.message;
+      continue;
+    }
+    considered += recs.length;
+    for (const rec of recs) {
+      const row = t.map(rec);
+      if (!row) { out.skipped++; continue; }
+      tally(t.source, upsert(userId, row), row);
+    }
   }
 
   // Log the run so a warm refresh is auditable alongside match/discovery runs.
   try {
+    const errNote = out.errors ? ` — errors: ${Object.entries(out.errors).map(([k, v]) => `${k}: ${v}`).join('; ')}` : '';
     db.prepare(`INSERT INTO hiring_runs (user_id, kind, warm_considered, summary) VALUES (?, 'warm_import', ?, ?)`)
-      .run(userId, talent.length + master.length,
-        `warm import: ${out.inserted} new, ${out.updated} refreshed, ${out.skipped} skipped (not warm), ${out.il_tied} with IL tie`);
+      .run(userId, considered,
+        `warm import: ${out.inserted} new, ${out.updated} refreshed, ${out.skipped} skipped (not warm), ${out.il_tied} with IL tie${errNote}`);
   } catch { /* run-log failure must never break the import */ }
 
   return out;
 }
 
-module.exports = { importWarmPool, mapTalentRow, mapMasterRow, mapFunctions, normLinkedIn, ilTieFrom, FUNCTION_MAP };
+module.exports = {
+  importWarmPool, mapTalentRow, mapMasterRow, mapFunctions, normLinkedIn, ilTieFrom, FUNCTION_MAP,
+  availableTables, absentTablesError,
+};

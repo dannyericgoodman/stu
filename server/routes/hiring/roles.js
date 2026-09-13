@@ -123,7 +123,16 @@ router.post('/ingest', upload.single('file'), async (req, res) => {
 
     // 2. Structure it. Grounded; leaves unstated fields blank.
     const parsed = await parseRole({ userId: req.user.id, jdText: extracted.text, hintTitle: body.title });
-    if (parsed.error) return res.status(422).json({ error: parsed.error });
+    if (parsed.error) {
+      // 422 means "your JD is the problem". A dead key or a tripped spend cap is
+      // OUR problem and needs a different status, or the UI tells Danny to fix a
+      // job description that was never wrong. Both used to come back as 422.
+      const status = parsed.code === 'spend_cap_exceeded' ? 402
+        : ['bad_key', 'bad_model'].includes(parsed.code) ? 503
+          : ['rate_limited', 'overloaded', 'timeout'].includes(parsed.code) ? 429
+            : 422;
+      return res.status(status).json({ error: parsed.error, code: parsed.code });
+    }
     const role = parsed.role;
 
     // 3. Insert. jd_content is stored verbatim — the grounding source for rationale later.

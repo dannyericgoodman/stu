@@ -20,7 +20,7 @@
 // ══════════════════════════════════════════════════════════════════════════
 
 const https = require('https');
-const { anthropicFor, resolveKey, recordCost, MODEL } = require('./providerKeys');
+const { anthropicFor, resolveKey, recordCost, describeLlmError, MODEL } = require('./providerKeys');
 
 // Canonical functions — the same set the warm pool (Airtable Function(s)) and the
 // matcher speak, so a role's function lines up with a candidate's without translation.
@@ -171,7 +171,11 @@ async function parseRole({ userId, jdText, hintTitle }) {
     if (!role.title && hintTitle) role.title = String(hintTitle).trim();
     return { role, model: MODEL };
   } catch (e) {
-    return { error: `JD parse failed: ${e.message}` };
+    // A dead key, a rate limit and a malformed JD are three different problems with
+    // three different fixes. Returning the SDK's raw response body for all of them
+    // is how "Stu wouldn't parse my JD" ended up meaning "the API key expired".
+    const d = describeLlmError(e, 'JD parse');
+    return { error: d.message, code: d.code };
   }
 }
 

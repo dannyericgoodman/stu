@@ -39,10 +39,27 @@ test('the liveness probe is exempt from the global rate limiter', () => {
   const src = read('index.js');
 
   // The exemption must be wired INTO the global /api limiter, not merely defined.
-  const limiter = src.slice(src.indexOf("app.use('/api', rateLimit("));
-  const globalLimiter = limiter.slice(0, limiter.indexOf('\n'));
+  // Matched on the MOUNT rather than on the factory's name: the limiters are built
+  // through jsonLimit() since 2026-09-11 (express-rate-limit's default 429 body is
+  // plain text, which the client rendered as a bare "Request failed"). Pinning the
+  // old literal `rateLimit(` made this test fail for a rename while the invariant it
+  // guards was untouched — so assert the invariant instead.
+  const mount = src.slice(src.indexOf("app.use('/api', "));
+  const globalLimiter = mount.slice(0, mount.indexOf('\n'));
   assert.ok(/skip: isLivenessProbe/.test(globalLimiter),
     'the global /api limiter must skip the health probe, or a traffic burst kills the instance');
+
+  // And whatever wrapper builds it must actually FORWARD skip to express-rate-limit.
+  // A wrapper that spread its own defaults AFTER opts would silently drop it, and the
+  // grep above would still pass — which is precisely how a limiter kills instances.
+  const factory = src.slice(src.indexOf('function jsonLimit('), src.indexOf('// Rate limiting'));
+  if (factory) {
+    assert.ok(/\.\.\.opts/.test(factory), 'jsonLimit must spread caller opts through to rateLimit');
+    const defaultsIdx = factory.indexOf('standardHeaders');
+    const optsIdx = factory.indexOf('...opts');
+    assert.ok(optsIdx > defaultsIdx,
+      '...opts must come AFTER the wrapper defaults, or skip/max/windowMs get overwritten');
+  }
 
   assert.ok(/const isLivenessProbe = \(req\) => req\.originalUrl\.split\('\?'\)\[0\] === '\/api\/health'/.test(src),
     'matched on originalUrl so the predicate is correct regardless of mount path');

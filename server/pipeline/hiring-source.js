@@ -38,15 +38,36 @@ async function runSourcing(runId, userId, roleId) {
     // 1. Warm-ensure. Only import if the pool is empty (a refresh is a separate action).
     const warmCount = db.prepare("SELECT COUNT(*) AS n FROM hiring_candidates WHERE user_id = ? AND tier = 'warm' AND is_deleted = 0").get(userId).n;
     if (warmCount === 0) {
-      try { const w = await importWarmPool({ userId }); if (!w.error) notes.push(`warm: ${w.inserted || 0} imported`); }
-      catch (e) { notes.push(`warm import skipped: ${e.message}`); }
+      // A returned `error` used to be dropped on the floor here — only a THROW was
+      // noted. So when the base cutover took the warm tables away, a run against an
+      // empty pool reported the cold arms and said nothing at all about warm, which
+      // reads as "warm found nobody" rather than "warm has no source". Every outcome
+      // gets a note now; the whole point of the summary is that silence is legible.
+      try {
+        const w = await importWarmPool({ userId });
+        if (w.error) notes.push(`warm pool not refreshed — ${w.error}`);
+        else notes.push(`warm: ${w.inserted || 0} imported`);
+      } catch (e) { notes.push(`warm import skipped: ${e.message}`); }
+    } else {
+      notes.push(`warm: ${warmCount} already in pool`);
     }
 
     // 2. Exa — active semantic sourcing from the description. The engine's new muscle.
     try {
       const exa = await sourceViaExa({ userId, role });
       if (exa.error === 'no_exa_key') notes.push('Exa sourcing skipped (no Exa key)');
-      else { found += (exa.inserted || 0); notes.push(`Exa: ${exa.inserted || 0} new (${exa.considered || 0} considered, ${exa.il_tied || 0} IL)`); }
+      else {
+        found += (exa.inserted || 0);
+        // The FUNNEL, not just the survivors — 9d6061f's lesson, applied to this arm.
+        // "Exa: 0 new (60 considered)" described a dead API key and a working engine
+        // with a strict honesty gate equally well, and we chased the wrong one.
+        notes.push(
+          `Exa: ${exa.considered || 0} found → ${exa.extracted || 0} extracted, `
+          + `${exa.ungrounded_dropped || 0} dropped (no receipt), `
+          + `${exa.inserted || 0} new + ${exa.updated || 0} refreshed, ${exa.il_tied || 0} IL`
+          + (exa.errors && exa.errors.length ? ` — ERRORS: ${exa.errors.join(' | ')}` : '')
+        );
+      }
       updateRun(runId, { found });
     } catch (e) { notes.push(`Exa sourcing failed: ${e.message}`); }
 

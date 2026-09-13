@@ -51,12 +51,20 @@ export default function HiringHome() {
     <div className="max-w-4xl mx-auto px-6 py-8">
       <div className="flex items-baseline justify-between mb-1">
         <h1 className="text-xl font-semibold text-gray-900 tracking-tight">Hiring</h1>
-        {warm && (
+        {/* A "refresh" link that can only 500 is worse than no link. The warm
+            tables left the authorized Airtable base in the 2026-08-30 cutover, so
+            when there's no live source the pool is FROZEN and the screen says so
+            instead of inviting a click that cannot work. */}
+        {warm && (warm.source_live ? (
           <button onClick={refreshWarm} disabled={importing}
             className="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-50">
             {importing ? 'Refreshing…' : `Warm pool: ${warm.total || 0} (${warm.il_tied || 0} IL) · refresh`}
           </button>
-        )}
+        ) : (
+          <span className="text-xs text-gray-400" title="The Airtable talent tables are not in the authorized base, so the warm pool can't be refreshed. Existing warm candidates still rank warm-first.">
+            Warm pool: {warm.total || 0} ({warm.il_tied || 0} IL) · frozen — no live source
+          </span>
+        ))}
       </div>
       <p className="text-[13px] text-gray-500 mb-6">Paste a JD, link it to a portfolio company, get a warm-first shortlist.</p>
 

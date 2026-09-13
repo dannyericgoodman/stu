@@ -27,7 +27,7 @@
 
 const db = require('../db');
 const { detectSignals } = require('../lib/builderSignals');
-const { anthropicFor, MODEL } = require('../lib/providerKeys');
+const { anthropicFor, describeLlmError, MODEL } = require('../lib/providerKeys');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -194,8 +194,45 @@ function computeFit(role, cand) {
   const sen = seniorityFit(role, text);
   const dom = domainFit(role, text);
 
-  // Cold builders earn a slope/signal contribution; warm rows usually score 0 here
-  // (they earn their rank from warmth + fit instead).
+  // ══════════════════════════════════════════════════════════════════════
+  // THIS AXIS IS UNMEASURED FOR THE ENTIRE POOL — AND LEAVING IT IN IS STILL RIGHT.
+  //
+  // Measured 2026-09-11: all 32 candidates have NO GitHub data, because the GitHub
+  // arm has never run (there has never been a token). So a 15-weight axis scores 0
+  // for essentially everyone. It discriminates nothing and deflates everything, and
+  // not evenly: warm rows renormalize over ~70 points (their stack is unreadable)
+  // where cold scraped rows use ~100, so a flat zero costs warm ~21% of its
+  // denominator against cold's ~15%.
+  //
+  // That reads exactly like the "absence of evidence" bug stackOverlap fixed above,
+  // and the obvious patch is to null the axis when there is nothing to read. IT WAS
+  // TRIED, ON THIS DATA, AND IT IS A REGRESSION:
+  //
+  //                       before          after nulling builder
+  //   #1                  Ezekiel Chow    Kamil Chmielewski (warm, 89)
+  //   Ezekiel Chow         #1              #21
+  //   students in top 8     0                2
+  //
+  // Ezekiel Chow is the documented correct answer for this role — Founding Full
+  // Stack Engineer, stealth, Chicago, React + Node + Postgres. Nulling the axis sent
+  // him to #21 and lifted two UIUC grad students and a UIC undergrad into the top 8.
+  //
+  // The reason is renormalization, not the builder axis. Dropping an axis shrinks the
+  // DENOMINATOR, so the fewer axes a candidate can be read on, the more generous
+  // their score — and the surviving axis for a thin warm profile is the near-automatic
+  // function match. Null enough axes and "we know almost nothing about this person"
+  // scores higher than "this person measurably matches the JD". stackOverlap can
+  // afford its null because the role's stated stack is a real requirement whose
+  // absence we genuinely cannot verify; a second null on the same rows tips it over.
+  //
+  // So the zero stays. It is not evidence about the candidate — it is a constant that
+  // keeps sparse profiles from outscoring evidenced ones, and WARM_BONUS/IL_BONUS and
+  // SHORTLIST_FLOOR were all calibrated against it on this dataset.
+  //
+  // The real fix is upstream and is not a weight: get the GitHub arm a token so the
+  // axis carries information, and enrich the warm rows so their stack is readable.
+  // Re-tune only with a token configured and this comparison re-run.
+  // ══════════════════════════════════════════════════════════════════════
   const slope = Number(cand.github_slope_score) || 0;
   const sigs = detectSignals(cand, { source: 'talent' }).matched;
   const builder = Math.min(1, slope / 10 + (sigs.length ? 0.2 : 0));
@@ -282,9 +319,22 @@ HARD RULES:
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// A DEGRADED SHORTLIST MUST SAY IT IS DEGRADED.
+//
+// The catch here logged to stderr and returned deterministic fallback lines, which
+// is the right BEHAVIOUR — a grounded signal list beats no rationale, and beats an
+// ungrounded one. But nothing above this function could tell the difference, so a
+// run with a dead Anthropic key produced a full shortlist of "Warm — Permute
+// Hackathon. engineering function match" lines that look deliberate. Danny would
+// hand a founder a list whose reasoning silently never ran.
+//
+// It now returns { items, degraded } so the run summary can say so.
+// ══════════════════════════════════════════════════════════════════════════
 async function explainShortlist({ userId, role, items }) {
   const client = anthropicFor(userId, 'hiring_shortlist_explain');
-  if (!client || !items.length) return items.map((it) => ({ ...it, rationale: fallbackLine(it) }));
+  if (!items.length) return { items: [], degraded: null };
+  if (!client) return { items: items.map((it) => ({ ...it, rationale: fallbackLine(it) })), degraded: 'no Anthropic key — rationales are the deterministic signal list' };
   const { system, user } = buildExplainPrompt(role, items);
   try {
     const resp = await client.messages.create({ model: MODEL, max_tokens: 1200, temperature: 0.2, system, messages: [{ role: 'user', content: user }] });
@@ -292,7 +342,7 @@ async function explainShortlist({ userId, role, items }) {
     const m = raw.match(/\{[\s\S]*\}/);
     const parsed = m ? JSON.parse(m[0]) : { lines: [] };
     const byIdx = new Map((parsed.lines || []).map((l) => [Number(l.i), l]));
-    return items.map((it, i) => {
+    const out = items.map((it, i) => {
       const line = byIdx.get(i);
       if (!line || !line.why) return { ...it, rationale: fallbackLine(it) };
       // Honesty gate: every offered quote must appear in THIS candidate's profile.
@@ -303,9 +353,12 @@ async function explainShortlist({ userId, role, items }) {
       if ((line.evidence || []).length && !groundedEvidence.length) return { ...it, rationale: fallbackLine(it), rationale_ungrounded: true };
       return { ...it, rationale: String(line.why).trim(), evidence: groundedEvidence };
     });
+    const ungrounded = out.filter((it) => it.rationale_ungrounded).length;
+    return { items: out, degraded: ungrounded ? `${ungrounded} of ${out.length} rationales failed the honesty gate and fell back to signals` : null };
   } catch (e) {
+    const d = describeLlmError(e, 'Shortlist rationale');
     console.error('[HiringMatch] explain failed:', e.message);
-    return items.map((it) => ({ ...it, rationale: fallbackLine(it) }));
+    return { items: items.map((it) => ({ ...it, rationale: fallbackLine(it) })), degraded: d.message };
   }
 }
 
@@ -337,7 +390,10 @@ async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain 
   // a warm cap would drop a well-matched known contact at #7 to make room for a
   // weaker stranger, and a cold cap would do the reverse. Take the top N of one list.
   const shortlist = ranked.slice(0, Math.max(1, warmCap + coldCap));
-  const explained = explain ? await explainShortlist({ userId, role, items: shortlist }) : shortlist.map((it) => ({ ...it, rationale: fallbackLine(it) }));
+  const ex = explain
+    ? await explainShortlist({ userId, role, items: shortlist })
+    : { items: shortlist.map((it) => ({ ...it, rationale: fallbackLine(it) })), degraded: null };
+  const explained = ex.items;
 
   // Upsert matches. Re-running a role refreshes scores/rationale but PRESERVES the
   // handoff status (sourced→shortlisted→shared→…) — a re-match must not reset where
@@ -363,10 +419,11 @@ async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain 
   upsertMatch(explained);
 
   const warmN = shortlist.filter((it) => it.tier === 'warm').length;
-  const summary = `matched role "${role.title}": ${warmConsidered} warm + ${coldConsidered} cold considered → ${shortlist.length} shortlisted (${warmN} warm, ${shortlist.length - warmN} cold)`;
+  const summary = `matched role "${role.title}": ${warmConsidered} warm + ${coldConsidered} cold considered → ${shortlist.length} shortlisted (${warmN} warm, ${shortlist.length - warmN} cold)`
+    + (ex.degraded ? ` — rationale degraded: ${ex.degraded}` : '');
   try { db.prepare(`INSERT INTO hiring_runs (user_id, role_id, kind, warm_considered, cold_considered, shortlisted, summary) VALUES (?, ?, 'match', ?, ?, ?, ?)`).run(userId, roleId, warmConsidered, coldConsidered, shortlist.length, summary); } catch { /* run-log best-effort */ }
 
-  return { role_id: roleId, warm_considered: warmConsidered, cold_considered: coldConsidered, shortlisted: shortlist.length, shortlist: explained, summary };
+  return { role_id: roleId, warm_considered: warmConsidered, cold_considered: coldConsidered, shortlisted: shortlist.length, shortlist: explained, summary, degraded: ex.degraded || null };
 }
 
 module.exports = {

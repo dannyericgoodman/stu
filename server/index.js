@@ -539,22 +539,60 @@ app.set('trust proxy', 1);
 // authenticated and stay inside the bucket.
 const isLivenessProbe = (req) => req.originalUrl.split('?')[0] === '/api/health';
 
+// ══════════════════════════════════════════════════════════════════════════
+// A THROTTLED REQUEST MUST SAY IT WAS THROTTLED.
+//
+// express-rate-limit answers 429 with the plain-text body "Too many requests,
+// please try again later." The client's request() does
+// `res.json().catch(() => ({ error: 'Request failed' }))`, so every throttled call
+// in the app surfaced to Danny as the toast **"Request failed"** — no status, no
+// reason, no retry time.
+//
+// That is a real part of how "Hiring wouldn't parse my JD" felt: the ingest limiter
+// allows 10 per 15 minutes, so a handful of retries against a dead API key spent the
+// budget, and the messages then changed from a (bad) key error to a completely
+// opaque one. Two different failures, one indistinguishable toast.
+//
+// jsonLimit gives every limiter a JSON body the client can actually render, with the
+// window's reset time in it.
+// ══════════════════════════════════════════════════════════════════════════
+function jsonLimit(opts, what) {
+  return rateLimit({
+    standardHeaders: true, legacyHeaders: false, ...opts,
+    handler: (req, res) => {
+      const resetMs = req.rateLimit?.resetTime ? req.rateLimit.resetTime - Date.now() : null;
+      const mins = resetMs != null ? Math.max(1, Math.ceil(resetMs / 60000)) : null;
+      res.status(429).json({
+        error: `Too many ${what} requests (limit ${opts.max} per ${Math.round(opts.windowMs / 60000)} min).`
+          + (mins ? ` Try again in ~${mins} min.` : ' Try again shortly.'),
+        code: 'rate_limited',
+        retry_after_ms: resetMs,
+      });
+    },
+  });
+}
+
 // Rate limiting
-app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 200, skip: isLivenessProbe, standardHeaders: true, legacyHeaders: false }));
+app.use('/api', jsonLimit({ windowMs: 15 * 60 * 1000, max: 200, skip: isLivenessProbe }, 'API'));
 // LLM chat surfaces (ai.js + stu.js tool-loop) — frequency-cap separately from the global bucket.
-const aiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false });
+const aiLimiter = jsonLimit({ windowMs: 15 * 60 * 1000, max: 50 }, 'AI chat');
 app.use('/api/ai', aiLimiter);
 app.use('/api/stu', aiLimiter);
-app.use('/api/auth/register', rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false }));
+app.use('/api/auth/register', jsonLimit({ windowMs: 15 * 60 * 1000, max: 5 }, 'registration'));
 // The fan-out / discovery / LLM-spend endpoints are the most expensive (web-search fan-out
 // + many LLM calls, all billed to the user's key). Throttle hard, on top of the spend cap.
-const expensiveLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const expensiveLimiter = jsonLimit({ windowMs: 15 * 60 * 1000, max: 10 }, 'sourcing/discovery');
 app.use('/api/talent/sourcing/run', expensiveLimiter);
 app.use('/api/talent/sourcing/match', expensiveLimiter);
 app.use('/api/sourcing/run', expensiveLimiter);
 app.use('/api/discover', expensiveLimiter);
 app.use('/api/hiring/matches/run', expensiveLimiter);
-app.use('/api/hiring/roles/ingest', expensiveLimiter);
+// JD ingest shared the fan-out budget (10 per 15 min), and it does not belong there:
+// a fan-out run is dozens of searches and many LLM calls, while an ingest is ONE
+// temp-0 parse of at most 12K chars — fractions of a cent. Sharing the cap meant
+// loading a batch of roles, or retrying a few times after a failure, locked Danny out
+// of the front door of the product for a quarter of an hour.
+app.use('/api/hiring/roles/ingest', jsonLimit({ windowMs: 15 * 60 * 1000, max: 40 }, 'JD ingest'));
 app.use('/api/hiring/warm/import', expensiveLimiter);
 app.use('/api/network/import', expensiveLimiter);
 app.use('/api/hiring/discovery/run', expensiveLimiter);
@@ -585,8 +623,10 @@ app.get('/api/health', (req, res) => res.json({
   },
 }));
 // Full healthcheck board (authed) — green/red status across datastores, keys, jobs, integrity.
-app.get('/api/health/full', requireAuth, (req, res) => {
-  try { res.json(require('./services/health').buildHealthReport(req.user.id)); }
+// Async since 2026-09-11: the key checks now VERIFY against the provider instead of
+// asserting that a string is non-empty (see services/health.js).
+app.get('/api/health/full', requireAuth, async (req, res) => {
+  try { res.json(await require('./services/health').buildHealthReport(req.user.id)); }
   catch (e) { res.status(500).json({ overall: 'red', checks: [{ name: 'Healthcheck', status: 'red', detail: e.message }] }); }
 });
 // Notion mirror drift check (authed, async). ?repair=1 re-pushes missing founders from canonical SQLite.

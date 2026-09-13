@@ -25,7 +25,15 @@ router.post('/run', async (req, res) => {
   const role = db.prepare('SELECT id FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(roleId, req.user.id);
   if (!role) return res.status(404).json({ error: 'Role not found' });
   try {
-    const result = await runMatch({ userId: req.user.id, roleId, limit: Number(req.body?.limit) || 10, explain: req.body?.explain !== false });
+    // `limit` was passed here and runMatch has no such parameter — it takes warmCap
+    // and coldCap. So asking for 25 names silently returned the default 14, with
+    // nothing in the response to say the request had been ignored. Map it onto the
+    // real knob (one ranked list, so the split is arbitrary — give it all to size).
+    const limit = Number(req.body?.limit);
+    const caps = Number.isFinite(limit) && limit > 0
+      ? { warmCap: Math.min(100, Math.round(limit)), coldCap: 0 }
+      : {};
+    const result = await runMatch({ userId: req.user.id, roleId, ...caps, explain: req.body?.explain !== false });
     if (result.error) return res.status(400).json(result);
     res.json(result);
   } catch (e) {
