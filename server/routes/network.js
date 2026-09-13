@@ -100,7 +100,9 @@ router.get('/status', (req, res) => {
 // try/catch cannot see it — without this wrapper an over-limit zip returns a bare
 // 500 and the user is told nothing useful.
 function uploadZip(req, res, next) {
-  upload.single('file')(req, res, (err) => {
+  // Up to five files: a zip, or Connections.csv + messages.csv + Invitations.csv
+  // picked from an export folder macOS already unpacked.
+  upload.array('file', 5)(req, res, (err) => {
     if (!err) return next();
     const tooBig = err.code === 'LIMIT_FILE_SIZE';
     return res.status(400).json({
@@ -113,9 +115,10 @@ function uploadZip(req, res, next) {
 
 router.post('/import/linkedin', uploadZip, async (req, res) => {
   if (!isOwner(req.user.id)) return res.status(403).json({ error: 'Owner only — the network book is shared.' });
-  if (!req.file) return res.status(400).json({ error: 'No file. Upload the LinkedIn export .zip.' });
+  const files = (req.files || []).map((f) => ({ buffer: f.buffer, name: f.originalname }));
+  if (!files.length) return res.status(400).json({ error: 'No file. Upload the LinkedIn export .zip, or Connections.csv from inside it.' });
   try {
-    const out = await importLinkedInExport({ userId: req.user.id, buffer: req.file.buffer });
+    const out = await importLinkedInExport({ userId: req.user.id, files });
     res.json(out);
   } catch (e) {
     console.error('[Network] LinkedIn import failed:', e.message);

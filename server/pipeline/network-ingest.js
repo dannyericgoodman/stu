@@ -119,6 +119,86 @@ async function readExportZip(buffer) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// NOT EVERY EXPORT ARRIVES AS A ZIP.
+//
+// macOS unpacks a downloaded archive automatically, leaving a FOLDER named
+// "Basic_LinkedInDataExport_09-13-2026.zip" next to the real archive — and a
+// browser file picker cannot select a folder. On 2026-09-13 Danny could not
+// import at all: the picker only accepted .zip, the thing that looked like the
+// zip was a directory, and the Connections.csv he could see was greyed out. He
+// ended up printing it to PDF.
+//
+// So an import is a set of FILES: a zip, or the CSVs from inside one. Each CSV is
+// identified by its header row, not its filename, because a renamed or re-saved
+// file keeps its columns. A PDF is refused with the file to use instead — its
+// text layer mangles URLs (ligatures turn "jonnyfisher" into "jonny sher"), and a
+// slug is the identity every relationship hangs on.
+// ══════════════════════════════════════════════════════════════════════════
+const CSV_KINDS = [
+  ['connections', /(^|\n)\s*first name\s*,\s*last name\s*,\s*url/i],
+  ['messages', /(^|\n)\s*"?conversation id"?\s*,/i],
+  ['invitations', /(^|\n)\s*from\s*,\s*to\s*,\s*sent at/i],
+];
+
+function csvKind(text) {
+  const head = String(text || '').slice(0, 3000);
+  const hit = CSV_KINDS.find(([, re]) => re.test(head));
+  return hit ? hit[0] : null;
+}
+
+/** An export's cut date when there is no zip entry date: its newest connection. */
+function newestConnectionDate(csv) {
+  let max = null;
+  for (const r of parseLinkedInCsv(csv, 'First Name')) {
+    const d = isoFromLinkedInDate(r['Connected On']);
+    if (d && (!max || d > max)) max = d;
+  }
+  return max;
+}
+
+/**
+ * Read whatever the user uploaded into one export.
+ * @param files [{ buffer, name }] — zips and/or CSVs, in any combination.
+ */
+async function readExportFiles(files) {
+  const out = { connections: '', messages: '', invitations: '', dated: null };
+  const unknown = [];
+  for (const f of files || []) {
+    const name = String(f.name || '');
+    const buf = f.buffer;
+    if (!buf || !buf.length) continue;
+    const isZip = buf.length > 3 && buf[0] === 0x50 && buf[1] === 0x4b;       // "PK"
+    const isPdf = buf.length > 4 && buf.slice(0, 5).toString() === '%PDF-';
+    if (isPdf) {
+      throw new Error(
+        `${name || 'That file'} is a PDF. Stu needs LinkedIn's original export: upload the .zip, or ` +
+        'Connections.csv (and messages.csv, for relationship strength) from inside the export folder.'
+      );
+    }
+    if (isZip) {
+      const z = await readExportZip(buf);
+      for (const k of ['connections', 'messages', 'invitations']) if (z[k]) out[k] = z[k];
+      if (z.dated) out.dated = z.dated;
+      continue;
+    }
+    const text = buf.toString('utf8');
+    const kind = csvKind(text);
+    if (!kind) { unknown.push(name || 'a file'); continue; }
+    out[kind] = text;
+  }
+  if (!out.connections) {
+    throw new Error(
+      (unknown.length ? `Not a LinkedIn connections file: ${unknown.join(', ')}. ` : '') +
+      'Upload the LinkedIn export .zip, or Connections.csv from inside the export folder ' +
+      '(add messages.csv too — it is what measures how well you know each person).'
+    );
+  }
+  if (!out.dated) out.dated = newestConnectionDate(out.connections);
+  out.has_messages = !!out.messages;
+  return out;
+}
+
 /**
  * Fold messages.csv into per-person counts.
  *
@@ -337,8 +417,9 @@ function upsert(userId, row) {
  * Import a LinkedIn export zip.
  * @returns {{inserted, updated, skipped, export_dated, connections, messaged_only, tiers}}
  */
-async function importLinkedInExport({ userId = 1, buffer, now = new Date() } = {}) {
-  const { connections, messages, invitations, dated } = await readExportZip(buffer);
+async function importLinkedInExport({ userId = 1, buffer, files, now = new Date() } = {}) {
+  const input = files && files.length ? files : [{ buffer, name: 'export.zip' }];
+  const { connections, messages, invitations, dated, has_messages: hasMessages } = await readExportFiles(input);
 
   const conns = parseLinkedInCsv(connections, 'First Name');
   if (!conns.length) throw new Error('Connections.csv had no rows — is this the right export?');
@@ -350,7 +431,7 @@ async function importLinkedInExport({ userId = 1, buffer, now = new Date() } = {
   const msgs = aggregateMessages(messages, selfSlug);
   const invites = aggregateInvitations(invitations, selfSlug);
 
-  const out = { inserted: 0, updated: 0, skipped: 0, connections: conns.length, messaged_only: 0, export_dated: dated };
+  const out = { inserted: 0, updated: 0, skipped: 0, connections: conns.length, messaged_only: 0, export_dated: dated, has_messages: hasMessages };
   const seen = new Set();
 
   const work = db.transaction(() => {
@@ -405,7 +486,8 @@ async function importLinkedInExport({ userId = 1, buffer, now = new Date() } = {
               VALUES (?, 'linkedin_export', ?, ?, ?, ?, ?)`)
     .run(userId, dated, out.inserted, out.updated, out.skipped,
       `${out.inserted} new, ${out.updated} refreshed from a ${dated || 'undated'} export ` +
-      `(${out.connections} connections, ${out.messaged_only} correspondents who were never connections)`);
+      `(${out.connections} connections, ${out.messaged_only} correspondents who were never connections)` +
+      (hasMessages ? '' : ' — no messages.csv, so relationship strength was not updated'));
 
   return out;
 }
@@ -508,6 +590,6 @@ async function importAirtableNetwork({ userId = 1, now = new Date(), deps = {} }
 
 module.exports = {
   importLinkedInExport, importAirtableNetwork,
-  parseLinkedInCsv, aggregateMessages, aggregateInvitations, readExportZip,
+  parseLinkedInCsv, aggregateMessages, aggregateInvitations, readExportZip, readExportFiles, csvKind,
   buildRow, upsert, slugOf, dedupeKeyFor, nameFromSlug, detectSelfSlug, isoFromLinkedInDate,
 };

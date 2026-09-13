@@ -657,9 +657,10 @@ export const api = {
   getNetworkRuns: () => request('/network/runs'),
   getNetworkRun: (id) => request(`/network/runs/${id}`),
   importNetworkAirtable: () => request('/network/import/airtable', { method: 'POST' }),
-  importNetworkLinkedIn: async (file) => {
+  // Accepts one File or several (a zip, or the CSVs from an unpacked export folder).
+  importNetworkLinkedIn: async (files) => {
     const fd = new FormData();
-    fd.append('file', file);
+    for (const f of (Array.isArray(files) ? files : [files])) fd.append('file', f);
     const res = await fetch(`${API_BASE}/network/import/linkedin`, {
       method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd,
     });

@@ -236,3 +236,58 @@ test('Airtable advisors and investors map with their hand-entered expertise', ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Not every export arrives as a zip (2026-09-13) ─────────────────────────
+// Danny could not import at all: macOS had unpacked the archive into a folder the
+// file picker cannot select, the picker only took .zip, and he printed
+// Connections.csv to PDF instead. An import is now a set of files.
+const CONN_CSV = [
+  'Notes:',
+  '"When exporting your connection data, you may notice that some of the email addresses are missing."',
+  '',
+  'First Name,Last Name,URL,Email Address,Company,Position,Connected On',
+  'Jonny,Fisher,https://www.linkedin.com/in/jonnyfisher,,Uber Freight,Head of Sales,11 Sep 2026',
+  'Braden,Lambros,https://www.linkedin.com/in/bradenlambros,,Heartland Ventures,Partner,02 Mar 2025',
+].join('\n');
+const MSG_CSV = [
+  '"CONVERSATION ID","CONVERSATION TITLE","FROM","SENDER PROFILE URL","TO","RECIPIENT PROFILE URLS","DATE","SUBJECT","CONTENT","FOLDER","ATTACHMENTS"',
+  '"c1","","Danny Goodman","https://www.linkedin.com/in/danielericgoodman","Jonny Fisher","https://www.linkedin.com/in/jonnyfisher","2026-09-01 10:00:00 UTC","","hi","INBOX",""',
+  '"c1","","Jonny Fisher","https://www.linkedin.com/in/jonnyfisher","Danny Goodman","https://www.linkedin.com/in/danielericgoodman","2026-09-02 10:00:00 UTC","","hey","INBOX",""',
+].join('\n');
+
+test('CSVs are identified by their header, whatever the file is called', () => {
+  assert.strictEqual(ing.csvKind(CONN_CSV), 'connections');
+  assert.strictEqual(ing.csvKind(MSG_CSV), 'messages');
+  assert.strictEqual(ing.csvKind('From,To,Sent At,Message,Direction'), 'invitations');
+  assert.strictEqual(ing.csvKind('Company Name,Title,Description'), null);
+});
+
+test('Connections.csv alone imports, dated by its newest connection', async () => {
+  const r = await ing.readExportFiles([{ name: 'Connections (1).csv', buffer: Buffer.from(CONN_CSV) }]);
+  assert.ok(r.connections.includes('jonnyfisher'));
+  assert.strictEqual(r.has_messages, false);
+  assert.strictEqual(r.dated, '2026-09-11', 'an undated CSV is at least as new as its newest connection');
+});
+
+test('Connections.csv and messages.csv picked together import as one export', async () => {
+  const r = await ing.readExportFiles([
+    { name: 'messages.csv', buffer: Buffer.from(MSG_CSV) },
+    { name: 'Connections.csv', buffer: Buffer.from(CONN_CSV) },
+  ]);
+  assert.strictEqual(r.has_messages, true);
+  assert.strictEqual(ing.aggregateMessages(r.messages, 'danielericgoodman').get('jonnyfisher').received, 1);
+});
+
+test('a PDF is refused with the file to use instead', async () => {
+  await assert.rejects(
+    ing.readExportFiles([{ name: 'Connections.pdf', buffer: Buffer.from('%PDF-1.7 ...') }]),
+    /is a PDF.*Connections\.csv/s,
+  );
+});
+
+test('messages without connections is refused, naming what is missing', async () => {
+  await assert.rejects(
+    ing.readExportFiles([{ name: 'messages.csv', buffer: Buffer.from(MSG_CSV) }, { name: 'Profile.csv', buffer: Buffer.from('First Name,Last Name,Maiden Name') }]),
+    /Not a LinkedIn connections file: Profile\.csv.*Connections\.csv/s,
+  );
+});

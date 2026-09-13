@@ -483,12 +483,15 @@ function BookTab({ status }) {
 function SetupTab({ status, onDone, toast }) {
   const [busy, setBusy] = useState(false);
 
-  async function uploadZip(file) {
-    if (!file) return;
+  async function uploadExport(files) {
+    if (!files || !files.length) return;
     setBusy(true);
     try {
-      const r = await api.importNetworkLinkedIn(file);
-      toast({ message: `${r.inserted} new, ${r.updated} refreshed — ${r.connections} connections plus ${r.messaged_only} correspondents` });
+      const r = await api.importNetworkLinkedIn(files);
+      toast({
+        message: `${r.inserted} new, ${r.updated} refreshed — ${r.connections} connections plus ${r.messaged_only} correspondents`
+          + (r.has_messages ? '' : '. No messages.csv, so relationship strength was not updated — add it to measure how well you know each person.'),
+      });
       onDone();
     } catch (err) { toast({ message: err.message, tone: 'error' }); }
     finally { setBusy(false); }
@@ -514,8 +517,13 @@ function SetupTab({ status, onDone, toast }) {
           relationship from a badge scan. On LinkedIn: <strong>Settings → Data privacy → Get a copy
           of your data → Download larger data archive</strong>. Upload the .zip here.
         </p>
-        <input type="file" accept=".zip" disabled={busy}
-          onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; uploadZip(f); }}
+        <p className="text-[12px] text-gray-400 mb-3">
+          If your Mac already unzipped it into a folder, open that folder and select{' '}
+          <strong className="font-medium text-gray-500">Connections.csv</strong> and{' '}
+          <strong className="font-medium text-gray-500">messages.csv</strong> together (hold ⌘ to pick both).
+        </p>
+        <input type="file" accept=".zip,.csv" multiple disabled={busy}
+          onChange={(e) => { const fs = Array.from(e.target.files || []); e.target.value = ''; uploadExport(fs); }}
           className="text-[13px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-gray-200 file:text-[13px] file:bg-white hover:file:border-gray-400" />
         {status && status.last_linkedin_import && (
           <p className="text-xs text-gray-400 mt-2">
