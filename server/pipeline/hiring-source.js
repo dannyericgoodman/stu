@@ -1,25 +1,29 @@
 'use strict';
 // ══════════════════════════════════════════════════════════════════════════
-// hiring-source.js — one action, the whole engine. "Find matches" should not rank
-// a preloaded list; it should GO SOURCE. This orchestrates that, in the background:
+// hiring-source.js — one action, the whole engine. "Find matches" goes and sources,
+// the way founder Sourcing does, pointed at one job description:
 //
-//   1. warm-ensure   — if the warm pool is empty, import it (Danny's real network).
-//   2. Exa source     — actively find people whose experience aligns with the JD.
-//   3. GitHub source  — IL builders by stack (when a GitHub token is configured).
-//   4. rank + explain — warm-first, IL-tied, grounded shortlist.
+//   1. network   — people Danny actually knows whose titles fit (the Network book).
+//   2. web       — Exa people search, ~10 distinct queries × 25 results.
+//   3. GitHub    — builders by stack, when a token is configured.
+//   4. LinkedIn  — read the real profile of the ~40 worth reading (EnrichLayer).
+//   5. grade     — every candidate checked against the JD's requirements, quote-gated.
 //
-// Runs async (Exa + LLM extraction take 20-40s); the caller gets a run_id back
-// immediately and the client polls the run's status — the same background+poll
-// pattern the assessment engine uses. Every stage is best-effort: one source failing
-// (no key, a timeout) never sinks the run — it just narrows the pool.
+// Runs in the background; the client polls the run row, which carries a `stage` in
+// plain words so a four-minute run does not look like a hang. Every stage is
+// best-effort and reports its own outcome — a missing key narrows the run and says
+// so in the summary, it never sinks it silently.
 // ══════════════════════════════════════════════════════════════════════════
 
 const db = require('../db');
 const { resolveKey } = require('../lib/providerKeys');
-const { importWarmPool } = require('./hiring-warm');
 const { sourceViaExa } = require('./hiring-exa');
 const { discoverForRole } = require('./hiring-discovery');
-const { runMatch } = require('./hiring-match');
+const { sourceFromNetwork } = require('./hiring-network');
+const { enrichCandidatesForRole } = require('./hiring-linkedin');
+const { runMatch, selectForGrading } = require('./hiring-match');
+
+const NETWORK_LIMIT = 15;   // network picks are a title-level prefilter; they must not crowd out the web
 
 function updateRun(runId, fields) {
   const keys = Object.keys(fields);
@@ -28,66 +32,75 @@ function updateRun(runId, fields) {
 }
 
 // The background worker. Never throws — records the outcome on the run row.
-async function runSourcing(runId, userId, roleId) {
+async function runSourcing(runId, userId, roleId, deps = {}) {
   const notes = [];
   let found = 0;
+  const stage = (text) => updateRun(runId, { stage: text });
   try {
     const role = db.prepare('SELECT * FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(roleId, userId);
     if (!role) throw new Error('Role not found');
+    const priority = [];
 
-    // 1. Warm-ensure. Only import if the pool is empty (a refresh is a separate action).
-    const warmCount = db.prepare("SELECT COUNT(*) AS n FROM hiring_candidates WHERE user_id = ? AND tier = 'warm' AND is_deleted = 0").get(userId).n;
-    if (warmCount === 0) {
-      // A returned `error` used to be dropped on the floor here — only a THROW was
-      // noted. So when the base cutover took the warm tables away, a run against an
-      // empty pool reported the cold arms and said nothing at all about warm, which
-      // reads as "warm found nobody" rather than "warm has no source". Every outcome
-      // gets a note now; the whole point of the summary is that silence is legible.
-      try {
-        const w = await importWarmPool({ userId });
-        if (w.error) notes.push(`warm pool not refreshed — ${w.error}`);
-        else notes.push(`warm: ${w.inserted || 0} imported`);
-      } catch (e) { notes.push(`warm import skipped: ${e.message}`); }
-    } else {
-      notes.push(`warm: ${warmCount} already in pool`);
-    }
-
-    // 2. Exa — active semantic sourcing from the description. The engine's new muscle.
+    // 1. Network — Danny's own people first.
+    stage('Searching your network…');
     try {
-      const exa = await sourceViaExa({ userId, role });
-      if (exa.error === 'no_exa_key') notes.push('Exa sourcing skipped (no Exa key)');
+      const n = (deps.sourceFromNetwork || sourceFromNetwork)({ userId, role, limit: NETWORK_LIMIT });
+      if (n.skipped) notes.push(`network: ${n.skipped}`);
+      else notes.push(`network: ${n.qualified} of ${n.considered} fit on title → ${n.ids.length} pulled (${n.warm} warm)`);
+      priority.push(...n.ids);
+      found += n.inserted || 0;
+      updateRun(runId, { found });
+    } catch (e) { notes.push(`network search failed: ${e.message}`); }
+
+    // 2. Web — Exa people search.
+    stage('Searching the web…');
+    try {
+      const exa = await (deps.sourceViaExa || sourceViaExa)({ userId, role });
+      if (exa.error === 'no_exa_key') notes.push('web search skipped (no Exa key)');
       else {
         found += (exa.inserted || 0);
-        // The FUNNEL, not just the survivors — 9d6061f's lesson, applied to this arm.
-        // "Exa: 0 new (60 considered)" described a dead API key and a working engine
-        // with a strict honesty gate equally well, and we chased the wrong one.
+        priority.push(...(exa.ids || []));
         notes.push(
-          `Exa: ${exa.considered || 0} found → ${exa.extracted || 0} extracted, `
-          + `${exa.ungrounded_dropped || 0} dropped (no receipt), `
-          + `${exa.inserted || 0} new + ${exa.updated || 0} refreshed, ${exa.il_tied || 0} IL`
+          `web: ${(exa.queries || []).length} queries → ${exa.considered || 0} profiles, ${exa.read || 0} read → `
+          + `${exa.extracted || 0} extracted, ${exa.ungrounded_dropped || 0} dropped (no receipt), `
+          + `${exa.inserted || 0} new + ${exa.updated || 0} refreshed`
           + (exa.errors && exa.errors.length ? ` — ERRORS: ${exa.errors.join(' | ')}` : '')
         );
       }
       updateRun(runId, { found });
-    } catch (e) { notes.push(`Exa sourcing failed: ${e.message}`); }
+    } catch (e) { notes.push(`web search failed: ${e.message}`); }
 
-    // 3. GitHub — IL builders by stack, when a token is configured.
+    // 3. GitHub — builders by stack, when a token is configured.
     const ghToken = resolveKey(userId, 'github');
     if (ghToken) {
-      try { const g = await discoverForRole({ userId, roleId, token: ghToken }); found += (g.added || 0); notes.push(`GitHub: ${g.added || 0} new IL builders`); updateRun(runId, { found }); }
+      stage('Searching GitHub…');
+      try { const g = await discoverForRole({ userId, roleId, token: ghToken }); found += (g.added || 0); notes.push(`GitHub: ${g.added || 0} new builders`); updateRun(runId, { found }); }
       catch (e) { notes.push(`GitHub discovery failed: ${e.message}`); }
-    } else { notes.push('GitHub discovery skipped (no token)'); }
+    }
 
-    // 4. Rank + explain — warm-first, grounded shortlist.
-    const match = await runMatch({ userId, roleId, explain: true });
+    // 4. LinkedIn — read the profiles of the candidates worth grading.
+    const pool = db.prepare('SELECT * FROM hiring_candidates WHERE user_id = ? AND is_deleted = 0').all(userId);
+    const matches = db.prepare('SELECT candidate_id, status FROM hiring_matches WHERE role_id = ? AND is_deleted = 0').all(roleId);
+    const selected = selectForGrading({ role, pool, matches, priorityIds: priority });
+    stage(`Reading LinkedIn for ${selected.length} candidates…`);
+    try {
+      const li = await (deps.enrichCandidatesForRole || enrichCandidatesForRole)({ userId, candidates: selected });
+      if (li.skipped) notes.push(`LinkedIn not read (${li.skipped} — add one in Settings)`);
+      else notes.push(`LinkedIn: ${li.enriched} read, ${li.reused} recent reads reused, ${li.failed} unavailable, ${li.ties_added} Illinois ties found`);
+    } catch (e) { notes.push(`LinkedIn read failed: ${e.message}`); }
+
+    // 5. Grade + rank.
+    stage(`Grading ${selected.length} candidates against the job description…`);
+    const match = await (deps.runMatch || runMatch)({ userId, roleId, explain: true, priorityIds: priority });
+    if (match.error) throw new Error(match.error);
     updateRun(runId, {
-      status: 'done', finished_at: new Date().toISOString(),
+      status: 'done', stage: null, finished_at: new Date().toISOString(),
       warm_considered: match.warm_considered || 0, cold_considered: match.cold_considered || 0,
       shortlisted: match.shortlisted || 0, found,
       summary: `${match.summary}. ${notes.join('; ')}`,
     });
   } catch (e) {
-    updateRun(runId, { status: 'error', finished_at: new Date().toISOString(), error: e.message, summary: notes.join('; ') });
+    updateRun(runId, { status: 'error', stage: null, finished_at: new Date().toISOString(), error: e.message, summary: notes.join('; ') });
   }
 }
 
@@ -104,7 +117,7 @@ function startSourcing({ userId = 1, roleId }) {
 
 // Latest sourcing run for a role — what the client polls.
 function latestRun(userId, roleId) {
-  return db.prepare("SELECT id, status, found, warm_considered, cold_considered, shortlisted, summary, error, run_at, finished_at FROM hiring_runs WHERE user_id = ? AND role_id = ? AND kind = 'source' ORDER BY id DESC LIMIT 1").get(userId, roleId);
+  return db.prepare("SELECT id, status, stage, found, warm_considered, cold_considered, shortlisted, summary, error, run_at, finished_at FROM hiring_runs WHERE user_id = ? AND role_id = ? AND kind = 'source' ORDER BY id DESC LIMIT 1").get(userId, roleId);
 }
 
 module.exports = { startSourcing, runSourcing, latestRun, updateRun };

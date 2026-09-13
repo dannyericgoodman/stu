@@ -22,6 +22,7 @@ const db = require('../db');
 const { anthropicFor, resolveKey, recordCost, describeLlmError, MODEL } = require('../lib/providerKeys');
 const { verifyIlTie } = require('../lib/ilTie');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
+const { runPool } = require('../lib/hiringGrade');
 
 function httpPost(url, headers, body) {
   return new Promise((resolve) => {
@@ -90,8 +91,8 @@ async function deriveQueries({ client, role }) {
 
   try {
     const resp = await client.messages.create({
-      model: MODEL, max_tokens: 500, temperature: 0.2,
-      system: `You turn a role into 3-4 semantic people-search queries for finding candidates whose EXPERIENCE aligns with it. Each query is a natural-language description of the ideal person — seniority, function, concrete skills, and domain. Prefer specifics from the role over generic titles, and make the queries DIFFERENT from each other (e.g. one on the core skill set, one on the domain background, one on the seniority/scope) so together they cover the role rather than repeating it.
+      model: MODEL, max_tokens: 1200, temperature: 0.2,
+      system: `You turn a role into ${QUERY_COUNT} semantic people-search queries for finding candidates whose EXPERIENCE aligns with it. Each query is a natural-language description of the ideal person — seniority, function, concrete skills, credentials, and domain. Prefer specifics from the role over generic titles, and make every query DIFFERENT so together they cover the whole market for this person rather than repeating one description: vary the current job title people in this work actually hold, the employer type they would come from (e.g. a payer vs a provider vs a startup), the credential or skill that defines them, and the adjacent backgrounds that transfer.
 
 LOCATION: ${locRule}
 
@@ -101,13 +102,51 @@ Return ONLY JSON: {"queries":["...","..."]}.`,
     const raw = (resp.content?.[0]?.text || '').trim();
     const m = raw.match(/\{[\s\S]*\}/);
     const qs = m ? (JSON.parse(m[0]).queries || []) : [];
-    const cleaned = qs.map((q) => String(q).trim()).filter(Boolean).slice(0, 4);
+    const cleaned = [...new Set(qs.map((q) => String(q).trim()).filter(Boolean))].slice(0, QUERY_COUNT);
     return cleaned.length ? cleaned : fallback;
   } catch { return fallback; }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// SEARCH AS WIDE AS SOURCING DOES.
+//
+// This ran 4 queries × 10–15 results and read at most 36 profiles, against founder
+// Sourcing's 15 queries × 25. For a clinical role that is the difference between a
+// sample and a market: the people who fit an RN member-advocate role hold a dozen
+// different titles at a dozen kinds of employer, and four queries cannot reach them.
+// ══════════════════════════════════════════════════════════════════════════
+const QUERY_COUNT = 10;
+const RESULTS_PER_QUERY = 25;
+const EXTRACT_CAP = 96;
+const EXTRACT_CONCURRENCY = 3;
+
+/**
+ * Merge per-query result lists round-robin, deduped by URL. Pure.
+ *
+ * Concatenating lists and taking the first N reads query 1's weakest hits before
+ * query 5's best, so the queries written to reach DIFFERENT people never get read.
+ * Each list is in Exa's relevance order; interleaving takes every query's #1, then
+ * every #2, and so on.
+ */
+function interleave(lists) {
+  const seen = new Set();
+  const out = [];
+  const max = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < max; i++) {
+    for (const list of lists) {
+      const r = list[i];
+      if (!r) continue;
+      const k = r.url || r.title;
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+    }
+  }
+  return out;
+}
+
 // ── 2. Exa people search ──
-async function searchExaPeople(query, apiKey, numResults = 10) {
+async function searchExaPeople(query, apiKey, numResults = RESULTS_PER_QUERY) {
   const { status, data } = await httpPost('https://api.exa.ai/search', { 'x-api-key': apiKey }, {
     query, type: 'auto', num_results: numResults, category: 'people',
     contents: { text: { max_characters: 3000 } },
@@ -179,7 +218,7 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
   // say which of the two happened.
   // ══════════════════════════════════════════════════════════════════════
   const errors = [];
-  for (const startIdx of chunks) {
+  await runPool(chunks.map((startIdx) => async () => {
     const slice = results.slice(startIdx, startIdx + EXTRACT_CHUNK);
     const blocks = slice.map((r, j) => `#${startIdx + j}\nURL: ${r.url || ''}\nTITLE: ${r.title || ''}\nTEXT: ${String(r.text || '').slice(0, 1200)}`).join('\n\n');
     try {
@@ -198,7 +237,7 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
       console.error(`[HiringExa] extract chunk at ${startIdx} failed:`, e.message);
       errors.push(d.message);
     }
-  }
+  }), EXTRACT_CONCURRENCY);
   const parsed = { candidates: parsedAll };
 
   const out = [];
@@ -247,6 +286,9 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
       il_tie_evidence: tie.verified && !tie.weak ? tie.evidence : null,
       external_id: `exa:${url || c.name}`,
       notes: c.aligned ? `Aligned: ${c.aligned}` : null,
+      // The page text they were found on. Grading needs something to quote; without
+      // this a candidate is a one-line headline and every requirement reads "not shown".
+      profile_text: text.slice(0, 4000) || null,
       raw_data: JSON.stringify({ aligned: c.aligned, evidence: c.evidence, url }),
     });
   }
@@ -255,7 +297,7 @@ Return ONLY JSON: {"candidates":[{"i":<index>,"name":str,"current_role":str|null
 
 // Upsert a cold Exa candidate by (user_id, external_id), then by linkedin_url so the
 // same person found twice doesn't duplicate.
-const COLS = ['name', 'headline', 'current_role', 'current_company', 'location_city', 'tech_stack', 'role_function', 'linkedin_url', 'website_url', 'tier', 'source', 'il_tie_type', 'il_tie_place', 'il_tie_evidence', 'external_id', 'notes', 'raw_data'];
+const COLS = ['name', 'headline', 'current_role', 'current_company', 'location_city', 'tech_stack', 'role_function', 'linkedin_url', 'website_url', 'tier', 'source', 'il_tie_type', 'il_tie_place', 'il_tie_evidence', 'external_id', 'notes', 'profile_text', 'raw_data'];
 
 // ══════════════════════════════════════════════════════════════════════════
 // FINDING SOMEONE ON THE OPEN WEB DOES NOT MAKE THEM A STRANGER.
@@ -306,14 +348,14 @@ function upsert(userId, row) {
     const cols = existing.tier === 'warm'
       ? COLS.filter((c) => !WARM_PRESERVED.has(c) && !isEmptyValue(row[c]))
       : COLS;
-    if (!cols.length) return 'updated'; // warm row, nothing new to add
+    if (!cols.length) return { result: 'updated', id: existing.id }; // warm row, nothing new to add
     const sets = cols.map((c) => `${c} = ?`).join(', ');
     db.prepare(`UPDATE hiring_candidates SET ${sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...cols.map((c) => row[c] ?? null), existing.id);
-    return 'updated';
+    return { result: 'updated', id: existing.id };
   }
   const cols = ['user_id', ...COLS];
-  db.prepare(`INSERT INTO hiring_candidates (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(userId, ...COLS.map((c) => row[c] ?? null));
-  return 'inserted';
+  const info = db.prepare(`INSERT INTO hiring_candidates (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(userId, ...COLS.map((c) => row[c] ?? null));
+  return { result: 'inserted', id: Number(info.lastInsertRowid) };
 }
 
 /**
@@ -325,7 +367,7 @@ async function sourceViaExa({ userId = 1, role, deps = {} }) {
   if (!apiKey) return { error: 'no_exa_key', inserted: 0, updated: 0, considered: 0 };
 
   const queries = deps.queries || await deriveQueries({ client, role });
-  const out = { inserted: 0, updated: 0, considered: 0, il_tied: 0, queries };
+  const out = { inserted: 0, updated: 0, considered: 0, il_tied: 0, queries, ids: [] };
   const search = deps.searchExaPeople || searchExaPeople;
 
   // Run the searches in PARALLEL (each ~2s), then ONE extraction over the combined,
@@ -333,24 +375,17 @@ async function sourceViaExa({ userId = 1, role, deps = {} }) {
   // gain — the LLM call is the cost, so we make exactly one.
   // 15 per query, not 8. The whole point of several distinct queries is coverage, and
   // eight results each meant the deduped pool was barely larger than one query's worth.
-  const lists = await Promise.all(queries.map((q) => search(q, apiKey, 15).catch(() => [])));
-  recordCost(userId, { provider: 'exa', feature: 'hiring_source', estCostUsd: 0.015 * queries.length });
-  const seen = new Set();
-  const fresh = [];
-  for (const list of lists) {
-    for (const r of list) {
-      const k = r.url || r.title;
-      if (!k || seen.has(k)) continue;
-      seen.add(k); fresh.push(r);
-    }
-  }
+  const lists = await Promise.all(queries.map((q) => search(q, apiKey, RESULTS_PER_QUERY).catch(() => [])));
+  recordCost(userId, { provider: 'exa', feature: 'hiring_source', estCostUsd: 0.03 * queries.length });
+  const fresh = interleave(lists);
   out.considered = fresh.length;
-  // 36, chunked, rather than 14 in one capped call. This is the number that decides
-  // how many real names a founder ever sees.
-  const ex = await extractCandidates({ client, role, results: fresh.slice(0, 36) });
+  out.read = Math.min(fresh.length, EXTRACT_CAP);
+  // Interleaved, so the cap reads every query's best before any query's tail.
+  const ex = await extractCandidates({ client, role, results: fresh.slice(0, EXTRACT_CAP) });
   for (const row of ex.rows) {
-    const res = upsert(userId, row);
-    out[res]++;
+    const { result, id } = upsert(userId, row);
+    out[result]++;
+    out.ids.push(id);
     if (row.il_tie_type) out.il_tied++;
   }
   // The funnel, so "0 new" can be read. Without these, a dead Anthropic key and a
@@ -361,4 +396,7 @@ async function sourceViaExa({ userId = 1, role, deps = {} }) {
   return out;
 }
 
-module.exports = { sourceViaExa, deriveQueries, searchExaPeople, extractCandidates, locationClause, FUNCTIONS, __httpPost: httpPost };
+module.exports = {
+  sourceViaExa, deriveQueries, searchExaPeople, extractCandidates, locationClause, interleave, upsert,
+  FUNCTIONS, QUERY_COUNT, RESULTS_PER_QUERY, EXTRACT_CAP, __httpPost: httpPost,
+};

@@ -1935,6 +1935,27 @@ addColumn('hiring_runs', 'status', "TEXT DEFAULT 'done'");
 addColumn('hiring_runs', 'found', 'INTEGER DEFAULT 0');
 addColumn('hiring_runs', 'finished_at', 'DATETIME');
 
+// ── Hiring, graded sourcing (2026-09-13) ──
+// profile_text: the source text a candidate was found on (Exa excerpt) — kept, because
+//   grading needs something to quote and a one-line headline is not evidence.
+// linkedin_*: the full LinkedIn read (EnrichLayer), and when it happened, so a re-source
+//   within the freshness window does not pay to re-read the same profile.
+// warmth / warmth_tier / network_person_id: carried from the Network book, so a person
+//   Danny actually knows is ranked by how well he knows them, with the receipt.
+addColumn('hiring_candidates', 'profile_text', 'TEXT');
+addColumn('hiring_candidates', 'linkedin_data', 'TEXT');
+addColumn('hiring_candidates', 'linkedin_enriched_at', 'DATETIME');
+addColumn('hiring_candidates', 'warmth', 'INTEGER');
+addColumn('hiring_candidates', 'warmth_tier', 'TEXT');
+addColumn('hiring_candidates', 'network_person_id', 'INTEGER');
+// The role's grading rubric — assessable requirements derived once from the JD, stored
+// with a hash of the inputs that produced it so an edited JD invalidates it and an
+// unchanged one never costs a second call.
+addColumn('hiring_roles', 'grading_rubric', 'TEXT');
+addColumn('hiring_roles', 'rubric_hash', 'TEXT');
+// What a running sourcing job is doing right now, in words the UI can show.
+addColumn('hiring_runs', 'stage', 'TEXT');
+
 // ════════════════════════════════════════════════════════════════════════════
 // COST ATTRIBUTION, MCP ACCESS & SIGNAL MONITORS
 // (BYOK foundation — see docs/talent-mcp-and-monitors-plan.md)

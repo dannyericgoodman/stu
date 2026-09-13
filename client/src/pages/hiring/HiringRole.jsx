@@ -18,6 +18,7 @@ export default function HiringRole() {
   const [sourcing, setSourcing] = useState(false);
   const [progress, setProgress] = useState('');
   const [exportText, setExportText] = useState(null);
+  const [lastRun, setLastRun] = useState(null);
   const { toast } = useToast();
   const pollRef = useRef(null);
 
@@ -35,6 +36,7 @@ export default function HiringRole() {
     setLoading(false);
     try {
       const st = await api.getHiringSourceStatus(id);
+      if (st.status === 'done' || st.status === 'error') setLastRun(st);
       if (st.status === 'running') startPolling();
       else if (st.status === 'none' && (!r.matches || !r.matches.length)) source();
     } catch { /* leave it to the button */ }
@@ -62,13 +64,18 @@ export default function HiringRole() {
       ticks++;
       try {
         const st = await api.getHiringSourceStatus(Number(id));
-        if (st.found > 0) setProgress(`Found ${st.found} so far…`);
+        // The run row says what it is doing in words; a four-minute run that only
+        // ever said "Sourcing…" read as a hang.
+        if (st.stage) setProgress(st.stage);
+        else if (st.found > 0) setProgress(`Found ${st.found} so far…`);
         if (st.status === 'done' || st.status === 'error') {
           clearInterval(pollRef.current);
           setSourcing(false); setProgress('');
+          setLastRun(st);
           await load();
+          // The toast stays short; the full funnel lives in "How this list was built".
           if (st.status === 'error') toast({ message: st.error || 'Sourcing hit an error', tone: 'error' });
-          else toast({ message: st.summary || 'Shortlist ready' });
+          else toast({ message: st.shortlisted ? `Shortlist ready — ${st.shortlisted} candidates` : 'Sourcing finished — nobody cleared the bar' });
         } else if (ticks > MAX_TICKS) {
           clearInterval(pollRef.current);
           setSourcing(false); setProgress('');
@@ -144,6 +151,21 @@ export default function HiringRole() {
           {musts.map((m) => <span key={m} className="text-[11px] text-gray-500">· {m}</span>)}
         </div>
       ) : null}
+
+      {/* How the list was built — the run's own funnel, verbatim. When a stage was
+          skipped (no EnrichLayer key, no GitHub token) this is where it says so. */}
+      {lastRun && lastRun.summary && !sourcing && (
+        <details className="mt-4 text-[12px] text-gray-500">
+          <summary className="cursor-pointer select-none hover:text-gray-700">
+            How this list was built{lastRun.finished_at ? ` · ${String(lastRun.finished_at).slice(0, 10)}` : ''}
+          </summary>
+          <ul className="mt-1.5 space-y-0.5 pl-4 list-disc marker:text-gray-300">
+            {String(lastRun.summary).split(/;\s+|\.\s+(?=[a-zA-Z]+:)/).filter(Boolean).map((line, i) => (
+              <li key={i} className={/ERROR|failed|not read|skipped/i.test(line) ? 'text-amber-700' : ''}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {/* Shortlist */}
       <div className="mt-6">
@@ -231,6 +253,9 @@ function MatchCard({ m, onStatus }) {
               </span>
             )}
             {m.github_slope_score >= 5 && <span className="text-[10px] text-gray-400">slope {m.github_slope_score}/10</span>}
+            {m.breakdown && m.breakdown.linkedin_read && (
+              <span className="text-[10px] text-gray-400" title="Graded on their full LinkedIn profile, not just a search excerpt">LinkedIn read</span>
+            )}
           </div>
           {(m.current_role || m.current_company) && (
             <p className="text-[12px] text-gray-500 mt-0.5">{[m.current_role, m.current_company].filter(Boolean).join(' @ ')}{m.location_city ? ` · ${m.location_city}` : ''}</p>

@@ -29,6 +29,7 @@ const db = require('../db');
 const { detectSignals } = require('../lib/builderSignals');
 const { anthropicFor, describeLlmError, MODEL } = require('../lib/providerKeys');
 const { buildContextIndex, classifyQuote } = require('../agents/verify');
+const grade = require('../lib/hiringGrade');
 
 // ══════════════════════════════════════════════════════════════════════════
 // WARM IS A BONUS. IT USED TO BE A 1,000-POINT TIER, AND THAT WAS WRONG ON THE
@@ -371,62 +372,211 @@ function fallbackLine(it) {
   return bits.join('. ') || `${it.fit}/100 fit`;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// GRADED MATCHING (2026-09-13)
+//
+// computeFit above is kept, and still runs when there is no Anthropic key, but it is
+// an engineering-shaped scorer: function label, stack tokens, GitHub. On a clinical
+// role it inverted the list (see lib/hiringGrade.js). When a key is available the
+// matcher now:
+//   1. selects who is worth grading — people Danny already moved down the pipeline,
+//      this run's finds (network first), prior matches, then the deterministic top;
+//   2. builds the role's rubric ONCE from the JD and stores it with a hash;
+//   3. grades each candidate against it, with every claim quote-checked;
+//   4. ranks on the graded fit plus warmth and an IL tie.
+// ══════════════════════════════════════════════════════════════════════════
+const GRADE_CAP = 40;          // candidates graded per run
+const GRADED_FLOOR = 30;       // below this, a graded candidate is not put in front of a founder
+const WARMTH_BONUS = { strong: 12, real: 9, light: 5 };
+
+/** Warmth bonus for one candidate. Network warmth is graded; an Airtable warm row keeps the flat bonus. */
+function warmBonus(c) {
+  if (c.tier !== 'warm') return 0;
+  if (c.warmth_tier) return WARMTH_BONUS[c.warmth_tier] || 0;
+  return WARM_BONUS;
+}
+
+/**
+ * Who to grade (and read LinkedIn for), best-first, capped. Pure over its inputs.
+ * The order is a priority, not a verdict — grading decides.
+ */
+function selectForGrading({ role, pool, matches = [], priorityIds = [], cap = GRADE_CAP }) {
+  const byId = new Map(pool.map((c) => [Number(c.id), c]));
+  const chosen = [];
+  const seen = new Set();
+  const take = (id) => {
+    const n = Number(id);
+    if (seen.has(n) || !byId.has(n) || chosen.length >= cap) return;
+    seen.add(n);
+    chosen.push(byId.get(n));
+  };
+  // Moved matches are always graded — Danny acted on them, so their score must be current.
+  for (const m of matches) if (m.status && m.status !== 'sourced') take(m.candidate_id);
+  for (const id of priorityIds) take(id);
+  for (const m of matches) take(m.candidate_id);
+  // Then the deterministic top, over the pool with the IL filter off (a LinkedIn read
+  // may still establish the tie), as a cheap way to surface earlier finds.
+  const det = pool
+    .filter((c) => isDescribable(c))
+    .map((c) => ({ c, f: computeFit(role, c) }))
+    .filter((x) => !x.f.hardMismatch)
+    .sort((a, b) => b.f.fit - a.f.fit);
+  for (const x of det) take(x.c.id);
+  return chosen;
+}
+
+/** The stored rubric when it still matches the role, otherwise a fresh one (persisted). */
+async function ensureRubric({ role, client }) {
+  const hash = grade.rubricHash(role);
+  if (role.grading_rubric && role.rubric_hash === hash) {
+    try {
+      const stored = JSON.parse(role.grading_rubric);
+      if (stored && Array.isArray(stored.requirements) && stored.requirements.length && stored.source === 'model') return stored;
+    } catch { /* rebuild */ }
+  }
+  const rubric = await grade.buildRubric({ client, role });
+  // Only a model-built rubric is cached. A fallback built because the key was dead must
+  // not be pinned to the role and outlive the key being fixed.
+  if (rubric.source === 'model') {
+    db.prepare('UPDATE hiring_roles SET grading_rubric = ?, rubric_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(JSON.stringify(rubric), hash, role.id);
+  }
+  return rubric;
+}
+
+function parseBreakdown(v) {
+  try { return v ? JSON.parse(v) : {}; } catch { return {}; }
+}
+
+/**
+ * Persist a shortlist and retire what fell off it.
+ *
+ * Re-sourcing used to upsert the new list and leave every earlier match in place, so a
+ * candidate a better run would have dropped stayed on the page with a stale score —
+ * which is how a marketing co-founder kept rank #1 on a clinical role. Matches Danny has
+ * not touched ('sourced') are retired when they fall off. Anything he moved
+ * (shortlisted, shared, intro made, hired, passed) is his decision and is never retired.
+ */
+function persistShortlist({ userId, roleId, items }) {
+  const keep = new Set(items.map((it) => Number(it.candidate.id)));
+  const tx = db.transaction(() => {
+    for (const it of items) {
+      const existing = db.prepare('SELECT id FROM hiring_matches WHERE role_id = ? AND candidate_id = ?').get(roleId, it.candidate.id);
+      const payload = [it.tier, it.fit, it.rank_score, it.rationale || null,
+        JSON.stringify(it.strengths || []), JSON.stringify(it.gaps || []), JSON.stringify(it.breakdown || {})];
+      if (existing) {
+        db.prepare('UPDATE hiring_matches SET tier=?, fit_score=?, rank_score=?, rationale=?, strengths=?, gaps=?, breakdown=?, is_deleted=0, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+          .run(...payload, existing.id);
+      } else {
+        db.prepare(`INSERT INTO hiring_matches (user_id, role_id, candidate_id, tier, fit_score, rank_score, rationale, strengths, gaps, breakdown, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sourced')`).run(userId, roleId, it.candidate.id, ...payload);
+      }
+    }
+    const stale = db.prepare("SELECT id, candidate_id FROM hiring_matches WHERE role_id = ? AND is_deleted = 0 AND status = 'sourced'").all(roleId)
+      .filter((m) => !keep.has(Number(m.candidate_id)));
+    for (const m of stale) db.prepare('UPDATE hiring_matches SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(m.id);
+    return stale.length;
+  });
+  return tx();
+}
+
 /**
  * Run the matcher for one role: rank the pool, take the top N, explain the shortlist,
- * upsert hiring_matches, log the run. Returns the shortlist + counts.
+ * upsert hiring_matches, retire stale ones, log the run.
+ *
+ * With an Anthropic key and `explain` on, candidates are GRADED against the role's
+ * requirements. Without either, the deterministic scorer runs and the summary says so.
  */
-async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain = true } = {}) {
+async function runMatch({ userId = 1, roleId, warmCap = 6, coldCap = 8, explain = true, priorityIds = [], deps = {} } = {}) {
   const role = db.prepare('SELECT * FROM hiring_roles WHERE id = ? AND user_id = ? AND is_deleted = 0').get(roleId, userId);
   if (!role) return { error: 'Role not found' };
   const pool = db.prepare('SELECT * FROM hiring_candidates WHERE user_id = ? AND is_deleted = 0').all(userId);
-
-  const ranked = rankCandidates(role, pool);
   const warmConsidered = pool.filter((c) => c.tier === 'warm').length;
   const coldConsidered = pool.length - warmConsidered;
+  const size = Math.max(1, warmCap + coldCap);
+
+  const client = !explain ? null : ('client' in deps ? deps.client : anthropicFor(userId, 'hiring_grade'));
+
+  if (client) {
+    const matches = db.prepare('SELECT id, candidate_id, status, breakdown FROM hiring_matches WHERE role_id = ? AND is_deleted = 0').all(roleId);
+    const ilOnly = !!role.il_only;
+    const selected = selectForGrading({ role, pool, matches, priorityIds });
+    const eligible = selected.filter((c) => !ilOnly || c.il_tie_type);
+    const moved = new Set(matches.filter((m) => m.status && m.status !== 'sourced').map((m) => Number(m.candidate_id)));
+
+    const rubric = await ensureRubric({ role, client });
+    const cached = new Map();
+    for (const m of matches) {
+      const b = parseBreakdown(m.breakdown);
+      if (b.graded && b.grade) cached.set(Number(m.candidate_id), b.grade);
+    }
+    const g = await grade.gradeCandidates({ client, role, rubric, candidates: eligible, cached });
+
+    const ranked = [];
+    for (const c of eligible) {
+      const gr = g.grades.get(c.id);
+      if (!gr) continue;                                          // grading failed for this one — reported below
+      if (gr.fit < GRADED_FLOOR && !moved.has(Number(c.id))) continue;
+      if (!isDescribable(c) && !moved.has(Number(c.id))) continue;
+      const rank = gr.fit + warmBonus(c) + (c.il_tie_type && !ilOnly ? IL_BONUS : 0);
+      const strengths = [...gr.strengths];
+      if (c.il_tie_type) strengths.push(`Illinois tie (${c.il_tie_type}${c.il_tie_place ? `: ${c.il_tie_place}` : ''})`);
+      ranked.push({
+        candidate: c, fit: gr.fit, rank_score: Math.round(rank * 10) / 10, tier: c.tier || 'cold',
+        rationale: gr.why, strengths, gaps: gr.gaps,
+        breakdown: { graded: true, grade: gr, rubric: rubric.requirements, rubric_dropped: rubric.dropped || [], linkedin_read: !!c.linkedin_data },
+        il: c.il_tie_type ? { type: c.il_tie_type, place: c.il_tie_place, evidence: c.il_tie_evidence } : null,
+      });
+    }
+    ranked.sort((a, b) => b.rank_score - a.rank_score || b.fit - a.fit);
+    const shortlist = ranked.filter((it) => !moved.has(Number(it.candidate.id))).slice(0, size);
+    // Moved matches stay on the page regardless of rank — re-scored, never dropped.
+    for (const it of ranked) if (moved.has(Number(it.candidate.id))) shortlist.push(it);
+
+    const retired = persistShortlist({ userId, roleId, items: shortlist });
+    const warmN = shortlist.filter((it) => it.tier === 'warm').length;
+    const notes = [];
+    if (ilOnly && selected.length > eligible.length) notes.push(`${selected.length - eligible.length} skipped (no verified Illinois tie, role is IL-only)`);
+    if (g.reused) notes.push(`${g.reused} grades reused`);
+    if (retired) notes.push(`${retired} stale matches retired`);
+    if (rubric.dropped && rubric.dropped.length) notes.push(`not gradable from a profile: ${rubric.dropped.join('; ')}`);
+    if (g.errors.length) notes.push(`GRADING ERRORS: ${g.errors.join(' | ')}`);
+    if (rubric.error) notes.push(`rubric fell back to the parsed must-haves: ${rubric.error}`);
+    const summary = `graded ${g.graded + g.reused} of ${pool.length} in pool against ${rubric.requirements.length} requirements → ${shortlist.length} shortlisted (${warmN} warm, ${shortlist.length - warmN} cold)`
+      + (notes.length ? ` — ${notes.join('; ')}` : '');
+    try { db.prepare(`INSERT INTO hiring_runs (user_id, role_id, kind, warm_considered, cold_considered, shortlisted, summary) VALUES (?, ?, 'match', ?, ?, ?, ?)`).run(userId, roleId, warmConsidered, coldConsidered, shortlist.length, summary); } catch { /* run-log best-effort */ }
+    return { role_id: roleId, graded: true, warm_considered: warmConsidered, cold_considered: coldConsidered, shortlisted: shortlist.length, shortlist, summary, retired, grading_errors: g.errors, degraded: g.errors.length ? g.errors.join(' | ') : null };
+  }
+
+  // ── Deterministic path: no key, or explain turned off. ──
+  const ranked = rankCandidates(role, pool);
   // ── ONE RANKED SHORTLIST ──
   // This used to fill a warm quota and a cold quota separately, which was the only
   // way to stop the 1,000-point warm offset from swallowing the whole list. With
   // warmth scored as a bonus the quotas are not just unnecessary, they're harmful:
   // a warm cap would drop a well-matched known contact at #7 to make room for a
   // weaker stranger, and a cold cap would do the reverse. Take the top N of one list.
-  const shortlist = ranked.slice(0, Math.max(1, warmCap + coldCap));
+  const shortlist = ranked.slice(0, size);
   const ex = explain
     ? await explainShortlist({ userId, role, items: shortlist })
     : { items: shortlist.map((it) => ({ ...it, rationale: fallbackLine(it) })), degraded: null };
   const explained = ex.items;
-
-  // Upsert matches. Re-running a role refreshes scores/rationale but PRESERVES the
-  // handoff status (sourced→shortlisted→shared→…) — a re-match must not reset where
-  // Danny has already moved a candidate in the pipeline.
-  const upsertMatch = db.transaction((rows) => {
-    for (const it of rows) {
-      const existing = db.prepare('SELECT id, status FROM hiring_matches WHERE role_id = ? AND candidate_id = ?').get(roleId, it.candidate.id);
-      const payload = {
-        tier: it.tier, fit_score: it.fit, rank_score: it.rank_score, rationale: it.rationale || null,
-        strengths: JSON.stringify(it.strengths || []), gaps: JSON.stringify(it.gaps || []),
-        breakdown: JSON.stringify(it.breakdown || {}),
-      };
-      if (existing) {
-        db.prepare(`UPDATE hiring_matches SET tier=?, fit_score=?, rank_score=?, rationale=?, strengths=?, gaps=?, breakdown=?, is_deleted=0, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-          .run(payload.tier, payload.fit_score, payload.rank_score, payload.rationale, payload.strengths, payload.gaps, payload.breakdown, existing.id);
-      } else {
-        db.prepare(`INSERT INTO hiring_matches (user_id, role_id, candidate_id, tier, fit_score, rank_score, rationale, strengths, gaps, breakdown, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sourced')`)
-          .run(userId, roleId, it.candidate.id, payload.tier, payload.fit_score, payload.rank_score, payload.rationale, payload.strengths, payload.gaps, payload.breakdown);
-      }
-    }
-  });
-  upsertMatch(explained);
+  // Re-running preserves handoff status (sourced→shortlisted→shared→…) and retires
+  // untouched matches that fell off — see persistShortlist.
+  const retired = persistShortlist({ userId, roleId, items: explained });
 
   const warmN = shortlist.filter((it) => it.tier === 'warm').length;
   const summary = `matched role "${role.title}": ${warmConsidered} warm + ${coldConsidered} cold considered → ${shortlist.length} shortlisted (${warmN} warm, ${shortlist.length - warmN} cold)`
+    + (explain ? ' — NOT GRADED: no working Anthropic key, scored on keyword signals only' : '')
+    + (retired ? `; ${retired} stale matches retired` : '')
     + (ex.degraded ? ` — rationale degraded: ${ex.degraded}` : '');
   try { db.prepare(`INSERT INTO hiring_runs (user_id, role_id, kind, warm_considered, cold_considered, shortlisted, summary) VALUES (?, ?, 'match', ?, ?, ?, ?)`).run(userId, roleId, warmConsidered, coldConsidered, shortlist.length, summary); } catch { /* run-log best-effort */ }
 
-  return { role_id: roleId, warm_considered: warmConsidered, cold_considered: coldConsidered, shortlisted: shortlist.length, shortlist: explained, summary, degraded: ex.degraded || null };
+  return { role_id: roleId, graded: false, warm_considered: warmConsidered, cold_considered: coldConsidered, shortlisted: shortlist.length, shortlist: explained, summary, retired, degraded: ex.degraded || null };
 }
 
 module.exports = {
   runMatch, rankCandidates, computeFit, functionFit, stackOverlap, seniorityFit, domainFit,
   profileText, explainShortlist, fallbackLine, isDescribable, WARM_BONUS, IL_BONUS, SHORTLIST_FLOOR,
+  selectForGrading, ensureRubric, persistShortlist, warmBonus, GRADE_CAP, GRADED_FLOOR, WARMTH_BONUS,
 };
