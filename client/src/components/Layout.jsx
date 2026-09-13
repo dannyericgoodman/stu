@@ -55,6 +55,11 @@ const navConfig = [
   // one hire. Same VC muscle pointed at the portfolio, so it sits right after Assess
   // — flush-aligned with the other doors, not indented. (Replaces the old Talent wing.)
   { to: '/hiring', label: 'Hiring' },
+  // Network is Hiring's substrate generalised. Hiring answers one ask (a role);
+  // Network answers every ask a founder brings — advisor, investor, hire, customer
+  // — off the same graph. It sits last because it is a tool you reach for when a
+  // founder asks for something, not a screen you open every morning.
+  { to: '/network', label: 'Network' },
 ];
 const utilityConfig = [
   { to: '/settings', label: 'Settings' },

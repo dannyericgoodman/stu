@@ -646,6 +646,29 @@ export const api = {
   importHiringWarm: () => request('/hiring/warm/import', { method: 'POST' }),
   getHiringWarmStatus: () => request('/hiring/warm/status'),
 
+  // ── Network — the people graph and the asks it answers ──
+  // The LinkedIn export goes up as multipart for the same reason a deck does:
+  // set Content-Type by hand and multer sees no file.
+  getNetworkStatus: () => request('/network/status'),
+  getNetworkPeople: (params) => request('/network/people?' + new URLSearchParams(params || {})),
+  getNetworkNeeds: () => request('/network/needs'),
+  getNetworkCompanies: () => request('/network/companies'),
+  matchNetwork: (payload) => request('/network/match', { method: 'POST', body: JSON.stringify(payload) }),
+  getNetworkRuns: () => request('/network/runs'),
+  getNetworkRun: (id) => request(`/network/runs/${id}`),
+  importNetworkAirtable: () => request('/network/import/airtable', { method: 'POST' }),
+  importNetworkLinkedIn: async (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${API_BASE}/network/import/linkedin`, {
+      method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd,
+    });
+    if (res.status === 401) { setToken(null); setUser(null); window.location.href = '/login'; throw new Error('Session expired'); }
+    const d = await res.json().catch(() => ({ error: 'Import failed' }));
+    if (!res.ok) throw new Error(d.error || 'Import failed');
+    return d;
+  },
+
   // MCP / API access
   getMcpInfo: () => request('/mcp/info'),
   getMcpTokens: () => request('/mcp/tokens'),

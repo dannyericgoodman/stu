@@ -40,6 +40,9 @@ const Assess = lazy(() => import('./pages/Assess'));
 const Read = lazy(() => import('./pages/Read'));
 const AssessmentDetail = lazy(() => import('./pages/AssessmentDetail'));
 const AskStu = lazy(() => import('./pages/AskStu'));
+// Network — the people graph behind every founder ask. Lazy: it is a tool Danny
+// reaches for when a founder asks him for something, not a morning screen.
+const Network = lazy(() => import('./pages/Network'));
 // Discover is gone — /discover redirects to /sourcing. It was a search box you had
 // to operate whose engine never once ran, and Harmonic's own lesson is that the
 // alert is the product and the search bar is its config UI. The file stays on disk
@@ -143,6 +146,7 @@ function AppRoutes() {
       <Route path="/assess/:id/full" element={<ProtectedRoute><AssessmentDetail /></ProtectedRoute>} />
       <Route path="/hiring" element={<ProtectedRoute><HiringHome /></ProtectedRoute>} />
       <Route path="/hiring/:id" element={<ProtectedRoute><HiringRole /></ProtectedRoute>} />
+      <Route path="/network" element={<ProtectedRoute><Network /></ProtectedRoute>} />
       <Route path="/portfolio" element={<ProtectedRoute><Placeholder title="Portfolio" /></ProtectedRoute>} />
       <Route path="/fund" element={<ProtectedRoute><Placeholder title="Fund Analytics" /></ProtectedRoute>} />
       <Route path="/brief" element={<ProtectedRoute><Brief /></ProtectedRoute>} />

@@ -556,6 +556,7 @@ app.use('/api/discover', expensiveLimiter);
 app.use('/api/hiring/matches/run', expensiveLimiter);
 app.use('/api/hiring/roles/ingest', expensiveLimiter);
 app.use('/api/hiring/warm/import', expensiveLimiter);
+app.use('/api/network/import', expensiveLimiter);
 app.use('/api/hiring/discovery/run', expensiveLimiter);
 app.use(['/api/hiring/roles/:id/source'], expensiveLimiter);
 app.use('/api/outreach', expensiveLimiter);
@@ -636,6 +637,7 @@ if (process.env.RESTORE_TOKEN) {
 }
 app.use('/api/talent', requireAuth, require('./routes/talent'));
 app.use('/api/hiring', requireAuth, require('./routes/hiring'));
+app.use('/api/network', requireAuth, require('./routes/network'));
 app.use('/api/newsletter', requireAuth, require('./routes/newsletter'));
 app.use('/api/mcp', requireAuth, require('./routes/mcp'));
 app.use('/api/monitors', requireAuth, require('./routes/monitors'));

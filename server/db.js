@@ -2012,6 +2012,112 @@ db.exec(`
 DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitor_hits ON monitor_hits(monitor_id, detected_at DESC);`);
 DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_monitor_hits_user ON monitor_hits(user_id, dismissed, detected_at DESC);`);
 
+// ══════════════════════════════════════════════════════════════════════════
+// NETWORK — the people graph, and the asks it answers.
+//
+// Separate from `hiring_candidates` on purpose. That table is a hiring funnel:
+// rows carry a tier, a role function and a trash state because they exist to be
+// worked toward an offer. These rows are a MAP of Danny's network, which serves
+// three different asks at once (an advisor, an investor, a hire), is rebuilt
+// wholesale from a LinkedIn export rather than curated row by row, and must
+// never inherit a hiring pipeline's semantics. A person can legitimately appear
+// in both, for different reasons.
+// ══════════════════════════════════════════════════════════════════════════
+db.exec(`
+  CREATE TABLE IF NOT EXISTS network_people (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,
+    -- Identity. linkedin_slug is the real key; dedupe_key falls back to
+    -- name+company so an Airtable advisor with no LinkedIn URL still merges.
+    dedupe_key TEXT NOT NULL,
+    linkedin_slug TEXT,
+    linkedin_url TEXT,
+    email TEXT,
+    title TEXT,
+    company TEXT,
+    -- Deterministic profile (lib/networkProfile), stored rather than recomputed:
+    -- a match query scans the whole book, and reclassifying 3,000 titles per
+    -- request is work already done at ingest.
+    functions TEXT,                             -- JSON array
+    personas TEXT,                              -- JSON array
+    sectors TEXT,                               -- JSON array
+    seniority TEXT,
+    is_commercial INTEGER DEFAULT 1,
+    profile_signal TEXT,                        -- none|thin|good
+    profile_evidence TEXT,                      -- JSON: which term fired for each read
+    -- Relationship (lib/relationshipStrength). Counts are kept alongside the
+    -- score so the receipt can be regenerated if the scorer changes.
+    msgs_sent INTEGER DEFAULT 0,
+    msgs_received INTEGER DEFAULT 0,
+    msg_threads INTEGER DEFAULT 0,
+    first_contact_at TEXT,
+    last_contact_at TEXT,
+    is_connection INTEGER DEFAULT 0,
+    connected_on TEXT,
+    danny_invited INTEGER DEFAULT 0,
+    invite_note TEXT,                           -- Danny's own words on why they mattered
+    warmth INTEGER DEFAULT 0,
+    warmth_tier TEXT,                           -- strong|real|light|thin|name_only
+    months_since INTEGER,
+    relationship_receipt TEXT,
+    -- Provenance. JSON array; a person can arrive from several places at once.
+    sources TEXT,
+    airtable_record_id TEXT,
+    airtable_table TEXT,                        -- advisor_network|investor_network
+    expertise TEXT,                             -- hand-entered in Airtable; outranks a parsed title
+    notes TEXT,
+    is_deleted INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+DEFERRED_INDEXES.push(`CREATE UNIQUE INDEX IF NOT EXISTS idx_np_dedupe ON network_people(user_id, dedupe_key);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_np_warmth ON network_people(user_id, is_deleted, warmth DESC);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_np_company ON network_people(user_id, company);`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_np_slug ON network_people(user_id, linkedin_slug);`);
+
+// One row per match run. Results are stored as JSON rather than exploded into a
+// join table because a run is a SNAPSHOT — the answer given on a date, against
+// the book as it stood. Re-running after a fresh import should produce a new
+// row, not silently rewrite what Danny acted on last month.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS network_match_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    need_type TEXT NOT NULL,                    -- capital|advice|intro|hire|customer
+    need_text TEXT NOT NULL,
+    company_name TEXT,
+    airtable_ask_id TEXT,                       -- the Founder Asks row this answers, when it came from there
+    considered INTEGER,
+    qualified INTEGER,
+    coverage TEXT,                              -- JSON: how many people meet each dimension
+    unmet TEXT,                                 -- JSON: dimensions NOBODY meets
+    results TEXT,                               -- JSON array of ranked matches with receipts
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_nmr_user ON network_match_runs(user_id, created_at DESC);`);
+
+// Import runs, so "when was this book last refreshed, and from what" is a
+// question with an answer. A LinkedIn export is a dated snapshot; a stale one
+// silently ranking people by a job they left is the failure mode here.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS network_import_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    source TEXT NOT NULL,                       -- linkedin_export|airtable
+    export_dated TEXT,                          -- the date the LinkedIn export itself was cut
+    inserted INTEGER DEFAULT 0,
+    updated INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
+    summary TEXT,
+    run_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_nir_user ON network_import_runs(user_id, run_at DESC);`);
+
+
 // Every table now exists. Replay the ALTERs that were queued because their table
 // had not been created yet when they were reached. See addColumn above.
 flushDeferredColumns();
