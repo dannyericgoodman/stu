@@ -2143,6 +2143,30 @@ db.exec(`
 DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_nir_user ON network_import_runs(user_id, run_at DESC);`);
 
 
+// Founding seats — the hard cap behind the $349 / 10-seat offer.
+//
+// A row is created (status 'reserved') BEFORE the buyer reaches Stripe, inside
+// a write transaction, so two buyers racing for the last seat cannot both be
+// charged: the loser gets 403 sold_out before any money moves. The reservation
+// expires after 30 minutes (abandoned checkouts free the seat); the webhook
+// flips it to 'claimed' when Stripe confirms payment, or 'released' when the
+// payment arrives over cap (seat taken by someone else while this one lapsed —
+// the buyer is NOT marked paid, so Danny refunds instead of silently selling
+// an 11th seat).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS founding_seats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'reserved',  -- reserved|claimed|released
+    stripe_session_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL,
+    claimed_at TEXT
+  );
+`);
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founding_seats_status ON founding_seats(status);`);
+
+
 // Every table now exists. Replay the ALTERs that were queued because their table
 // had not been created yet when they were reached. See addColumn above.
 flushDeferredColumns();
