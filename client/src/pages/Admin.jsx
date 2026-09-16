@@ -147,6 +147,7 @@ export default function Admin() {
   ];
 
   return (
+    <>
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Admin</h1>
@@ -437,5 +438,6 @@ export default function Admin() {
           </div>
         </div>
       )}
+    </>
   );
 }
