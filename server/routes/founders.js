@@ -216,16 +216,24 @@ router.post('/sync-airtable', async (req, res) => {
 // POST /api/founders/:id/publish-to-team — the ONLY path that writes to the team's
 // shared Airtable. Deliberate, awaited, and surfaced (not fire-and-forget). SQLite
 // stays canonical; if this fails, the founder simply isn't published — never the reverse.
+//
+// OWNER-ONLY: the whole point of this endpoint is writing to the team's base, so
+// unlike watch/stage (which degrade to a Stu-local change) there is nothing to
+// fall back to. Non-owners get a 403, not a silent no-op.
 router.post('/:id/publish-to-team', async (req, res) => {
+  const { isOwner } = require('../lib/providerKeys');
+  if (!isOwner(req.user.id)) {
+    return res.status(403).json({ error: 'Publishing to the team base is only available on the owner account.' });
+  }
   const founder = db.prepare('SELECT * FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0').get(req.params.id, req.user.id);
   if (!founder) return res.status(404).json({ error: 'Founder not found' });
 
   try {
     const airtableSync = require('../services/airtable-sync');
     const results = {};
-    results.admissions = await airtableSync.pushAdmissionsChange(founder, null, { explicit: true });
+    results.admissions = await airtableSync.pushAdmissionsChange(founder, null, { explicit: true, userId: req.user.id });
     if (founder.deal_status) {
-      results.deal = await airtableSync.pushDealChange(founder, null, { explicit: true });
+      results.deal = await airtableSync.pushDealChange(founder, null, { explicit: true, userId: req.user.id });
     }
     // Surface a real status — the caller learns if the team base actually received it.
     const ok = !(results.admissions && results.admissions.error) && !(results.deal && results.deal.error);

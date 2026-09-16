@@ -100,7 +100,8 @@ function postAirtableRecord(tableId, fields) {
 // from its own vocabulary.
 // ══════════════════════════════════════════════════════════════════════════
 async function createPipelineRecord(founder, opts = {}) {
-  if (gatedOut(opts, founder, 'create')) return { skipped: 'not_explicit' };
+  const blockedCreate = gatedOut(opts, founder, 'create');
+  if (blockedCreate) return { skipped: blockedCreate };
   const post = opts.post || postAirtableRecord;
 
   // Descriptive fields go by NAME (the import service reads by name too); the
@@ -144,10 +145,29 @@ function logSync(founderId, tableName, fieldName, oldValue, newValue, recordId, 
 // "publish to team" action. Both writers refuse unless opts.explicit === true, so an
 // accidental auto-push (the old fire-and-forget behavior) can never leak in-progress
 // founder data to the team. SQLite stays canonical; Airtable self-heals on next publish.
+/**
+ * The central choke point for every Airtable write. Returns null when the write
+ * may proceed, or a skip-reason string when it must not.
+ *
+ * Two independent locks, both required:
+ *  1. explicit — the call must pass { explicit: true } (Danny's own drag /
+ *     publish-to-team action). No agent, cron, or background job may write.
+ *  2. owner — the call must name the owner's userId. The team base is the
+ *     owner's CRM; a paying outside seat must never write to it. Route-level
+ *     checks exist, but this is the layer that cannot be forgotten by a future
+ *     caller — forgetting userId fails closed.
+ */
 function gatedOut(opts, founder, kind) {
-  if (opts && opts.explicit === true) return false;
-  console.warn(`[AirtableSync] BLOCKED non-explicit ${kind} push for "${founder && founder.name}" — Airtable writes require an explicit publish-to-team action.`);
-  return true;
+  if (!opts || opts.explicit !== true) {
+    console.warn(`[AirtableSync] BLOCKED non-explicit ${kind} push for "${founder && founder.name}" — Airtable writes require an explicit publish-to-team action.`);
+    return 'not_explicit';
+  }
+  const { isOwner } = require('../lib/providerKeys');
+  if (!isOwner(opts.userId)) {
+    console.warn(`[AirtableSync] BLOCKED ${kind} push for "${founder && founder.name}" — not the owner account (user ${opts && opts.userId}).`);
+    return 'not_owner';
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -186,7 +206,8 @@ const vocab = require('../lib/airtableVocab');
 // send the right field id and a value Airtable will actually accept.
 /** Push the merged board's stage. `stage` must already be a valid Airtable option. */
 async function pushStage(founder, stage, opts = {}) {
-  if (gatedOut(opts, founder, 'stage')) return { skipped: 'not_explicit' };
+  const blockedStage = gatedOut(opts, founder, 'stage');
+  if (blockedStage) return { skipped: blockedStage };
   const recordId = founder.airtable_founder_record_id;
   // The 26 Investment-Pipeline orphans have no Founder Ecosystem record. Their
   // stage is Stu-local and that is correct — this is not an error to shout about.
@@ -229,7 +250,8 @@ async function pushStage(founder, stage, opts = {}) {
  * GATED: only runs when called with { explicit: true } (publish-to-team).
  */
 async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
-  if (gatedOut(opts, founder, 'admissions')) return { skipped: 'not_explicit' };
+  const blockedAdm = gatedOut(opts, founder, 'admissions');
+  if (blockedAdm) return { skipped: blockedAdm };
   const recordId = founder.airtable_founder_record_id;
   if (!recordId) {
     console.warn(`[AirtableSync] No Airtable record ID for founder ${founder.id} (${founder.name}), skipping admissions push`);
@@ -263,7 +285,8 @@ async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
  * GATED: only runs when called with { explicit: true } (publish-to-team).
  */
 async function pushDealChange(founder, oldStatus, opts = {}) {
-  if (gatedOut(opts, founder, 'deal')) return { skipped: 'not_explicit' };
+  const blockedDeal = gatedOut(opts, founder, 'deal');
+  if (blockedDeal) return { skipped: blockedDeal };
   const recordId = founder.airtable_deal_record_id;
   if (!recordId) {
     console.warn(`[AirtableSync] No Airtable deal record ID for founder ${founder.id} (${founder.name}), skipping deal push`);

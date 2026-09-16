@@ -43,6 +43,7 @@ const router = express.Router();
 const db = require('../db');
 const vocab = require('../lib/airtableVocab');
 const airtableSync = require('../services/airtable-sync');
+const { isOwner } = require('../lib/providerKeys');
 
 // One query. Every stage of the funnel joined to the spine.
 //
@@ -1030,9 +1031,12 @@ router.patch('/:id/stage', async (req, res) => {
 
   // Keep the mirror column honest: it means "what Airtable says", so it may only
   // move once Airtable has actually accepted the write.
+  // OWNER-ONLY (same rule as the watch flow): the base is the team's shared CRM.
   let airtable = { skipped: 'no_airtable_record' };
   try {
-    airtable = await airtableSync.pushStage(founder, stage, { explicit: true });
+    airtable = isOwner(req.user.id)
+      ? await airtableSync.pushStage(founder, stage, { explicit: true, userId: req.user.id })
+      : { skipped: 'not_owner' };
     if (airtable && airtable.pushed) {
       db.prepare('UPDATE founders SET airtable_admission_status = ?, airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(stage, founder.id);
@@ -1156,14 +1160,15 @@ router.patch('/:id/represented-by', (req, res) => {
 
 // ── POST /api/pipeline/score-slope — compute GitHub founder-slope for the pool ──
 // Paged (?limit): each call scores a batch and reports what's left, same as the
-// other backfills. Uses the server's GITHUB_TOKEN (5000 req/hr authed).
+// other backfills. Owner-only route; resolves the GitHub token through providerKeys
+// (owner's saved key, env fallback) rather than reading the platform env directly.
 router.post('/score-slope', async (req, res) => {
   if (req.user.id !== 1) return res.status(403).json({ error: 'not available for your account' });
   try {
     const { scoreGithubSlope } = require('../pipeline/github-activity');
     const r = await scoreGithubSlope({
       userId: req.user.id,
-      githubToken: process.env.GITHUB_TOKEN,
+      githubToken: require('../lib/providerKeys').resolveKey(req.user.id, 'github'),
       limit: req.query.limit ? Number(req.query.limit) : 40,
     });
     res.json({ ...r, done: r.remaining === 0 });
@@ -1182,7 +1187,7 @@ router.post('/discover-builders', async (req, res) => {
     const { discoverGithubBuilders } = require('../pipeline/github-source');
     const r = await discoverGithubBuilders({
       userId: req.user.id,
-      token: process.env.GITHUB_TOKEN,
+      token: require('../lib/providerKeys').resolveKey(req.user.id, 'github'),
       candidatesPerQuery: req.query.per ? Number(req.query.per) : 15,
       pages: req.query.pages ? Number(req.query.pages) : 1,
     });
@@ -1199,7 +1204,7 @@ router.post('/resolve-github', async (req, res) => {
   if (req.user.id !== 1) return res.status(403).json({ error: 'not available for your account' });
   try {
     const { resolveGithubHandles } = require('../pipeline/github-resolve');
-    res.json(await resolveGithubHandles({ userId: req.user.id, token: process.env.GITHUB_TOKEN, limit: req.query.limit ? Number(req.query.limit) : 30, reset: String(req.query.reset) === '1' }));
+    res.json(await resolveGithubHandles({ userId: req.user.id, token: require('../lib/providerKeys').resolveKey(req.user.id, 'github'), limit: req.query.limit ? Number(req.query.limit) : 30, reset: String(req.query.reset) === '1' }));
   } catch (e) {
     console.error('[ResolveGithub]', e.message);
     res.status(500).json({ error: e.message });

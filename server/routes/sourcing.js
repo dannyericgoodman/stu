@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const airtableSync = require('../services/airtable-sync');
+const { isOwner } = require('../lib/providerKeys');
 const { VALID_TIE_TYPES } = require('../pipeline/sourcing-engine');
 
 // Hard rule: the Pipeline only ever shows founders with a VERIFIED Chicago/IL tie.
@@ -283,9 +284,16 @@ router.post('/watch/:id', async (req, res) => {
   }
 
   // Publish to the team's base: create the Pipeline row as Watching.
+  // OWNER-ONLY. The Airtable base is the team's shared CRM on the owner's key —
+  // a paying outside seat must never write to it. Non-owners still get their Stu
+  // Watching card above; the team-base publish is simply skipped, not failed.
   let airtable = { skipped: 'not_attempted' };
   try {
-    airtable = await airtableSync.createPipelineRecord(founder, { explicit: true });
+    if (!isOwner(userId)) {
+      airtable = { skipped: 'not_owner' };
+    } else {
+      airtable = await airtableSync.createPipelineRecord(founder, { explicit: true, userId });
+    }
     if (airtable && airtable.created) {
       db.prepare('UPDATE founders SET airtable_founder_record_id = ?, airtable_admission_status = ?, airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(airtable.recordId, '4 · Watching', founder.id);
