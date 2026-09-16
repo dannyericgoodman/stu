@@ -331,6 +331,33 @@ router.post('/unstar/:id', (req, res) => {
   res.json({ message: 'Unstarred' });
 });
 
+// POST /api/sourcing/add — manually add a founder to the sourcing universe.
+// Body: { name (required), company?, role?, linkedin_url?, headline?,
+//         company_one_liner?, website_url?, location_type?, chicago_connection?,
+//         tags?, pedigree_signals?, builder_signals?, caliber_signals?, caliber_tier? }
+// Signal arrays are JSON-encoded string arrays in the engine's quote-backed
+// vocabulary (e.g. caliber_signals: ["Repeat founder"], pedigree_signals:
+// ["Ex-Stripe"], tags: ["fintech","chicago"]).
+//
+// Inserts a pending sourced row with source='manual'. Deduped on LinkedIn slug or
+// name+company — any existing sourced_founders row for the identity (whatever its
+// status) blocks re-adding, mirroring the engine's isDuplicate: a second copy is
+// never what he wants.
+//
+// Star the row afterwards to mark it liked for the taste system — starring has no
+// pipeline/Airtable side effects, unlike watch/approve.
+router.post('/add', (req, res) => {
+  const { validateManualAdd, findDuplicate, insertManualAdd } = require('../lib/manualAdd');
+  const { error, clean } = validateManualAdd(req.body, { validTieTypes: VALID_TIE_TYPES });
+  if (error) return res.status(400).json({ error });
+
+  const existing = findDuplicate(db, clean, req.user.id);
+  if (existing) return res.json({ ...existing, deduped: true });
+
+  const row = insertManualAdd(db, clean, req.user.id);
+  res.status(201).json({ ...row, deduped: false });
+});
+
 // POST /api/sourcing/run — trigger manual sourcing run
 // Manual triggers always do a full sweep (all query groups, not just today's rotation)
 router.post('/run', async (req, res) => {
