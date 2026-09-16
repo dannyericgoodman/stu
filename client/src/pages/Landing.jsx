@@ -89,7 +89,7 @@ const pricingIncludes = [
 const faqs = [
   {
     q: 'Who is this for?',
-    a: 'Pre-seed and angel investors who source outside their personal network. If your best deals come from work instead of warm intros, Stu is built for you.',
+    a: 'Early-stage investors — pre-seed, seed, and angels — who source outside their personal network. If your best deals come from work instead of warm intros, Stu is built for you.',
   },
   {
     q: 'Do I need my own API keys?',
@@ -495,7 +495,7 @@ export default function Landing() {
           </span>
         </div>
         <h1 className="lp-h1 landing-fade landing-fade-d2">
-          Wake up to a ranked inbox<br />of pre-seed founders.
+          Wake up to a ranked inbox<br />of founders.
         </h1>
         <p className="lp-sub landing-fade landing-fade-d3">
           Nightly AI scout sweeps across YC, a16z Speedrun, Z&nbsp;Fellows, Thiel Fellows,
@@ -643,7 +643,7 @@ export default function Landing() {
               <StuLogo size={20} />
               <span style={{ fontSize: 15 }}>Stu</span>
             </div>
-            <div className="lp-copy">© {new Date().getFullYear()} Stu. The AI sourcing OS for pre-seed investors.</div>
+            <div className="lp-copy">© {new Date().getFullYear()} Stu. The AI sourcing OS for early-stage investors.</div>
           </div>
           <div className="lp-footer-links">
             <Link to="/terms">Terms</Link>

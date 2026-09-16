@@ -4,7 +4,7 @@ import StuLogo from '../components/StuLogo';
 const sections = [
   {
     h: 'What Stu is',
-    p: 'Stu is AI-powered founder-sourcing software for pre-seed and angel investors: nightly scout sweeps, an AI-scored triage inbox, structured founder assessments, and pipeline tracking. Stu is a research and workflow tool — it is not investment advice, and nothing in the product should be treated as a recommendation to invest.',
+    p: 'Stu is AI-powered founder-sourcing software for early-stage investors: nightly scout sweeps, an AI-scored triage inbox, structured founder assessments, and pipeline tracking. Stu is a research and workflow tool — it is not investment advice, and nothing in the product should be treated as a recommendation to invest.',
   },
   {
     h: 'The founding seat',
