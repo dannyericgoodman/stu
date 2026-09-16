@@ -78,6 +78,20 @@ function reserveSeat(userId) {
     ).get(userId);
     if (existing) return existing;
     if (activeSeatCount() >= FOUNDING_SEATS) return null;
+    // A lapsed reservation leaves a 'released' row behind, and user_id is
+    // UNIQUE — flip that row back to 'reserved' instead of INSERTing a second
+    // one (bare INSERT throws SQLITE_CONSTRAINT_UNIQUE and locks the buyer out
+    // of ever retrying after expiry).
+    const stale = db.prepare(
+      `SELECT id FROM founding_seats WHERE user_id = ? AND status = 'released'`
+    ).get(userId);
+    if (stale) {
+      db.prepare(
+        `UPDATE founding_seats SET status = 'reserved', expires_at = datetime('now', ?),
+         stripe_session_id = NULL WHERE id = ?`
+      ).run(`+${RESERVATION_TTL_MIN} minutes`, stale.id);
+      return db.prepare('SELECT * FROM founding_seats WHERE id = ?').get(stale.id);
+    }
     const r = db.prepare(
       `INSERT INTO founding_seats (user_id, status, expires_at)
        VALUES (?, 'reserved', datetime('now', ?))`
@@ -253,12 +267,26 @@ async function webhook(req, res) {
           ).run(session.id, seat.id);
         } else {
           // No live reservation (old session or lapsed) — claim only if a seat
-          // is genuinely free, and record it so the counter stays honest.
+          // is genuinely free. A lapsed reservation leaves a 'released' row
+          // behind and user_id is UNIQUE, so flip that row to 'claimed' instead
+          // of INSERTing: a bare INSERT throws SQLITE_CONSTRAINT_UNIQUE, the
+          // transaction rolls back, Stripe never gets its 200, and a buyer who
+          // already paid is never marked paid.
           if (others >= FOUNDING_SEATS) return 'sold_out';
-          db.prepare(
-            `INSERT INTO founding_seats (user_id, status, stripe_session_id, claimed_at)
-             VALUES (?, 'claimed', ?, datetime('now'))`
-          ).run(userId, session.id);
+          const stale = db.prepare(
+            `SELECT id FROM founding_seats WHERE user_id = ? AND status = 'released'`
+          ).get(userId);
+          if (stale) {
+            db.prepare(
+              `UPDATE founding_seats SET status = 'claimed', claimed_at = datetime('now'),
+               stripe_session_id = ? WHERE id = ?`
+            ).run(session.id, stale.id);
+          } else {
+            db.prepare(
+              `INSERT INTO founding_seats (user_id, status, stripe_session_id, claimed_at)
+               VALUES (?, 'claimed', ?, datetime('now'))`
+            ).run(userId, session.id);
+          }
         }
         db.prepare(
           `UPDATE users SET has_paid = 1, stripe_customer_id = ?, payment_date = CURRENT_TIMESTAMP WHERE id = ?`

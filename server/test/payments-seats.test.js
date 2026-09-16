@@ -97,6 +97,26 @@ test('reserveSeat: atomic, idempotent, counts toward the cap', () => {
   assert.equal(seatsRemaining(), FOUNDING_SEATS - 2);
 });
 
+test('reserveSeat: a lapsed reservation can be re-reserved (same row, fresh expiry)', () => {
+  const c = makeUser('relapse', false);
+  buyerIds.push(c);
+  const s1 = reserveSeat(c);
+  assert.ok(s1 && s1.status === 'reserved');
+  const before = seatsRemaining();
+  // Let the reservation lapse. The row is kept as 'released' for history, and
+  // user_id is UNIQUE — re-reserving must flip that row, not INSERT a second.
+  db.prepare(`UPDATE founding_seats SET expires_at = datetime('now', '-1 hour') WHERE id = ?`).run(s1.id);
+  const s2 = reserveSeat(c);
+  assert.ok(s2, 'buyer gets a reservation again after expiry');
+  assert.equal(s2.id, s1.id, 'reuses the same seat row');
+  assert.equal(s2.status, 'reserved');
+  assert.equal(seatsRemaining(), before, 'no extra seat consumed');
+  const fresh = db.prepare(
+    `SELECT expires_at > datetime('now', '+20 minutes') AS ok FROM founding_seats WHERE id = ?`
+  ).get(s1.id);
+  assert.equal(fresh.ok, 1, 'expiry is pushed back out');
+});
+
 test('checkout refuses the 11th buyer before Stripe is touched', async () => {
   // Fill every remaining seat with reservations.
   const need = seatsRemaining();
@@ -162,6 +182,54 @@ test('webhook claims the reservation and is idempotent', async () => {
   });
   assert.equal(res2.status, 200);
   assert.equal(seatsClaimed(), 1);
+});
+
+test('webhook: late payment for a lapsed reservation is claimed, not lost', async () => {
+  // Free one seat by letting b's reservation lapse, then latepay reserves it…
+  const b = db.prepare(`SELECT id FROM users WHERE email = '${TAG}b@t.t'`).get().id;
+  db.prepare(`UPDATE founding_seats SET expires_at = datetime('now', '-1 hour') WHERE user_id = ?`).run(b);
+  const late = makeUser('latepay', false);
+  buyerIds.push(late);
+  const s = reserveSeat(late);
+  assert.ok(s && s.status === 'reserved');
+  // …then latepay's own reservation lapses too, and only afterwards does
+  // Stripe deliver the webhook (buyer paid at the last second / slow delivery).
+  // The seat row is 'released' by then and user_id is UNIQUE — the webhook
+  // must flip that row to 'claimed', not INSERT a second one.
+  db.prepare(`UPDATE founding_seats SET expires_at = datetime('now', '-1 hour') WHERE id = ?`).run(s.id);
+
+  const event = {
+    type: 'checkout.session.completed',
+    data: { object: { id: 'cs_latepay', customer: 'cus_late', metadata: { user_id: String(late), seat_id: String(s.id) } } },
+  };
+  // Direct handler call: deterministic. Pre-fix this throws
+  // SQLITE_CONSTRAINT_UNIQUE — under Express 4 that rejection is unhandled,
+  // Stripe never gets its 200, and the buyer who paid is never marked paid.
+  let statusCode = 200, sent;
+  const mockRes = {
+    status(c) { statusCode = c; return this; },
+    send(x) { sent = x; return this; },
+    json(x) { sent = x; return this; },
+  };
+  await webhook(
+    { headers: { 'stripe-signature': 'sig' }, body: Buffer.from(JSON.stringify(event)) },
+    mockRes
+  );
+  assert.deepEqual(sent, { received: true });
+
+  // And over real HTTP Stripe gets its 200 (idempotent retry path).
+  const res = await fetch(base + '/webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'stripe-signature': 'sig' },
+    body: JSON.stringify(event),
+  });
+  assert.equal(res.status, 200);
+
+  const u = db.prepare('SELECT has_paid FROM users WHERE id = ?').get(late);
+  assert.equal(u.has_paid, 1, 'buyer who paid is marked paid');
+  assert.equal(db.prepare('SELECT status FROM founding_seats WHERE user_id = ?').get(late).status, 'claimed');
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM founding_seats WHERE user_id = ?').get(late).c, 1,
+    'still exactly one seat row for the buyer');
 });
 
 test('webhook: over-cap payment is NOT marked paid (refund path)', async () => {
