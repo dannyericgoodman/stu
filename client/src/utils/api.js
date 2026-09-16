@@ -230,6 +230,7 @@ export const api = {
   // Payments
   createCheckoutSession: () => request('/payments/create-checkout-session', { method: 'POST' }),
   getPaymentStatus: () => request('/payments/status'),
+  getSeatAvailability: () => request('/payments/seats'),
 
   // Admin
   adminDashboard: () => request('/admin/dashboard'),

@@ -235,8 +235,10 @@ export default function Settings() {
   const [builderSignals, setBuilderSignals] = useState([]);
   const [domains, setDomains] = useState([]);
   const [stageFilter, setStageFilter] = useState('Pre-seed');
+  const [fundName, setFundName] = useState(''); // profile_fund_name — feeds Stu AI's identity
   const [customQueries, setCustomQueries] = useState([]);
   const sourcingSave = useSaveState();
+  const profileSave = useSaveState();
 
   // API Keys state
   const [apiKeyExa, setApiKeyExa] = useState('');
@@ -322,6 +324,7 @@ export default function Settings() {
         setGmailAddress(settings.newsletter_gmail_address || '');
         setGmailAppPassword(asStr(settings.newsletter_gmail_app_password));
         setNewsletterLabel(settings.newsletter_label || 'Stu/News');
+        setFundName(settings.profile_fund_name || '');
         loadSources();
       } catch (err) {
         setLoadError(err.message || 'Failed to load settings');
@@ -406,6 +409,12 @@ export default function Settings() {
     });
   }
 
+  async function saveProfile() {
+    await profileSave.doSave(async () => {
+      await api.updateSetting('profile_fund_name', fundName.trim());
+    });
+  }
+
   async function saveApiKeys() {
     await apiKeysSave.doSave(async () => {
       // Only update a key the user actually typed — an empty field keeps the saved key
@@ -448,6 +457,7 @@ export default function Settings() {
   }
 
   const tabs = [
+    { id: 'profile', label: 'Profile' },
     { id: 'pipeline', label: 'Pipeline Stages' },
     { id: 'sourcing', label: 'Sourcing Criteria' },
     { id: 'newsletter', label: 'Newsletters' },
@@ -554,6 +564,29 @@ export default function Settings() {
           {pipelineSave.error && (
             <p className="text-sm text-red-600 mt-2">{pipelineSave.error}</p>
           )}
+        </div>
+      )}
+
+      {/* Profile Tab */}
+      {activeTab === 'profile' && (
+        <div className="space-y-6">
+          <div className="card p-6">
+            <h2 className="text-sm font-semibold text-gray-900">Profile</h2>
+            <p className="text-xs text-gray-500 mt-0.5 mb-4">
+              Stu AI introduces itself with your fund's name. Leave blank for a neutral investor identity.
+            </p>
+            <label className="label">Fund / firm name</label>
+            <input
+              type="text"
+              value={fundName}
+              onChange={(e) => setFundName(e.target.value)}
+              placeholder="e.g. Acme Ventures"
+              className="input w-full max-w-sm"
+            />
+            <div className="mt-4">
+              <SaveButton onClick={saveProfile} saving={profileSave.saving} saved={profileSave.saved} />
+            </div>
+          </div>
         </div>
       )}
 

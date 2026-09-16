@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import StuLogo from '../components/StuLogo';
@@ -16,6 +16,11 @@ export default function Payment() {
   const { logout } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [seats, setSeats] = useState(null);
+
+  useEffect(() => {
+    api.getSeatAvailability().then(setSeats).catch(() => {});
+  }, []);
 
   async function handleCheckout() {
     setLoading(true);
@@ -42,17 +47,24 @@ export default function Payment() {
           <div className="flex justify-center mb-3">
             <StuLogo size={40} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Activate Stu</h1>
-          <p className="text-sm text-gray-500 mt-1">One payment. Lifetime access.</p>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Claim your founding seat</h1>
+          <p className="text-sm text-gray-500 mt-1">One payment. Lifetime access. One of ten.</p>
         </div>
 
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           {/* Price */}
           <div className="text-center mb-6">
             <div className="flex items-baseline justify-center gap-1">
-              <span className="text-4xl font-bold text-gray-900">$100</span>
+              <span className="text-4xl font-bold text-gray-900">$349</span>
             </div>
             <p className="text-sm text-gray-500 mt-1">One-time payment — no subscriptions, no recurring fees</p>
+            {seats && (
+              <p className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 mt-3 inline-block">
+                {seats.remaining > 0
+                  ? `${seats.remaining} of ${seats.total} founding seats remaining`
+                  : 'All founding seats are claimed'}
+              </p>
+            )}
           </div>
 
           {/* Divider */}
@@ -89,7 +101,7 @@ export default function Payment() {
             disabled={loading}
             className="btn-primary w-full justify-center text-base py-3"
           >
-            {loading ? 'Redirecting to checkout...' : 'Get lifetime access'}
+            {loading ? 'Redirecting to checkout...' : 'Claim founding seat — $349'}
           </button>
 
           <div className="flex items-center justify-center gap-4 mt-4">

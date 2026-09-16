@@ -77,7 +77,12 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const { pathname } = useLocation();
   const bleed = BLEED_ROUTES.includes(pathname);
-  const navItems = navConfig;
+  // Hiring is the owner's portfolio-recruiting surface (it reads the team's shared
+  // talent tables, which don't exist for outside seats). Non-admin users don't get
+  // the tab — the API underneath is user-scoped anyway, so this is about not
+  // showing a door that opens onto an empty room.
+  const isAdmin = user?.role === 'admin';
+  const navItems = navConfig.filter((item) => item.to !== '/hiring' || isAdmin);
   const utilityItems = user?.role === 'admin'
     ? [...utilityConfig, { to: '/admin', label: 'Admin' }]
     : utilityConfig;

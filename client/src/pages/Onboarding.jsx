@@ -61,6 +61,11 @@ const STEPS = [
     subtitle: 'Sector focus and preferred stage. Leave blank if you\'re thesis-agnostic.',
   },
   {
+    id: 'keys',
+    title: 'Connect your API keys',
+    subtitle: 'Stu runs on your keys, so you control costs directly. Exa and Anthropic power the nightly scout — without them Stu can\'t find or score founders.',
+  },
+  {
     id: 'review',
     title: 'You\'re all set',
     subtitle: 'Here\'s your setup. Everything can be changed in Settings anytime.',
@@ -81,6 +86,22 @@ export default function Onboarding() {
   const [domains, setDomains] = useState([]);
   const [stageFilter, setStageFilter] = useState('Pre-seed');
 
+  // API keys (BYOK — saved encrypted, same as Settings)
+  const [apiKeyExa, setApiKeyExa] = useState('');
+  const [apiKeyAnthropic, setApiKeyAnthropic] = useState('');
+  const [apiKeyEnrichlayer, setApiKeyEnrichlayer] = useState('');
+  const [apiKeyGithub, setApiKeyGithub] = useState('');
+  const keysReady = apiKeyExa.trim().length > 0 && apiKeyAnthropic.trim().length > 0;
+
+  async function saveKeys() {
+    const puts = [];
+    if (apiKeyExa.trim()) puts.push(api.updateSetting('api_key_exa', apiKeyExa.trim()));
+    if (apiKeyAnthropic.trim()) puts.push(api.updateSetting('api_key_anthropic', apiKeyAnthropic.trim()));
+    if (apiKeyEnrichlayer.trim()) puts.push(api.updateSetting('api_key_enrichlayer', apiKeyEnrichlayer.trim()));
+    if (apiKeyGithub.trim()) puts.push(api.updateSetting('api_key_github', apiKeyGithub.trim()));
+    if (puts.length) await Promise.all(puts);
+  }
+
   const addTag = useCallback((setter) => (tag) => setter(prev => [...prev, tag]), []);
   const removeTag = useCallback((setter) => (index) => setter(prev => prev.filter((_, i) => i !== index)), []);
 
@@ -90,6 +111,7 @@ export default function Onboarding() {
     setSaving(true);
     setError('');
     try {
+      await saveKeys();
       // Save all criteria
       await Promise.all([
         api.updateSetting('sourcing_locations', locations),
@@ -105,6 +127,19 @@ export default function Onboarding() {
       await refreshUser();
     } catch (err) {
       setError(err.message);
+      setSaving(false);
+    }
+  }
+
+  async function handleKeysContinue() {
+    setSaving(true);
+    setError('');
+    try {
+      await saveKeys();
+      setStep(s => s + 1);
+    } catch (err) {
+      setError(err.message);
+    } finally {
       setSaving(false);
     }
   }
@@ -218,6 +253,53 @@ export default function Onboarding() {
 
           {step === 3 && (
             <div className="space-y-4">
+              <KeyInput
+                label="Exa API key"
+                required
+                value={apiKeyExa}
+                onChange={setApiKeyExa}
+                placeholder="Paste your Exa key"
+                enables="Web discovery — the nightly scout's eyes on the open web."
+              />
+              <KeyInput
+                label="Anthropic API key"
+                required
+                value={apiKeyAnthropic}
+                onChange={setApiKeyAnthropic}
+                placeholder="Paste your Anthropic key"
+                enables="Founder scoring, AI assessments, and Ask Stu."
+              />
+              <KeyInput
+                label="EnrichLayer API key"
+                value={apiKeyEnrichlayer}
+                onChange={setApiKeyEnrichlayer}
+                placeholder="Optional — paste your EnrichLayer key"
+                enables="LinkedIn employment history, so scores read real careers instead of 195-character bios."
+              />
+              <KeyInput
+                label="GitHub token"
+                value={apiKeyGithub}
+                onChange={setApiKeyGithub}
+                placeholder="Optional — paste a GitHub personal access token"
+                enables="Builder radar: GitHub trajectory for founder-slope scoring."
+              />
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Keys are encrypted and stored per-user — Stu never shares them and never
+                bills you through them. Add the optional ones later in Settings anytime.
+              </p>
+              {!keysReady && (
+                <button
+                  onClick={async () => { await saveKeys(); setStep(s => s + 1); }}
+                  className="text-xs text-gray-500 hover:text-gray-700 underline"
+                >
+                  Continue without keys (limited mode — browsing only, no sourcing or scoring)
+                </button>
+              )}
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="space-y-4">
               <SummaryRow label="Locations" items={locations} />
               <SummaryRow label="Schools" items={schools} />
               <SummaryRow label="Companies" items={companies} />
@@ -226,6 +308,14 @@ export default function Onboarding() {
               <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
                 <span className="text-sm font-medium text-gray-500">Stage</span>
                 <span className="text-sm text-gray-900">{stageFilter}</span>
+              </div>
+              <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                <span className="text-sm font-medium text-gray-500">API keys</span>
+                <span className="text-sm text-gray-900">
+                  {keysReady
+                    ? 'Exa + Anthropic connected'
+                    : 'Not added yet — limited mode'}
+                </span>
               </div>
             </div>
           )}
@@ -242,14 +332,25 @@ export default function Onboarding() {
           </button>
 
           {step < STEPS.length - 1 ? (
-            <button
-              onClick={() => setStep(s => s + 1)}
-              className="btn-primary"
-            >
-              {step === 0 && locations.length === 0 ? 'Skip' :
-               step === 1 && schools.length === 0 && companies.length === 0 && builderSignals.length === 0 ? 'Skip' :
-               step === 2 && domains.length === 0 ? 'Skip' : 'Continue'}
-            </button>
+            step === 3 ? (
+              <button
+                onClick={handleKeysContinue}
+                disabled={saving || !keysReady}
+                className="btn-primary disabled:opacity-40"
+                title={!keysReady ? 'Add your Exa and Anthropic keys to continue, or use the limited-mode link above' : ''}
+              >
+                {saving ? 'Saving...' : 'Save keys & continue'}
+              </button>
+            ) : (
+              <button
+                onClick={() => setStep(s => s + 1)}
+                className="btn-primary"
+              >
+                {step === 0 && locations.length === 0 ? 'Skip' :
+                 step === 1 && schools.length === 0 && companies.length === 0 && builderSignals.length === 0 ? 'Skip' :
+                 step === 2 && domains.length === 0 ? 'Skip' : 'Continue'}
+              </button>
+            )
           ) : (
             <button
               onClick={handleComplete}
@@ -265,8 +366,29 @@ export default function Onboarding() {
   );
 }
 
-function SummaryRow({ label, items }) {
+function KeyInput({ label, required, value, onChange, placeholder, enables }) {
   return (
+    <div>
+      <label className="label">
+        {label}{' '}
+        {required
+          ? <span className="text-red-500 font-normal">· required</span>
+          : <span className="text-gray-400 font-normal">· optional</span>}
+      </label>
+      <input
+        type="password"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="input w-full font-mono"
+      />
+      <p className="text-xs text-gray-400 mt-1.5">{enables}</p>
+    </div>
+  );
+}
+
+function SummaryRow({ label, items }) {  return (
     <div className="py-2 border-b border-gray-100 last:border-0">
       <span className="text-sm font-medium text-gray-500 block mb-1.5">{label}</span>
       {items && items.length > 0 ? (
