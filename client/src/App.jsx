@@ -22,6 +22,8 @@ import Pipeline from './pages/Pipeline';
 
 // ── LAZY — everything below loads on first visit to its route ──
 const Landing = lazy(() => import('./pages/Landing'));
+const Terms = lazy(() => import('./pages/Terms'));
+const Privacy = lazy(() => import('./pages/Privacy'));
 const Signup = lazy(() => import('./pages/Signup'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
 // The company card — the destination from Pipeline. Replaces FounderDetail,
@@ -106,6 +108,8 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/signup" element={user ? <Navigate to="/" replace /> : <Signup />} />
+      <Route path="/terms" element={<Terms />} />
+      <Route path="/privacy" element={<Privacy />} />
       {/* Payment routes — founding-seat checkout */}
       <Route path="/payment" element={
         !user ? <Navigate to="/login" replace /> :
