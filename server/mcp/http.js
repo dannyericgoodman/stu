@@ -26,6 +26,22 @@ async function handlePost(req, res) {
   const auth = verifyToken(bearer(req));
   if (!auth) return unauthorized(res);
 
+  // The paywall covers the MCP surface too: a token whose owner hasn't paid
+  // gets nothing. (Tokens are minted through /api/mcp/tokens, which is itself
+  // behind requirePaid — this is the backstop for tokens minted before the
+  // paywall existed.) Fail CLOSED on a DB error: an unpaid user must never get
+  // a free pass because the database hiccuped.
+  try {
+    const db = require('../db');
+    const u = db.prepare('SELECT has_paid FROM users WHERE id = ?').get(auth.userId);
+    if (!u || !u.has_paid) {
+      return res.status(402).json({ jsonrpc: '2.0', error: { code: -32002, message: 'A founding seat is required to use Stu.' }, id: null });
+    }
+  } catch (err) {
+    console.error('[MCP] Paywall check failed:', err.message);
+    return res.status(503).json({ jsonrpc: '2.0', error: { code: -32003, message: 'Payment verification unavailable.' }, id: null });
+  }
+
   const server = buildMcpServer({ userId: auth.userId, scopes: auth.scopes });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => { try { transport.close(); } catch {} try { server.close(); } catch {} });

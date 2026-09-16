@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { issueToken, listTokens, revokeToken, VALID_SCOPES, DEFAULT_SCOPES } = require('../lib/mcpAuth');
+const { denyMcpToken } = require('../auth');
 const { resolveKey } = require('../lib/providerKeys');
 const { listSignals } = require('../lib/builderSignals');
 const { listMonitorTypes } = require('../pipeline/monitor-engine');
@@ -59,12 +60,14 @@ router.get('/info', (req, res) => {
 });
 
 // GET /api/mcp/tokens — list (never returns the token value)
-router.get('/tokens', (req, res) => {
+router.get('/tokens', denyMcpToken, (req, res) => {
   res.json(listTokens(req.user.id));
 });
 
 // POST /api/mcp/tokens — issue. Returns the plaintext token ONCE.
-router.post('/tokens', (req, res) => {
+// denyMcpToken: a token that could mint new tokens — possibly with wider scopes
+// than its own — would be a privilege-escalation primitive. Web sessions only.
+router.post('/tokens', denyMcpToken, (req, res) => {
   const { label, scopes } = req.body || {};
   const t = issueToken(req.user.id, label || null, scopes);
   res.status(201).json({
@@ -74,7 +77,7 @@ router.post('/tokens', (req, res) => {
 });
 
 // DELETE /api/mcp/tokens/:id — revoke
-router.delete('/tokens/:id', (req, res) => {
+router.delete('/tokens/:id', denyMcpToken, (req, res) => {
   const okDel = revokeToken(req.user.id, parseInt(req.params.id));
   if (!okDel) return res.status(404).json({ error: 'Token not found or already revoked' });
   res.json({ success: true });

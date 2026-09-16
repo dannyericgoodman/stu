@@ -13,10 +13,13 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET must be set in production. Refusing to start.');
   process.exit(1);
 }
-// Without SETTINGS_ENC_KEY, user-supplied provider keys are stored as plaintext. Tolerated
-// in dev, dangerous in a multi-tenant prod DB — warn loudly rather than fail.
+// Without SETTINGS_ENC_KEY, user-supplied provider keys are stored as plaintext.
+// Tolerated in dev; in production this is a multi-tenant database holding other
+// people's paid API keys (Exa, Anthropic) — plaintext storage of third-party
+// credentials is a breach waiting to happen. Refuse to boot, same as JWT_SECRET.
 if (process.env.NODE_ENV === 'production' && !require('./lib/secrets').isConfigured()) {
-  console.warn('WARNING: SETTINGS_ENC_KEY is not set — stored provider credentials are NOT encrypted at rest.');
+  console.error('FATAL: SETTINGS_ENC_KEY must be set in production — provider credentials cannot be stored unencrypted. Refusing to start.');
+  process.exit(1);
 }
 
 const express = require('express');
@@ -24,25 +27,25 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const { requireAuth, seedTeam } = require('./auth');
+const { requireAuth, requirePaid, mcpScopeFor, denyMcpRest, seedTeam } = require('./auth');
 
 // ══════════════════════════════════════════════════════════════════════════
-// Is the nightly scout armed, and if not, why? ONE definition, used by both the
+// Is the scheduler armed, and if not, why? ONE definition, used by both the
 // scheduler and /api/health, so the health page can never report a state the cron
-// isn't actually in. Resolves keys through providerKeys — the owner's SAVED key
-// first, environment second — because that is how every engine resolves them, and
-// checking the environment alone is the bug this whole change exists to end.
-// ══════════════════════════════════════════════════════════════════════════
-let scoutKeys = {};
+// isn't actually in.
+//
+// Multi-user: readiness is "kill switch off + at least one paid user". KEY
+// eligibility is decided per job, per user (usersWithKeys through providerKeys:
+// the user's saved key, env fallback for the OWNER only) — so a job for a user
+// with no keys is a skip, never a billing of the platform key. The owner being
+// user 1 is no longer the scheduler's worldview.
 function scoutArmed() {
-  try { scoutKeys = require('./lib/providerKeys').loadUserApiKeys(1); }
-  catch { scoutKeys = {}; }
   if (process.env.PIPELINE_ENABLED === 'false') {
     return { ready: false, why: 'PIPELINE_ENABLED=false (explicit kill switch)' };
   }
-  const missing = [!scoutKeys.exa && 'exa', !scoutKeys.anthropic && 'anthropic'].filter(Boolean);
-  if (missing.length) {
-    return { ready: false, why: `missing key(s): ${missing.join(' + ')} — set them in Settings` };
+  const paid = require('./lib/schedulerUsers').paidUserIds();
+  if (!paid.length) {
+    return { ready: false, why: 'no paid users — the scheduler has nobody to run for' };
   }
   return { ready: true, why: null };
 }
@@ -115,10 +118,15 @@ try {
 // Must-meet would have kept showing him for a day on the one screen whose entire job
 // is to be right the moment it is opened.
 try {
-  const r = require('./lib/fitIndex').rescoreStale({ userId: 1, limit: 20000 });
-  if (r.scored) {
+  const { paidUserIds } = require('./lib/schedulerUsers');
+  let scored = 0;
+  for (const userId of paidUserIds()) {
+    try { scored += require('./lib/fitIndex').rescoreStale({ userId, limit: 20000 }).scored || 0; }
+    catch (e) { console.error(`[Boot] Fit scoring failed for user ${userId}:`, e.message); }
+  }
+  if (scored) {
     const v = require('./lib/founderFit').RUBRIC_VERSION;
-    console.log(`[Boot] Scored ${r.scored} founder(s) whose fit verdict was missing, stale, or behind rubric ${v}.`);
+    console.log(`[Boot] Scored ${scored} founder(s) whose fit verdict was missing, stale, or behind rubric ${v}.`);
   }
 } catch (e) {
   console.error('[Boot] Fit scoring failed (server continues, inbox falls back to live scoring):', e.message);
@@ -616,10 +624,16 @@ app.get('/api/health', (req, res) => res.json({
     //
     // scoutArmed() is the scheduler's own check, hoisted, so a health page that says
     // armed means the cron is armed. That is the whole job of this endpoint.
+    //
+    // Key counts are per paid user, not the owner's keys: the scout runs one
+    // loop per user with their own key, so "the owner has Exa" is the wrong
+    // question. paid_users_with_exa is the number of users the scout will
+    // actually run for tonight.
     sourcing_armed: scoutArmed().ready,
     newsletter_armed: true, // ungated — runs for any user with sources/Gmail
-    has_exa: !!scoutKeys.exa,
-    has_anthropic: !!scoutKeys.anthropic,
+    paid_users: require('./lib/schedulerUsers').paidUserIds().length,
+    paid_users_with_exa: require('./lib/schedulerUsers').usersWithKeys('exa').length,
+    paid_users_with_anthropic: require('./lib/schedulerUsers').usersWithKeys('anthropic').length,
   },
 }));
 // Full healthcheck board (authed) — green/red status across datastores, keys, jobs, integrity.
@@ -640,31 +654,39 @@ app.use('/api/payments', payments.router);
 // See routes/vaultSync.js for why this is a separate channel from the shared MCP surface.
 app.use('/api/vault-sync', require('./routes/vaultSync'));
 
+// ── Paywall. Everything mounted below this line is /api/* behind requirePaid:
+// an authenticated user without has_paid gets 402 payment_required. The mounts
+// above (health, auth, payments, vault-sync) stay open on purpose — you cannot
+// pay, log in, or check health through a paywall, and the vault bridge carries
+// its own secret. requirePaid runs before the per-route requireAuth and no-ops
+// without req.user, so unauthenticated requests still get their 401 from
+// requireAuth, not a confusing 402.
 // Protected routes
 // Today is the surface — the screen Danny opens at 9am and works from all day.
 // It also serves /api/today/decisions and /api/today/commitments.
-app.use('/api/today', requireAuth, require('./routes/today'));
+app.use('/api', requirePaid);
+app.use('/api/today', requireAuth, denyMcpRest, require('./routes/today'));
 // The front door. One connected read over the founders spine — sourcing joins in,
 // assessments and decisions hang off. See routes/pipeline.js for why there is no
 // companies table.
-app.use('/api/pipeline', requireAuth, require('./routes/pipeline'));
+app.use('/api/pipeline', requireAuth, denyMcpRest, require('./routes/pipeline'));
 // The card's source log: decks, URLs, notes, Granola. Mounted separately from
 // /api/sources, which is the sourcing CONNECTORS route — same word, different layer.
-app.use('/api/companies', requireAuth, require('./routes/companySources'));
-app.use('/api/founders', requireAuth, require('./routes/founders'));
-app.use('/api/notes', requireAuth, require('./routes/notes'));
-app.use('/api/sourcing', requireAuth, require('./routes/sourcing'));
-app.use('/api/assessments', requireAuth, require('./routes/assessments'));
-app.use('/api/deal-room', requireAuth, require('./routes/dealRoom'));
-app.use('/api/calls', requireAuth, require('./routes/calls'));
-app.use('/api/ai', requireAuth, require('./routes/ai'));
-app.use('/api/stu', requireAuth, require('./routes/stu'));
-app.use('/api/memos', requireAuth, require('./routes/memos'));
-app.use('/api/files', requireAuth, require('./routes/files'));
-app.use('/api/search', requireAuth, require('./routes/search'));
-app.use('/api/settings', requireAuth, require('./routes/settings'));
-app.use('/api/admin', requireAuth, require('./routes/admin'));
-app.use('/api/import', requireAuth, require('./routes/import'));
+app.use('/api/companies', requireAuth, denyMcpRest, require('./routes/companySources'));
+app.use('/api/founders', requireAuth, denyMcpRest, require('./routes/founders'));
+app.use('/api/notes', requireAuth, denyMcpRest, require('./routes/notes'));
+app.use('/api/sourcing', requireAuth, mcpScopeFor('sourcing'), require('./routes/sourcing'));
+app.use('/api/assessments', requireAuth, denyMcpRest, require('./routes/assessments'));
+app.use('/api/deal-room', requireAuth, denyMcpRest, require('./routes/dealRoom'));
+app.use('/api/calls', requireAuth, denyMcpRest, require('./routes/calls'));
+app.use('/api/ai', requireAuth, denyMcpRest, require('./routes/ai'));
+app.use('/api/stu', requireAuth, denyMcpRest, require('./routes/stu'));
+app.use('/api/memos', requireAuth, denyMcpRest, require('./routes/memos'));
+app.use('/api/files', requireAuth, denyMcpRest, require('./routes/files'));
+app.use('/api/search', requireAuth, denyMcpRest, require('./routes/search'));
+app.use('/api/settings', requireAuth, denyMcpRest, require('./routes/settings'));
+app.use('/api/admin', requireAuth, denyMcpRest, require('./routes/admin'));
+app.use('/api/import', requireAuth, denyMcpRest, require('./routes/import'));
 
 // ── One-time migration import (see routes/restore.js) ──
 // Registered ONLY while RESTORE_TOKEN is set. Unset the variable and this route does
@@ -675,15 +697,15 @@ if (process.env.RESTORE_TOKEN) {
   app.use('/api/restore', require('./routes/restore'));
   console.log('[restore] one-time import route is MOUNTED (RESTORE_TOKEN is set)');
 }
-app.use('/api/talent', requireAuth, require('./routes/talent'));
-app.use('/api/hiring', requireAuth, require('./routes/hiring'));
-app.use('/api/network', requireAuth, require('./routes/network'));
-app.use('/api/newsletter', requireAuth, require('./routes/newsletter'));
-app.use('/api/mcp', requireAuth, require('./routes/mcp'));
-app.use('/api/monitors', requireAuth, require('./routes/monitors'));
-app.use('/api/sources', requireAuth, require('./routes/sources'));
-app.use('/api/discover', requireAuth, require('./routes/discover'));
-app.use('/api/outreach', requireAuth, require('./routes/outreach'));
+app.use('/api/talent', requireAuth, mcpScopeFor('talent'), require('./routes/talent'));
+app.use('/api/hiring', requireAuth, mcpScopeFor('talent'), require('./routes/hiring'));
+app.use('/api/network', requireAuth, denyMcpRest, require('./routes/network'));
+app.use('/api/newsletter', requireAuth, denyMcpRest, require('./routes/newsletter'));
+app.use('/api/mcp', requireAuth, denyMcpRest, require('./routes/mcp'));
+app.use('/api/monitors', requireAuth, mcpScopeFor('monitors'), require('./routes/monitors'));
+app.use('/api/sources', requireAuth, denyMcpRest, require('./routes/sources'));
+app.use('/api/discover', requireAuth, denyMcpRest, require('./routes/discover'));
+app.use('/api/outreach', requireAuth, denyMcpRest, require('./routes/outreach'));
 
 // MCP protocol endpoint (token-authed, NOT the web JWT) — mounted before the SPA
 // catch-all so it isn't swallowed by the static handler. Rate-limited on its own.
@@ -826,8 +848,18 @@ app.listen(PORT, () => {
     cron.schedule('0 6 * * 0', async () => {
       try {
         const { runBuilderRadar } = require('./services/builder-radar');
-        const r = await runBuilderRadar({ userId: 1 });
-        console.log(`[Cron][Slope] ${r.summary}`);
+        const { usersWithKeys } = require('./lib/schedulerUsers');
+        // Multi-user: one radar per PAID user with a GitHub key (owner's comes from
+        // env via providerKeys). A non-owner without a key is skipped — never billed
+        // to the platform token.
+        for (const { id: userId } of usersWithKeys('github')) {
+          try {
+            const r = await runBuilderRadar({ userId });
+            console.log(`[Cron][Slope] user ${userId}: ${r.summary}`);
+          } catch (e) {
+            console.error(`[Cron][Slope] user ${userId} failed:`, e.message);
+          }
+        }
       } catch (e) {
         console.error('[Cron][Slope] failed:', e.message);
       }
@@ -903,28 +935,32 @@ app.listen(PORT, () => {
     // ══════════════════════════════════════════════════════════════════
     cron.schedule('0 12 * * *', async () => {
       const { recordJobRun } = require('./services/health');
+      const { usersWithKeys } = require('./lib/schedulerUsers');
+      // Multi-user: one enrichment pass per PAID user with an EnrichLayer key.
+      for (const { id: userId } of usersWithKeys('enrichlayer')) {
       try {
         const { runLinkedInEnrichment } = require('./pipeline/linkedin-enrich');
-        const e = await runLinkedInEnrichment({ userId: 1, limit: 40 });
-        console.log('[Cron][LinkedIn]', JSON.stringify(e));
+        const e = await runLinkedInEnrichment({ userId, limit: 40 });
+        console.log(`[Cron][LinkedIn] user ${userId}:`, JSON.stringify(e));
         // Enrichment is the single biggest thing that changes a fit verdict — it
         // supplies the employment history the hyperscaler marker reads instead of a
         // 195-character bio. Re-score what it touched, or the inbox keeps showing a
         // verdict formed before the evidence arrived.
-        try { require('./lib/fitIndex').rescoreStale({ userId: 1 }); }
-        catch (err) { console.error('[Cron][LinkedIn] re-score failed:', err.message); }
+        try { require('./lib/fitIndex').rescoreStale({ userId }); }
+        catch (err) { console.error(`[Cron][LinkedIn] user ${userId} re-score failed:`, err.message); }
         recordJobRun(
           'linkedin_enrich',
           'ok',
           e.skipped
             ? String(e.skipped)
             : `${e.enriched} enriched, ${e.promoted} promoted to the IL board, ${e.flagged} flagged as noise`,
-          1
+          userId
         );
       } catch (e) {
-        console.error('[Cron][LinkedIn] failed:', e.message);
-        recordJobRun('linkedin_enrich', 'error', e.message, 1);
+        console.error(`[Cron][LinkedIn] user ${userId} failed:`, e.message);
+        recordJobRun('linkedin_enrich', 'error', e.message, userId);
       }
+      } // end per-user loop
     }, { timezone: 'America/Chicago' });
     console.log('LinkedIn enrichment scheduled (daily 12:00 PM CT — drains the backlog, then idles)');
   }
@@ -989,9 +1025,18 @@ app.listen(PORT, () => {
   // ══════════════════════════════════════════════════════════════════════
   const { ready: pipelineReady, why: notReadyWhy } = scoutArmed();
 
+  // ══════════════════════════════════════════════════════════════════════
+  // MULTI-USER SCHEDULING. The old code scheduled these three crons only when
+  // the OWNER's keys resolved. Now the crons are scheduled whenever the
+  // scheduler is armed at all (kill switch off + ≥1 paid user), and each body
+  // iterates usersWithKeys(...) — paid users whose own keys resolve through
+  // providerKeys (owner falls back to env; non-owners without saved keys are
+  // skipped, never billed to the platform key). Per-user ledger rows keep the
+  // health page honest about WHO ran, not just THAT something ran.
+  // ══════════════════════════════════════════════════════════════════════
   if (!pipelineReady) {
     const why = notReadyWhy;
-    console.warn(`[Cron] Nightly scout NOT scheduled — ${why}`);
+    console.warn(`[Cron] Scout/talent/filings crons NOT scheduled — ${why}`);
     // Recorded under its OWN job name, not 'nightly_scout'. The inbox reads the last
     // 'nightly_scout' row to say "Scout ran 4h ago", and a config problem filed under
     // that name would render as a run that failed — which is a different and untrue
@@ -1001,8 +1046,9 @@ app.listen(PORT, () => {
   }
 
   if (pipelineReady) {
-    console.log('[Cron] Pipeline active (owner keys resolved via providerKeys)');
+    console.log('[Cron] Pipeline active (per-user keys resolved via providerKeys)');
     const cron = require('node-cron');
+    const { usersWithKeys } = require('./lib/schedulerUsers');
     const { runSourcingEngine } = require('./pipeline/sourcing-engine');
 
     // ══════════════════════════════════════════════════════════════════
@@ -1044,9 +1090,13 @@ app.listen(PORT, () => {
     // ══════════════════════════════════════════════════════════════════
     cron.schedule('30 4 * * *', async () => {
       const { recordJobRun } = require('./services/health');
+      // One scout run PER PAID USER with exa+anthropic keys (their own saved keys;
+      // the owner falls back to env). A user missing keys is skipped here — the
+      // engines would refuse anyway — rather than failing the whole night.
+      for (const { id: userId } of usersWithKeys('exa', 'anthropic')) {
       const startedAt = Date.now();
       const isMonday = new Date().getDay() === 1;
-      console.log(`[Scout] Starting nightly scout (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
+      console.log(`[Scout] Starting nightly scout for user ${userId} (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
 
       const parts = [];
       const errors = [];
@@ -1054,7 +1104,7 @@ app.listen(PORT, () => {
 
       // ── Arm 1: the open-web sweep. Runs every night. ──
       try {
-        const r = await runSourcingEngine({ userId: 1 });
+        const r = await runSourcingEngine({ userId });
         added += r.totalAdded || 0;
         parts.push(`sweep +${r.totalAdded || 0} of ${r.totalFiltered || 0} filtered`);
         if (r.errors?.length) errors.push(...r.errors.map((e) => `sweep: ${String(e).slice(0, 60)}`));
@@ -1066,7 +1116,7 @@ app.listen(PORT, () => {
       // ── Arm 2: the rosters. Mondays only. ──
       if (isMonday) {
         try {
-          const rows = await require('./pipeline/sources').ingestAll({ userId: 1 });
+          const rows = await require('./pipeline/sources').ingestAll({ userId });
           const saved = rows.reduce((n, x) => n + (x?.persisted || 0), 0);
           const dupes = rows.reduce((n, x) => n + (x?.skippedAsDupe || 0), 0);
           added += saved;
@@ -1080,7 +1130,7 @@ app.listen(PORT, () => {
 
       // ── Arm 3: make what landed readable. ──
       try {
-        const e = await require('./pipeline/linkedin-enrich').runLinkedInEnrichment({ userId: 1, limit: 40 });
+        const e = await require('./pipeline/linkedin-enrich').runLinkedInEnrichment({ userId, limit: 40 });
         parts.push(e.skipped ? `enrich skipped (${e.skipped})` : `enriched ${e.enriched}`);
       } catch (e) {
         errors.push(`enrich: ${e.message}`);
@@ -1088,7 +1138,7 @@ app.listen(PORT, () => {
 
       // ── Arm 4: score everything new, so the inbox is a plain indexed read. ──
       try {
-        const f = require('./lib/fitIndex').rescoreStale({ userId: 1 });
+        const f = require('./lib/fitIndex').rescoreStale({ userId });
         parts.push(`scored ${f.scored}`);
       } catch (e) {
         errors.push(`score: ${e.message}`);
@@ -1103,9 +1153,10 @@ app.listen(PORT, () => {
         errors.length ? 'partial' : 'ok',
         `+${added} new founders in ${mins}m — ${parts.join(' · ')}` +
           (errors.length ? ` — ${errors.length} error(s): ${errors[0]}` : ''),
-        1
+        userId
       );
-      console.log(`[Scout] Done: +${added} in ${mins}m — ${parts.join(' · ')}`);
+      console.log(`[Scout] Done (user ${userId}): +${added} in ${mins}m — ${parts.join(' · ')}`);
+      } // end per-user loop
     }, { timezone: 'America/Chicago' });
 
     console.log('Nightly scout scheduled (4:30 AM CT — sweep nightly, rosters Mondays, then enrich + score)');
@@ -1118,7 +1169,10 @@ app.listen(PORT, () => {
     // daylight saving because nothing pinned it.
     cron.schedule('30 6 * * *', async () => {
       const dbi = require('./db');
-      const roles = dbi.prepare("SELECT id, user_id, title FROM talent_roles WHERE is_deleted = 0 AND status = 'open' ORDER BY user_id, updated_at DESC LIMIT 25").all();
+      const roles = dbi.prepare(`SELECT id, user_id, title FROM talent_roles
+        WHERE is_deleted = 0 AND status = 'open'
+          AND user_id IN (SELECT id FROM users WHERE has_paid = 1)
+        ORDER BY user_id, updated_at DESC LIMIT 25`).all();
       console.log(`[Cron] Daily talent sourcing across ${roles.length} open role(s)`);
       const { recordJobRun } = require('./services/health');
       if (!roles.length) {
@@ -1166,13 +1220,19 @@ app.listen(PORT, () => {
     const { runFilingsSource } = require('./pipeline/filings-source');
     cron.schedule('45 3 * * *', async () => {
       console.log('[Cron] Starting SEC Form D filings pull...');
+      // Multi-user: one pull per PAID user. The Form D engine is keyless (SEC
+      // EDGAR is a free public feed) — the pull is geo-filtered to each user's
+      // own criteria inside the engine, so no provider key is required.
+      const { paidUserIds } = require('./lib/schedulerUsers');
+      for (const userId of paidUserIds()) {
       try {
-        const result = await runFilingsSource({ userId: 1, days: 30 });
-        console.log('[Cron] Filings pull complete:', result);
-        recordJobRun('sec_filings', 'ok', JSON.stringify(result).slice(0, 200), 1);
+        const result = await runFilingsSource({ userId, days: 30 });
+        console.log(`[Cron] Filings pull complete (user ${userId}):`, result);
+        recordJobRun('sec_filings', 'ok', JSON.stringify(result).slice(0, 200), userId);
       } catch (err) {
-        console.error('[Cron] Filings pull failed:', err.message);
+        console.error(`[Cron] Filings pull failed (user ${userId}):`, err.message);
       }
+      } // end per-user loop
     }, { timezone: 'America/Chicago' });
     console.log('Daily SEC filings pull scheduled (3:45 AM CT — ahead of the 4:30 scout)');
   }
