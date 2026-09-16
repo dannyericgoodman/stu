@@ -26,6 +26,8 @@ const Terms = lazy(() => import('./pages/Terms'));
 const Privacy = lazy(() => import('./pages/Privacy'));
 const Signup = lazy(() => import('./pages/Signup'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
+const Payment = lazy(() => import('./pages/Payment'));
+const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'));
 // The company card — the destination from Pipeline. Replaces FounderDetail,
 // which was built around a founder row rather than the company Danny is tracking.
 // FounderDetail stays on disk and routed at /founders/legacy/:id until he
