@@ -25,8 +25,22 @@ function requireAuth(req, res, next) {
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  const token = header.split(' ')[1];
+  // Long-lived MCP/API token (stu_mcp_…) — revocable, per-user. Lets a user's own
+  // agent call the API directly (e.g. the daily founder-list job) without a browser
+  // session. Verified against the mcp_tokens table; carries the owner's user_id.
+  if (token.startsWith('stu_mcp_')) {
+    const { verifyToken } = require('./lib/mcpAuth');
+    const v = verifyToken(token);
+    if (!v) return res.status(401).json({ error: 'Invalid or revoked token' });
+    const user = db.prepare('SELECT id, email, name, role FROM users WHERE id = ?').get(v.userId);
+    if (!user) return res.status(401).json({ error: 'Invalid or revoked token' });
+    req.user = user;
+    req.tokenScopes = v.scopes;
+    req.apiTokenId = v.tokenId;
+    return next();
+  }
   try {
-    const token = header.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
