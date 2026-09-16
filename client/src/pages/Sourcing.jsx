@@ -320,6 +320,17 @@ export default function Sourcing() {
         // link — a triage action that vanishes silently feels like a delete.
         setJustTracked({ name: row.name, company: row.company, id: founder?.id });
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 6000);
+      } else if (action === 'watch') {
+        const founder = await api.watchSourced(row.id);
+        // "Add to Pipeline" = Danny is interested: the card lands in the pipeline
+        // as Watching and a Watching row is published to the team's Airtable.
+        // Surface the Airtable outcome — a silent publish is a lie by omission.
+        const at = founder?.airtable;
+        const atNote = at?.created ? ' · in Airtable as Watching'
+          : at?.error ? ` · Airtable publish failed: ${at.error}`
+          : at?.skipped ? ` · Airtable skipped (${at.skipped})` : '';
+        setJustTracked({ name: row.name, company: row.company, id: founder?.id, note: atNote });
+        setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 8000);
       } else if (action === 'dismiss') await api.dismissSourced(row.id);
       else if (action === 'hide') await api.hideForeverSourced(row.id);
     } catch (e) {
@@ -338,7 +349,7 @@ export default function Sourcing() {
       const row = rows[cursor];
       if (e.key === 'j') { setCursor((c) => Math.min(c + 1, rows.length - 1)); if (openId) setOpenId(rows[Math.min(cursor + 1, rows.length - 1)]?.id); }
       else if (e.key === 'k') { setCursor((c) => Math.max(c - 1, 0)); if (openId) setOpenId(rows[Math.max(cursor - 1, 0)]?.id); }
-      else if (e.key === 't' && row) triage(row, 'approve');
+      else if (e.key === 't' && row) triage(row, 'watch');
       else if (e.key === 'x' && row) triage(row, 'dismiss');
       else if (e.key === 'Enter' && row) setOpenId(openId === row.id ? null : row.id);
       else if (e.key === 'Escape') setOpenId(null);
@@ -480,7 +491,7 @@ export default function Sourcing() {
       {justTracked && (
         <div className="flex items-center gap-2 px-3 h-row border-b border-line bg-accent-soft text-small flex-shrink-0">
           <span className="text-ink">
-            <span className="font-medium">{justTracked.company || justTracked.name}</span> is on the pipeline.
+            <span className="font-medium">{justTracked.company || justTracked.name}</span> is on the pipeline{justTracked.note}.
           </span>
           <button className="text-accent font-medium" onClick={() => nav(`/founders/${justTracked.id}`)}>
             Open the card →
@@ -617,14 +628,19 @@ export default function Sourcing() {
                     in ↗
                   </a>
                 )}
+                {/* "Add to Pipeline" is the money action — Danny is interested, the
+                    founder lands in the pipeline as Watching and a Watching row
+                    is published to the team's Airtable. Always visible, never
+                    hover-gated: hiding the primary decision behind hover taxes
+                    every row. */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); triage(r, 'watch'); }}
+                  className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition"
+                  title="Add to pipeline as Watching — also publishes to the team's Airtable (t)"
+                >
+                  Add to Pipeline
+                </button>
                 <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); triage(r, 'approve'); }}
-                    className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition"
-                    title="Create the company card and put it on the pipeline (t)"
-                  >
-                    Add
-                  </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); triage(r, 'dismiss'); }}
                     className="px-2 h-5 rounded text-mini text-ink-3 border border-line-2 hover:bg-ground-4 hover:text-ink transition"
@@ -800,7 +816,7 @@ function Detail({ row, onClose, onTriage }) {
         {/* The vote. One primary action, and Pass is not destructive — it's a
             respectable answer, so it never renders red. */}
         <div className="flex items-center gap-2 px-3 h-10 border-t border-line-2 flex-shrink-0">
-          <button onClick={() => onTriage('approve')} className="btn-primary flex-1 justify-center">
+          <button onClick={() => onTriage('watch')} className="btn-primary flex-1 justify-center">
             Add to pipeline
           </button>
           <button onClick={() => onTriage('dismiss')} className="btn-secondary flex-1 justify-center">

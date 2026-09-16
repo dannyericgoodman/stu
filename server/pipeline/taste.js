@@ -29,7 +29,7 @@ const COLS = 'tags, pedigree_signals, builder_signals, caliber_signals, location
 const MIN_LIKED = 3; // need a little history before we trust the signal
 
 function computeTasteProfile(userId) {
-  const liked = db.prepare(`SELECT ${COLS} FROM sourced_founders WHERE user_id = ? AND status IN ('approved','starred')`).all(userId);
+  const liked = db.prepare(`SELECT ${COLS} FROM sourced_founders WHERE user_id = ? AND status IN ('approved','starred','watching')`).all(userId);
   const passed = db.prepare(`SELECT ${COLS} FROM sourced_founders WHERE user_id = ? AND status = 'dismissed'`).all(userId);
   const likedN = liked.length, passedN = passed.length;
   const empty = { likedN, passedN, favored: [], disfavored: [], weights: {}, promptText: '' };
@@ -80,7 +80,7 @@ const KIND_WORD = { domain: 'in', ped: 'with the pedigree', bld: 'with', cal: 'w
 // founders that produced it, with a base-rate multiple and a confidence level. Derived
 // only — never hand-edited.
 function tasteInsights(userId) {
-  const liked = db.prepare(`SELECT id, name, ${COLS} FROM sourced_founders WHERE user_id = ? AND status IN ('approved','starred')`).all(userId);
+  const liked = db.prepare(`SELECT id, name, ${COLS} FROM sourced_founders WHERE user_id = ? AND status IN ('approved','starred','watching')`).all(userId);
   const passed = db.prepare(`SELECT id, name, ${COLS} FROM sourced_founders WHERE user_id = ? AND status = 'dismissed'`).all(userId);
   const likedN = liked.length, passedN = passed.length;
   const confidence = likedN < MIN_LIKED ? 'none' : likedN < 6 ? 'low' : likedN < 15 ? 'building' : 'solid';

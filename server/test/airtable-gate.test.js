@@ -26,7 +26,20 @@ function read(p) { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8')
 
 test('sourcing approve route never writes to Airtable', () => {
   const src = read('routes/sourcing.js');
-  assert.ok(!/pushAdmissionsChange|pushDealChange/.test(src), 'sourcing.js must not call Airtable push');
+  assert.ok(!/pushAdmissionsChange|pushDealChange|createPipelineRecord/.test(
+    src.split("router.post('/watch/:id'")[0]
+  ), 'the approve half of sourcing.js must not call Airtable');
+});
+
+test('sourcing watch route only creates the Airtable row with explicit flag', () => {
+  const src = read('routes/sourcing.js');
+  const watchHalf = src.split("router.post('/watch/:id'")[1] || '';
+  const calls = [...watchHalf.matchAll(/createPipelineRecord\s*\(/g)];
+  assert.ok(calls.length >= 1, 'watch route must publish via createPipelineRecord');
+  for (const m of calls) {
+    const window = watchHalf.slice(m.index, m.index + 200);
+    assert.ok(/explicit:\s*true/.test(window), 'watch route Airtable create must pass { explicit: true }');
+  }
 });
 
 test('founders route only pushes to Airtable with explicit flag', () => {

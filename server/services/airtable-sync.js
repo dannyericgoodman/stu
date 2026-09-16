@@ -12,7 +12,7 @@ const { stuAdmissionsToAirtable, stuDealToAirtable } = require('./stage-mapping'
 // This is the only module in Stu that WRITES to Airtable, so it is the one that
 // most needs its target to be unambiguous. Base id, table ids and key come from
 // lib/airtableBase; recordUrl refuses to address a table that isn't in scope.
-const { TABLE, recordUrl, API_KEY: AIRTABLE_API_KEY } = require('../lib/airtableBase');
+const { TABLE, recordUrl, recordsUrl, API_KEY: AIRTABLE_API_KEY } = require('../lib/airtableBase');
 
 const FOUNDER_TABLE = TABLE.FOUNDERS;
 const DEAL_TABLE = TABLE.DEALS;
@@ -47,6 +47,86 @@ function patchAirtableRecord(tableId, recordId, fields) {
     req.write(data);
     req.end();
   });
+}
+
+function postAirtableRecord(tableId, fields) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({ fields });
+    const url = recordsUrl(tableId);
+
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(JSON.parse(body));
+        } else {
+          reject(new Error(`Airtable ${res.statusCode}: ${body}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CREATE A PIPELINE ROW (2026-09-16)
+//
+// Danny's "Add to Pipeline" button in the sourcing inbox means "I'm interested":
+// the founder lands in Stu's pipeline as Watching AND a row is created in the
+// team's Airtable Pipeline table with Investment Status = Watching (Pipeline
+// Stage formula then reads "4 · Watching").
+//
+// GATED like every other writer: only Danny's explicit click reaches this with
+// { explicit: true }. This is deliberately NOT a stage push — it creates a row
+// in the team's hand-maintained base, which the old "stage updates only" rule
+// did not cover. The button IS the publish-to-team decision.
+//
+// `opts.post` exists for the same reason as `opts.patch` on pushStage: the live
+// round-trip is Danny's to make by clicking the button. What is testable offline
+// is the payload — that we send field names Airtable accepts and a status value
+// from its own vocabulary.
+// ══════════════════════════════════════════════════════════════════════════
+async function createPipelineRecord(founder, opts = {}) {
+  if (gatedOut(opts, founder, 'create')) return { skipped: 'not_explicit' };
+  const post = opts.post || postAirtableRecord;
+
+  // Descriptive fields go by NAME (the import service reads by name too); the
+  // status goes by FIELD ID with a value from Airtable's own vocabulary, so a
+  // UI rename can't silently mistarget the one field that drives the board.
+  const fields = {
+    'Company / Founder': founder.company || founder.name,
+    'Founder': founder.name,
+    [vocab.FIELD.INVESTMENT_STATUS]: 'Watching',
+    // No 'Stu' option exists on Source Channel; Outbound is the closest true value.
+    'Source Channel': 'Outbound',
+  };
+  if (founder.linkedin_url) fields['LinkedIn'] = founder.linkedin_url;
+  if (founder.company_one_liner) fields['One-liner'] = founder.company_one_liner;
+  if (founder.website_url) fields['Website'] = founder.website_url;
+  if (founder.email) fields['Email'] = founder.email;
+
+  try {
+    const rec = await post(TABLE.PIPELINE, fields);
+    logSync(founder.id, 'pipeline', 'Investment Status', null, 'Watching', rec.id, 'success', null);
+    return { created: true, recordId: rec.id };
+  } catch (err) {
+    logSync(founder.id, 'pipeline', 'Investment Status', null, 'Watching', null, 'failed', err.message);
+    console.error(`[AirtableSync] ✗ create pipeline record failed for "${founder.name}":`, err.message);
+    return { error: err.message };
+  }
 }
 
 function logSync(founderId, tableName, fieldName, oldValue, newValue, recordId, status, errorMessage) {
@@ -211,4 +291,4 @@ async function pushDealChange(founder, oldStatus, opts = {}) {
   }
 }
 
-module.exports = { pushAdmissionsChange, pushDealChange, pushStage };
+module.exports = { pushAdmissionsChange, pushDealChange, pushStage, createPipelineRecord };

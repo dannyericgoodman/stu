@@ -261,6 +261,7 @@ export const api = {
   // card. A stale cache here would show a founder you just added as still
   // waiting, or worse, not on the pipeline. Invalidate both, always.
   approveSourced: (id) => after(request(`/sourcing/approve/${id}`, { method: 'POST' }), '/pipeline'),
+  watchSourced: (id) => after(request(`/sourcing/watch/${id}`, { method: 'POST' }), '/pipeline'),
   dismissSourced: (id) => after(request(`/sourcing/dismiss/${id}`, { method: 'POST' }), '/pipeline/inbox'),
   hideForeverSourced: (id) => after(request(`/sourcing/hide-forever/${id}`, { method: 'POST' }), '/pipeline/inbox'),
   starSourced: (id) => request(`/sourcing/star/${id}`, { method: 'POST' }),

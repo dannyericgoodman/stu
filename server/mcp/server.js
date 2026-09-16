@@ -170,7 +170,7 @@ function buildMcpServer({ userId, scopes = [] }) {
       query: z.string().optional(),
       signals: z.array(signalEnum).optional(),
       mode: z.enum(['any', 'all']).optional(),
-      status: z.enum(['pending', 'starred', 'approved', 'dismissed']).optional(),
+      status: z.enum(['pending', 'starred', 'approved', 'watching', 'dismissed']).optional(),
       minConfidence: z.number().min(0).max(1).optional(),
       limit: z.number().min(1).max(100).optional(),
     },

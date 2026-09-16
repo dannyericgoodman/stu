@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const airtableSync = require('../services/airtable-sync');
 const { VALID_TIE_TYPES } = require('../pipeline/sourcing-engine');
 
 // Hard rule: the Pipeline only ever shows founders with a VERIFIED Chicago/IL tie.
@@ -207,6 +208,94 @@ router.post('/approve/:id', (req, res) => {
   res.json(founder);
 });
 
+// POST /api/sourcing/watch/:id — "Add to Pipeline": Danny is interested.
+// Creates the pipeline card with stage_status '4 · Watching' (investment track)
+// AND creates the row in the team's Airtable Pipeline table with
+// Investment Status = Watching. This is the publish-to-team action: the click
+// itself is the explicit decision, so it passes { explicit: true } — the only
+// caller allowed to. Atomic like approve: the INSERT (founders) and the UPDATE
+// (sourced_founders) happen in ONE transaction with a status re-check inside,
+// so a double-click can never create a duplicate or an orphan.
+//
+// The Airtable create is AWAITED and its outcome returned (the PATCH /:id/stage
+// pattern): if Airtable refuses, the response says so and names the reason,
+// and the Stu row still stands — SQLite is canonical, Airtable self-heals on
+// the next publish.
+router.post('/watch/:id', async (req, res) => {
+  let tags = [], pedigreeSignals = [], builderSignals = [];
+  const parse = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+  const userId = req.user.id;
+  const sourcedId = req.params.id;
+
+  const insertFounder = db.prepare(`
+    INSERT INTO founders (
+      name, company, role, email, linkedin_url, github_url, website_url,
+      source, fit_score, fit_score_rationale, chicago_connection,
+      location_city, stage, domain, tags,
+      status, stage_status, pipeline_tracks,
+      company_one_liner, notable_background, previous_companies,
+      caliber_tier, caliber_score, caliber_signals, evidence_map, red_flags, sourced_from_id,
+      created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let founder;
+  try {
+    const tx = db.transaction(() => {
+      // Re-read + lock the row inside the tx; bail if already processed (idempotent).
+      const sourced = db.prepare("SELECT * FROM sourced_founders WHERE id = ? AND user_id = ? AND status IN ('pending','starred')").get(sourcedId, userId);
+      if (!sourced) { const e = new Error('not_found'); e.code = 'NOT_FOUND'; throw e; }
+
+      tags = parse(sourced.tags);
+      pedigreeSignals = parse(sourced.pedigree_signals);
+      builderSignals = parse(sourced.builder_signals);
+
+      const result = insertFounder.run(
+        sourced.name, sourced.company || null, sourced.role || 'Founder', sourced.email || null,
+        sourced.linkedin_url || null, sourced.github_url || null, sourced.website_url || null,
+        sourced.source || 'sourcing-engine', sourced.confidence_score, sourced.confidence_rationale,
+        sourced.chicago_connection || null, sourced.location_city || null, 'Pre-seed',
+        tags.find(t => ['AI/ML', 'Fintech', 'Healthtech', 'SaaS', 'Defense', 'Climate', 'DevTools', 'Biotech', 'Proptech', 'Edtech', 'Cybersecurity'].includes(t)) || null,
+        JSON.stringify(tags), 'Watching', '4 · Watching', 'investment',
+        sourced.company_one_liner || null,
+        pedigreeSignals.length ? pedigreeSignals.join(', ') : null,
+        builderSignals.length ? builderSignals.join(', ') : null,
+        sourced.caliber_tier || null,
+        sourced.caliber_score != null ? sourced.caliber_score : null,
+        sourced.caliber_signals || null,   // already JSON in sourced_founders
+        sourced.evidence_map || null,
+        sourced.red_flags || null,
+        sourced.id,
+        userId
+      );
+      db.prepare('UPDATE sourced_founders SET status = ?, promoted_to_founder_id = ? WHERE id = ? AND user_id = ?')
+        .run('watching', result.lastInsertRowid, sourcedId, userId);
+      return result.lastInsertRowid;
+    });
+    const newId = tx();
+    founder = db.prepare('SELECT * FROM founders WHERE id = ?').get(newId);
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: 'Sourced founder not found or already processed' });
+    console.error('[Sourcing] watch failed:', err.message);
+    return res.status(500).json({ error: 'Add to pipeline failed: ' + err.message });
+  }
+
+  // Publish to the team's base: create the Pipeline row as Watching.
+  let airtable = { skipped: 'not_attempted' };
+  try {
+    airtable = await airtableSync.createPipelineRecord(founder, { explicit: true });
+    if (airtable && airtable.created) {
+      db.prepare('UPDATE founders SET airtable_founder_record_id = ?, airtable_admission_status = ?, airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(airtable.recordId, '4 · Watching', founder.id);
+      founder = db.prepare('SELECT * FROM founders WHERE id = ?').get(founder.id);
+    }
+  } catch (e) {
+    airtable = { error: e.message };
+  }
+
+  res.json({ ...founder, airtable });
+});
+
 // POST /api/sourcing/dismiss/:id
 router.post('/dismiss/:id', (req, res) => {
   const sourced = db.prepare("SELECT * FROM sourced_founders WHERE id = ? AND user_id = ? AND status IN ('pending', 'starred')").get(req.params.id, req.user.id);
@@ -357,6 +446,7 @@ router.get('/stats', (req, res) => {
   const pending = db.prepare(`SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'pending' AND user_id = ? AND ${TIE_CLAUSE}`).get(...TP).c;
   const starred = db.prepare(`SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'starred' AND user_id = ? AND ${TIE_CLAUSE}`).get(...TP).c;
   const approved = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'approved' AND user_id = ?").get(req.user.id).c;
+  const watching = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'watching' AND user_id = ?").get(req.user.id).c;
   const dismissed = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'dismissed' AND user_id = ?").get(req.user.id).c;
   const bySrc = db.prepare(`SELECT source, COUNT(*) as count FROM sourced_founders WHERE status = 'pending' AND user_id = ? AND ${TIE_CLAUSE} GROUP BY source`).all(...TP);
   const byScore = db.prepare(`SELECT CASE WHEN confidence_score >= 8 THEN 'high' WHEN confidence_score >= 6 THEN 'medium' ELSE 'low' END as tier, COUNT(*) as count FROM sourced_founders WHERE status = 'pending' AND user_id = ? AND ${TIE_CLAUSE} GROUP BY tier`).all(...TP);
@@ -388,7 +478,7 @@ router.get('/stats', (req, res) => {
     `).all(req.user.id, ...VALID_TIE_TYPES);
   } catch {}
 
-  res.json({ pending, starred, approved, dismissed, bySource: bySrc, byScore, byCaliber, learning, exploration, lastRun, todayAdded });
+  res.json({ pending, starred, approved, watching, dismissed, bySource: bySrc, byScore, byCaliber, learning, exploration, lastRun, todayAdded });
 });
 
 // GET /api/sourcing/taste-profile — derived, falsifiable taste profile (plain-English + evidence)
