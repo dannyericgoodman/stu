@@ -44,6 +44,9 @@ export default function Login() {
             <label className="label">Email</label>
             <input
               type="email"
+              name="email"
+              id="email"
+              autoComplete="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
               className="input w-full"
@@ -56,6 +59,9 @@ export default function Login() {
             <label className="label">Password</label>
             <input
               type="password"
+              name="password"
+              id="password"
+              autoComplete="current-password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               className="input w-full"
