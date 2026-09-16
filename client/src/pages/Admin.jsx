@@ -61,6 +61,9 @@ export default function Admin() {
   const [userDetail, setUserDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -94,17 +97,29 @@ export default function Admin() {
   }
 
   async function handleDeleteUser(userId, userName) {
-    if (!window.confirm(`Permanently delete ${userName} and all their data? This cannot be undone.`)) return;
+    // Open the in-app confirmation modal (native window.confirm is unreliable
+    // in automated browsers and offers poor UX).
+    setDeleteError('');
+    setDeleteTarget({ id: userId, name: userName });
+  }
+
+  async function confirmDeleteUser() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await api.adminDeleteUser(userId);
-      setUsers(prev => prev.filter(u => u.id !== userId));
+      await api.adminDeleteUser(deleteTarget.id);
+      setUsers(prev => prev.filter(u => u.id !== deleteTarget.id));
       setSelectedUser(null);
       setUserDetail(null);
+      setDeleteTarget(null);
       // Refresh dashboard metrics
       const dash = await api.adminDashboard();
       setDashboard(dash);
     } catch (err) {
-      alert(err.message || 'Failed to delete user');
+      setDeleteError(err.message || 'Failed to delete user');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -390,5 +405,37 @@ export default function Admin() {
         </div>
       )}
     </div>
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !deleting && setDeleteTarget(null)} />
+          <div className="relative card p-6 w-full max-w-sm">
+            <h3 className="text-sm font-semibold text-gray-900">Delete user?</h3>
+            <p className="mt-2 text-sm text-gray-600">
+              Permanently delete <span className="font-medium text-gray-900">{deleteTarget.name}</span> and all their data? This cannot be undone.
+            </p>
+            {deleteError && (
+              <p className="mt-3 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{deleteError}</p>
+            )}
+            <div className="mt-5 flex gap-2 justify-end">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="px-3 py-2 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteUser}
+                disabled={deleting}
+                className="px-3 py-2 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
   );
 }
