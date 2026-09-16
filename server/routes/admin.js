@@ -162,6 +162,9 @@ router.delete('/user/:id', (req, res) => {
     // Settings
     db.prepare('DELETE FROM user_settings WHERE user_id = ?').run(userId);
 
+    // Founding seat (frees the seat if the user held one)
+    db.prepare('DELETE FROM founding_seats WHERE user_id = ?').run(userId);
+
     // User account
     db.prepare('DELETE FROM users WHERE id = ?').run(userId);
   });
