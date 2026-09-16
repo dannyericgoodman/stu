@@ -129,9 +129,11 @@ router.get('/queue', (req, res) => {
   res.json(scored);
 });
 
-// GET /api/sourcing/starred — starred for later review
+// GET /api/sourcing/starred — starred for later review.
+// Exemplars (taste models, never targets) are excluded — they live in the taste
+// profile, not the review list.
 router.get('/starred', (req, res) => {
-  const founders = db.prepare(`SELECT * FROM sourced_founders WHERE status = 'starred' AND user_id = ? AND ${TIE_CLAUSE} ORDER BY confidence_score DESC`).all(req.user.id, ...VALID_TIE_TYPES);
+  const founders = db.prepare(`SELECT * FROM sourced_founders WHERE status = 'starred' AND user_id = ? AND COALESCE(is_exemplar, 0) = 0 AND ${TIE_CLAUSE} ORDER BY confidence_score DESC`).all(req.user.id, ...VALID_TIE_TYPES);
   res.json(founders);
 });
 
@@ -347,12 +349,17 @@ router.post('/unstar/:id', (req, res) => {
 // Star the row afterwards to mark it liked for the taste system — starring has no
 // pipeline/Airtable side effects, unlike watch/approve.
 router.post('/add', (req, res) => {
-  const { validateManualAdd, findDuplicate, insertManualAdd } = require('../lib/manualAdd');
+  const { validateManualAdd, findDuplicate, markExemplar, insertManualAdd } = require('../lib/manualAdd');
   const { error, clean } = validateManualAdd(req.body, { validTieTypes: VALID_TIE_TYPES });
   if (error) return res.status(400).json({ error });
 
   const existing = findDuplicate(db, clean, req.user.id);
-  if (existing) return res.json({ ...existing, deduped: true });
+  if (existing) {
+    // Dedup hit: if the caller asked for exemplar, upgrade the flag on the
+    // existing row (taste model, never a target) and return it.
+    const row = (clean.is_exemplar && !existing.is_exemplar) ? markExemplar(db, existing.id) : existing;
+    return res.json({ ...row, deduped: true });
+  }
 
   const row = insertManualAdd(db, clean, req.user.id);
   res.status(201).json({ ...row, deduped: false });
@@ -471,7 +478,7 @@ router.get('/stats', (req, res) => {
   // headline number always matches what's actually shown. Historical approved/dismissed do not.
   const TP = [req.user.id, ...VALID_TIE_TYPES];
   const pending = db.prepare(`SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'pending' AND user_id = ? AND ${TIE_CLAUSE}`).get(...TP).c;
-  const starred = db.prepare(`SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'starred' AND user_id = ? AND ${TIE_CLAUSE}`).get(...TP).c;
+  const starred = db.prepare(`SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'starred' AND user_id = ? AND COALESCE(is_exemplar, 0) = 0 AND ${TIE_CLAUSE}`).get(...TP).c;
   const approved = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'approved' AND user_id = ?").get(req.user.id).c;
   const watching = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'watching' AND user_id = ?").get(req.user.id).c;
   const dismissed = db.prepare("SELECT COUNT(*) as c FROM sourced_founders WHERE status = 'dismissed' AND user_id = ?").get(req.user.id).c;

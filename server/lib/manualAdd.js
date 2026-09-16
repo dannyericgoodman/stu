@@ -72,23 +72,34 @@ function validateManualAdd(body, { validTieTypes = [] } = {}) {
     clean.location_type = lt;
   }
   clean.linkedin_slug = linkedinSlug(clean.linkedin_url);
+  // Taste exemplar: a founder Danny admires / has invested in — a taste model,
+  // never an outreach target. Stays starred for learning; excluded from
+  // prospect surfaces by is_exemplar.
+  clean.is_exemplar = b.is_exemplar === true || b.is_exemplar === 1 || b.is_exemplar === '1' ? 1 : 0;
   return { clean };
 }
 
-// findDuplicate(db, clean, userId) -> existing row ({id,name,company,status}) or null.
+// findDuplicate(db, clean, userId) -> existing row ({id,name,company,status,is_exemplar}) or null.
 // LinkedIn slug first, then normalized name+company. Any status blocks re-adding.
 function findDuplicate(db, clean, userId) {
   if (clean.linkedin_slug) {
     const hit = db.prepare(
-      'SELECT id, name, company, status FROM sourced_founders WHERE LOWER(linkedin_url) LIKE ? AND user_id = ?'
+      'SELECT id, name, company, status, is_exemplar FROM sourced_founders WHERE LOWER(linkedin_url) LIKE ? AND user_id = ?'
     ).get(`%/in/${clean.linkedin_slug}%`, userId);
     if (hit) return hit;
   }
   return db.prepare(
-    `SELECT id, name, company, status FROM sourced_founders
+    `SELECT id, name, company, status, is_exemplar FROM sourced_founders
      WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))
      AND COALESCE(LOWER(TRIM(company)), '') = COALESCE(LOWER(TRIM(?)), '')`
   ).get(userId, clean.name, clean.company) || null;
+}
+
+// markExemplar(db, id) — upgrade an existing row to exemplar (dedup hit with
+// is_exemplar requested). Returns the row.
+function markExemplar(db, id) {
+  db.prepare('UPDATE sourced_founders SET is_exemplar = 1 WHERE id = ?').run(id);
+  return db.prepare('SELECT id, name, company, status FROM sourced_founders WHERE id = ?').get(id);
 }
 
 function insertManualAdd(db, clean, userId) {
@@ -97,15 +108,15 @@ function insertManualAdd(db, clean, userId) {
       name, company, role, linkedin_url, headline, source, status,
       company_one_liner, website_url, location_type, chicago_connection,
       tags, pedigree_signals, builder_signals, caliber_signals, caliber_tier,
-      user_id
-    ) VALUES (?, ?, ?, ?, ?, 'manual', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      is_exemplar, user_id
+    ) VALUES (?, ?, ?, ?, ?, 'manual', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     clean.name, clean.company, clean.role, clean.linkedin_url, clean.headline,
     clean.company_one_liner, clean.website_url, clean.location_type, clean.chicago_connection,
     clean.tags, clean.pedigree_signals, clean.builder_signals, clean.caliber_signals,
-    clean.caliber_tier, userId
+    clean.caliber_tier, clean.is_exemplar, userId
   );
   return db.prepare('SELECT id, name, company, status FROM sourced_founders WHERE id = ?').get(info.lastInsertRowid);
 }
 
-module.exports = { validateManualAdd, findDuplicate, insertManualAdd, SIGNAL_COLS };
+module.exports = { validateManualAdd, findDuplicate, markExemplar, insertManualAdd, SIGNAL_COLS };

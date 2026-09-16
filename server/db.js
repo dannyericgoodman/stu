@@ -924,7 +924,11 @@ addColumn('sourced_founders', 'red_flags', 'TEXT');                     // JSON
 addColumn('sourced_founders', 'caliber_tier', 'TEXT');                  // 'S' | 'A' | 'B' | 'C'
 addColumn('sourced_founders', 'caliber_score', 'INTEGER');             // 1-10, deterministic after reconciliation
 addColumn('sourced_founders', 'caliber_rationale', 'TEXT');            // why this tier
-addColumn('sourced_founders', 'caliber_signals', 'TEXT');             // JSON — hard caliber signals detected
+addColumn('sourced_founders', 'caliber_signals', 'TEXT');
+// Taste exemplars: founders Danny admires / has invested in, used ONLY as taste
+// models — never outreach targets. They stay starred (liked for the taste
+// system) but are excluded from prospect surfaces (starred-for-review, stats).
+addColumn('sourced_founders', 'is_exemplar', 'INTEGER NOT NULL DEFAULT 0');             // JSON — hard caliber signals detected
 
 // LEARNING LOOP: affinity to Danny's revealed taste (from approve/star/dismiss history).
 // A re-ranking nudge, never an override of caliber/tie/red-flag rules.

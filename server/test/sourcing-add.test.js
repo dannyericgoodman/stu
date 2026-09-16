@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { validateManualAdd, findDuplicate, insertManualAdd } = require('../lib/manualAdd');
+const { validateManualAdd, findDuplicate, markExemplar, insertManualAdd } = require('../lib/manualAdd');
 
 const TIES = ['current', 'working', 'school_alumni', 'hometown', 'chicago_company'];
 
@@ -103,4 +103,34 @@ test('route delegates to manualAdd lib', () => {
   assert.ok(/validateManualAdd/.test(add), 'route must validate via the lib');
   assert.ok(/findDuplicate/.test(add), 'route must dedup via the lib');
   assert.ok(/insertManualAdd/.test(add), 'route must insert via the lib');
+  assert.ok(/markExemplar/.test(add), 'route must upgrade the exemplar flag on a dedup hit');
+});
+
+// Static guards: exemplars are taste models, never prospects. They stay starred
+// for learning but must be invisible on prospect surfaces.
+test('exemplars are excluded from prospect surfaces', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'routes', 'sourcing.js'), 'utf8');
+  const starred = src.slice(src.indexOf("router.get('/starred'"));
+  assert.ok(/is_exemplar/.test(starred), 'starred-for-review must exclude exemplars');
+  const stats = src.slice(src.indexOf("router.get('/stats'"));
+  assert.ok(/is_exemplar/.test(stats), 'stats starred count must exclude exemplars');
+});
+
+test('validate: is_exemplar defaults to 0, truthy values become 1', () => {
+  assert.strictEqual(validateManualAdd({ name: 'A' }, { validTieTypes: TIES }).clean.is_exemplar, 0);
+  assert.strictEqual(validateManualAdd({ name: 'A', is_exemplar: true }, { validTieTypes: TIES }).clean.is_exemplar, 1);
+  assert.strictEqual(validateManualAdd({ name: 'A', is_exemplar: 'yes' }, { validTieTypes: TIES }).clean.is_exemplar, 0);
+});
+
+test('markExemplar: upgrades an existing row to exemplar', () => {
+  const db = stubDb({ dupByName: { id: 7, name: 'Jensen Coonradt', company: 'Crebit', status: 'starred', is_exemplar: 0 } });
+  const { clean } = validateManualAdd({ name: 'Jensen Coonradt', is_exemplar: true }, { validTieTypes: TIES });
+  const dup = findDuplicate(db, clean, 1);
+  assert.strictEqual(dup.is_exemplar, 0);
+  const row = markExemplar(db, dup.id);
+  assert.strictEqual(row.id, 42); // stub returns the re-selected row
+  const updateSql = db.calls.find((c) => typeof c === 'string' && c.includes('SET is_exemplar = 1'));
+  assert.ok(updateSql, 'must flag the row as exemplar');
 });

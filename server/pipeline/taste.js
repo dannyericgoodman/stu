@@ -84,9 +84,13 @@ function tasteInsights(userId) {
   const passed = db.prepare(`SELECT id, name, ${COLS} FROM sourced_founders WHERE user_id = ? AND status = 'dismissed'`).all(userId);
   const likedN = liked.length, passedN = passed.length;
   const confidence = likedN < MIN_LIKED ? 'none' : likedN < 6 ? 'low' : likedN < 15 ? 'building' : 'solid';
+  // Taste exemplars: founders Danny admires / invested in — models, never targets.
+  // They stay in the liked set (starred) so learning uses them; surfaced here so
+  // the profile is transparent about what it's modeled on.
+  const exemplars = db.prepare(`SELECT name, company FROM sourced_founders WHERE user_id = ? AND COALESCE(is_exemplar, 0) = 1 ORDER BY name`).all(userId);
 
   if (likedN < MIN_LIKED) {
-    return { likedN, passedN, confidence, favored: [], disfavored: [], note: `Need ${MIN_LIKED}+ approvals before inferring your taste — you have ${likedN}. Keep approving/passing and this builds itself.` };
+    return { likedN, passedN, confidence, exemplars, favored: [], disfavored: [], note: `Need ${MIN_LIKED}+ approvals before inferring your taste — you have ${likedN}. Keep approving/passing and this builds itself.` };
   }
 
   const collect = (rows) => { const m = {}; for (const r of rows) for (const s of rowSignals(r)) (m[s] ||= []).push(r.name); return m; };
@@ -117,7 +121,7 @@ function tasteInsights(userId) {
   };
 
   return {
-    likedN, passedN, confidence,
+    likedN, passedN, confidence, exemplars,
     favored: rows.filter(r => r.lift > 0.12).slice(0, 6).map(r => mk(r, 'advance')),
     disfavored: rows.filter(r => r.lift < -0.12).slice(-6).reverse().map(r => mk(r, 'pass')),
   };
