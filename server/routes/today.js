@@ -421,6 +421,9 @@ router.get('/commitments', (req, res) => {
 });
 
 router.get('/commitments/founder/:founderId', (req, res) => {
+  // deltaFor is scoped by founder; verify the founder belongs to this user first.
+  const f = db.prepare('SELECT id FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0').get(Number(req.params.founderId), req.user.id);
+  if (!f) return res.status(404).json({ error: 'Founder not found' });
   res.json(commitments.deltaFor(Number(req.params.founderId)));
 });
 
@@ -436,8 +439,8 @@ router.post('/commitments', (req, res) => {
 router.patch('/commitments/:id', (req, res) => {
   const { status, closed_at } = req.body;
   try {
-    commitments.close(Number(req.params.id), status, closed_at);
-    res.json(db.prepare('SELECT * FROM commitments WHERE id = ?').get(req.params.id));
+    commitments.close(Number(req.params.id), status, closed_at, req.user.id);
+    res.json(db.prepare('SELECT * FROM commitments WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id));
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

@@ -10,7 +10,18 @@
 
 const { recordJobRun } = require('./health');
 
-async function runBuilderRadar({ userId = 1, token = process.env.GITHUB_TOKEN } = {}) {
+// Resolves the GitHub token through providerKeys: the user's saved key, or the
+// platform env key for the owner only. The old default (`token =
+// process.env.GITHUB_TOKEN`) handed EVERY user the platform token once the
+// scheduler started iterating paid users — exactly the cost-shifting leak
+// providerKeys exists to prevent.
+function resolveGithubToken(userId) {
+  try { return require('./providerKeys').resolveKey(userId, 'github'); }
+  catch { return null; }
+}
+
+async function runBuilderRadar({ userId = 1, token = undefined } = {}) {
+  const ghToken = token !== undefined ? token : resolveGithubToken(userId);
   const out = { backfilled: 0, resolved: 0, scored: 0, discovered: 0, snapshotted: 0, errors: [] };
 
   try {
@@ -26,14 +37,14 @@ async function runBuilderRadar({ userId = 1, token = process.env.GITHUB_TOKEN } 
   // and starves the score/discover steps. 20/week fills the pool steadily.
   try {
     const { resolveGithubHandles } = require('../pipeline/github-resolve');
-    out.resolved = (await resolveGithubHandles({ userId, token, limit: 20 })).resolved;
+    out.resolved = (await resolveGithubHandles({ userId, token: ghToken, limit: 20 })).resolved;
   } catch (e) { out.errors.push(`resolve: ${e.message}`); }
 
   try {
     const { scoreGithubSlope } = require('../pipeline/github-activity');
     let guard = 0;
     for (;;) {
-      const r = await scoreGithubSlope({ userId, githubToken: token, limit: 40 });
+      const r = await scoreGithubSlope({ userId, githubToken: ghToken, limit: 40 });
       out.scored += r.scored;
       if (r.remaining === 0 || r.scored === 0 || ++guard >= 15) break;
     }
@@ -41,7 +52,7 @@ async function runBuilderRadar({ userId = 1, token = process.env.GITHUB_TOKEN } 
 
   try {
     const { discoverGithubBuilders } = require('../pipeline/github-source');
-    out.discovered = (await discoverGithubBuilders({ userId, token, candidatesPerQuery: 20, pages: 1 })).added;
+    out.discovered = (await discoverGithubBuilders({ userId, token: ghToken, candidatesPerQuery: 20, pages: 1 })).added;
   } catch (e) { out.errors.push(`discover: ${e.message}`); }
 
   try {

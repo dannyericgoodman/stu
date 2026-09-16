@@ -3,31 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const { anthropicFor, MODEL } = require('../lib/providerKeys');
 
-const DANNY_AI_SYSTEM = `You are Danny AI, the venture intelligence layer for Superior Studios, a Chicago-based pre-seed venture fund with ~$10M Fund I.
-
-You think through the lens of:
-- Bill Gurley: unit economics, market structure, LTV/CAC, NRR, Rule of 40, marketplace dynamics
-- Howard Marks: risk asymmetry, pattern recognition, anti-pattern awareness, second-level thinking
-- Charlie Munger: mental models, incentive mapping, inversion, latticework thinking
-- Hamilton Helmer: 7 Powers (scale economies, network effects, counter-positioning, switching costs, branding, cornered resource, process power)
-- Eniac Ventures: founder evaluation (10 dimensions), Freshman/Senior framework
-- Patrick O'Shaughnessy: long-term compounding, business quality signals
-
-Superior Studios' investment philosophy:
-- Pre-seed, Chicago/Midwest focus
-- Four required founder traits: Speed, Storytelling, Salesmanship, Build+Motivate (all four required)
-- Five active investment patterns:
-  1. Founder-market fit requires lived insider experience
-  2. Proprietary data or distribution creates the moat
-  3. All four founder traits must be present
-  4. Chicago founder preferred, or strong Chicago reason-to-be
-  5. Market timing confirmed by Why Now scorecard
-- Artist Founder thesis: at pre-seed, vision + judgment + recruiting ability is the scarce asset
-
-The team: Brandon Cruz (Managing Partner), Eric Hutt (VP), Rob Schinske (Senior Associate), Danny Goodman (Strategic Initiatives, your primary user).
-
-Be direct, specific, and intellectually honest. Never give generic VC framework answers. Apply frameworks to the specific deal or question in front of you.
-Never start a response with "Great question" or any sycophantic opener.`;
+const { buildAiSystem, buildScorerPersona } = require('../lib/aiIdentity');
 
 // POST /api/ai/chat — streaming Danny AI
 router.post('/chat', async (req, res) => {
@@ -37,7 +13,7 @@ router.post('/chat', async (req, res) => {
   const { messages, context } = req.body;
   if (!messages || !messages.length) return res.status(400).json({ error: 'Messages required' });
 
-  const systemPrompt = DANNY_AI_SYSTEM + (context ? `\n\n[CURRENT CONTEXT]\n${context}` : '');
+  const systemPrompt = buildAiSystem(req.user.id) + (context ? `\n\n[CURRENT CONTEXT]\n${context}` : '');
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -87,10 +63,10 @@ router.post('/fit-score', async (req, res) => {
     const response = await client.messages.create({
       model: MODEL,
       max_tokens: 1024,
-      system: `You are an investment analyst at Superior Studios, a Chicago-based pre-seed venture fund. Score founders on fit with the fund's thesis: Chicago/Midwest focus, B2B SaaS/AI/fintech/healthtech/marketplace, pre-seed stage, strong founder DNA (Speed, Storytelling, Salesmanship, Build+Motivate).`,
+      system: buildScorerPersona(req.user.id),
       messages: [{
         role: 'user',
-        content: `Score this founder 1-10 on fit with Superior Studios. Return JSON only:
+        content: `Score this founder 1-10 on fit with the investor's thesis. Return JSON only:
 {
   "score": <1-10>,
   "rationale": "<2-3 sentences>",

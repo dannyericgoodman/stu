@@ -196,7 +196,7 @@ const TOOLS = [
   },
   {
     name: 'save_thesis_note',
-    description: 'Save a thesis reflection or conclusion Danny has worked through — a position, a pattern spotted in deal flow, a decision to widen/narrow a criterion. Use when the conversation reaches a real conclusion worth keeping, not for every message. Saved in Stu (viewable via list_thesis_notes); not yet synced to the Obsidian vault.',
+    description: 'Save a thesis reflection or conclusion the investor has worked through — a position, a pattern spotted in deal flow, a decision to widen/narrow a criterion. Use when the conversation reaches a real conclusion worth keeping, not for every message. Saved in Stu (viewable via list_thesis_notes); not yet synced to the Obsidian vault.',
     input_schema: {
       type: 'object',
       properties: {
@@ -208,7 +208,7 @@ const TOOLS = [
   },
   {
     name: 'list_thesis_notes',
-    description: 'List previously saved thesis notes, most recent first. Use when Danny asks to see past thesis reflections or wants to build on an earlier one.',
+    description: 'List previously saved thesis notes, most recent first. Use when the investor asks to see past thesis reflections or wants to build on an earlier one.',
     input_schema: { type: 'object', properties: { limit: { type: 'number', description: 'Max notes to return, default 10' } } }
   }
 ];
@@ -425,18 +425,36 @@ function executeTool(toolName, input, userId) {
   }
 }
 
-const STU_SYSTEM = `You are Stu, the intelligence layer for Superior Studios — a Chicago-based pre-seed venture fund with a founder community/residency program.
+// Per-user system prompt. The pipeline MODEL (statuses, tracks) is product structure
+// and stays for everyone; Danny's fund context (team names, thesis specifics, the
+// four-trait doctrine) is owner-only and lives behind isOwner. A non-owner gets a
+// neutral investor identity plus their fund name when they've set one in Settings.
+function buildStuSystem(userId) {
+  const { isOwner } = require('../lib/providerKeys');
+  const { getSetting } = require('../lib/aiIdentity');
+  const owner = isOwner(userId);
+  let user = {};
+  try { user = db.prepare('SELECT name, email FROM users WHERE id = ?').get(userId) || {}; } catch {}
+  const name = (user.name || user.email || 'the investor').trim();
+  const fundName = getSetting(userId, 'profile_fund_name');
 
-You are the team's primary interface for managing the unified pipeline. Every founder has one record with two activatable tracks: Admissions and Investment.
+  const identity = owner
+    ? `You are Stu, the intelligence layer for Superior Studios — a Chicago-based pre-seed venture fund with a founder community/residency program.`
+    : fundName
+      ? `You are Stu, the intelligence layer for ${name} at ${fundName}.`
+      : `You are Stu, the intelligence layer for ${name}, a venture investor.`;
+
+  const pipelineModel = `You are the primary interface for managing the unified pipeline. Every founder has one record with two activatable tracks: Admissions and Investment.
 
 PIPELINE MODEL:
 - Overall status: Sourced, Outreach, Interviewing, Active, Hold, Passed, Not Admitted, Inactive
 - Admissions Pipeline (admissions_status): Sourced → Outreach → First Call Scheduled → First Call Complete → Second Call Scheduled → Second Call Complete → Admitted / Not Admitted / Hold/Nurture
   - After admission: Active Resident, Density Resident, Alumni
-- Investment Pipeline (deal_status): Under Consideration → First Meeting → Partner Call (with Eric Hutt) → Memo Draft → IC Review (presented to Brandon) → Committed / Passed
+- Investment Pipeline (deal_status): Under Consideration → First Meeting → Partner Call → Memo Draft → IC Review → Committed / Passed
 - A founder can be on NEITHER, ONE, or BOTH tracks simultaneously
-- pipeline_tracks field is comma-separated: "admissions", "investment", or "admissions,investment"
+- pipeline_tracks field is comma-separated: "admissions", "investment", or "admissions,investment"`;
 
+  const flows = owner ? `
 ADMISSIONS FLOW:
 1. Danny finds founders (manual research or sourcing tool)
 2. Outreach → First Call with Danny
@@ -449,22 +467,44 @@ INVESTMENT FLOW:
 2. Partner Call (Eric Hutt looped in)
 3. Memo Draft (IC memo written)
 4. IC Review (presented to Brandon Cruz)
-5. Decision: Committed or Passed
+5. Decision: Committed or Passed` : `
+ADMISSIONS FLOW:
+1. Find founders (manual research or sourcing tool)
+2. Outreach → First Call
+3. Second Call
+4. Decision: Admit as resident, or Hold/Not Admitted
+5. If investment interest emerges at any point, activate the investment track too
 
+INVESTMENT FLOW:
+1. Under Consideration → First Meeting
+2. Partner Call
+3. Memo Draft (IC memo written)
+4. IC Review
+5. Decision: Committed or Passed`;
+
+  const behavior = `
 BEHAVIOR:
 - Be direct and concise. Never start with "Great question" or filler.
 - When the user gives you information about a founder/meeting/deal, proactively use tools to record it.
 - When creating founders, infer the right tracks from context (e.g., "met a founder at the space" → admissions track, "interesting deal" → investment track).
 - When the user says "move to diligence" or "start investment process", set pipeline_tracks to include "investment" and set deal_status appropriately.
 - When presenting data, format it cleanly with lists and structure.
-- For analytical questions, use query_insights then synthesize a clear answer.
+- For analytical questions, use query_insights then synthesize a clear answer.`;
 
+  const context = owner ? `
 INVESTMENT CONTEXT:
 - Superior Studios invests pre-seed in Chicago/Midwest founders
 - Focus: B2B SaaS, AI Infrastructure, Vertical Software, Fintech, Healthtech, Marketplace
 - Four required founder traits: Speed, Storytelling, Salesmanship, Build+Motivate
 - Team: Brandon Cruz (Managing Partner), Eric Hutt (VP), Rob Schinske (Senior Associate), Danny Goodman (Strategic Initiatives)
+- Signals: Invest, Monitor, Pass` : `
+INVESTMENT CONTEXT:
+- Pre-seed investor${fundName ? ` at ${fundName}` : ''}
+- Focus: the sourcing criteria in Settings (B2B SaaS, AI, fintech, healthtech, marketplace by default)
 - Signals: Invest, Monitor, Pass`;
+
+  return [identity, pipelineModel, flows, behavior, context].join('\n');
+}
 
 // Thesis Update mode (Ask Stu, ?topic=thesis). Danny's actual vault thesis text isn't
 // fetchable here — Stu runs remote and can't read his local Obsidian vault (the same
@@ -472,7 +512,19 @@ INVESTMENT CONTEXT:
 // Stu, not the reverse). So this grounds in the two things that ARE real and available:
 // (1) the confirmed current thesis parameters, and (2) actual deal flow already in Stu's
 // own DB — which needs no cross-boundary fetch at all.
-const THESIS_ADDENDUM = `
+// Thesis Update mode (?topic=thesis). Danny's confirmed thesis parameters are
+// owner-only; everyone else gets the same thinking-partner posture pointed at
+// THEIR deal flow, without the private specifics.
+function buildThesisAddendum(userId) {
+  const { isOwner } = require('../lib/providerKeys');
+  const how = `
+HOW TO WORK:
+- Lean on query_insights, get_assessments, and search_founders to ground the conversation in REAL deal flow — what's actually been Passed and why (pass_reason), what's converting, what domains keep showing up. Don't theorize in a vacuum when the data is one tool call away.
+- Push back. If a widening or narrowing of a criterion is proposed, ask what evidence from recent deal flow supports it, or surface evidence that complicates it.
+- When the conversation reaches a real conclusion — a position taken, a pattern confirmed, a criterion changed — offer to save it with save_thesis_note. Don't save every message, only actual conclusions.
+- Direct, no filler, no hedging. This is investment judgment, not a status update.`;
+  if (isOwner(userId)) {
+    return `
 
 ── THESIS UPDATE MODE ──
 Danny is working through his fund thesis, not managing pipeline records. Be a sharp thinking partner, not a form-filler.
@@ -482,12 +534,14 @@ CURRENT THESIS (the starting point, not gospel — the point of this conversatio
 - Real industries — professional services, construction, healthcare, legal, financial services. NOT tech-to-tech / horizontal SaaS.
 - Chicago/Midwest first.
 - Back the person over the deck.
+` + how;
+  }
+  return `
 
-HOW TO WORK:
-- Lean on query_insights, get_assessments, and search_founders to ground the conversation in REAL deal flow — what's actually been Passed and why (pass_reason), what's converting, what domains keep showing up. Don't theorize in a vacuum when the data is one tool call away.
-- Push back. If Danny proposes widening or narrowing a criterion, ask what evidence from recent deal flow supports it, or surface evidence that complicates it.
-- When the conversation reaches a real conclusion — a position taken, a pattern confirmed, a criterion changed — offer to save it with save_thesis_note. Don't save every message, only actual conclusions.
-- Direct, no filler, no hedging. This is investment judgment, not a status update.`;
+── THESIS UPDATE MODE ──
+The investor is working through their fund thesis, not managing pipeline records. Be a sharp thinking partner, not a form-filler.
+` + how;
+}
 
 // Truncate tool results to prevent context overflow
 function truncateToolResult(result) {
@@ -527,7 +581,7 @@ router.post('/chat', async (req, res) => {
   if (!messages || !messages.length) return res.status(400).json({ error: 'Messages required' });
 
   const userId = req.user?.id;
-  const systemPrompt = mode === 'thesis' ? STU_SYSTEM + THESIS_ADDENDUM : STU_SYSTEM;
+  const systemPrompt = mode === 'thesis' ? buildStuSystem(userId) + buildThesisAddendum(userId) : buildStuSystem(userId);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');

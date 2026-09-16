@@ -105,10 +105,14 @@ function dedupeKey(founderId, commitment) {
   return `${founderId}:${norm}`;
 }
 
-function close(id, status, closedAt) {
+function close(id, status, closedAt, userId) {
   if (![STATUS.KEPT, STATUS.BROKEN, STATUS.RELEASED].includes(status)) throw new Error(`bad status ${status}`);
-  db.prepare('UPDATE commitments SET status = ?, closed_at = ? WHERE id = ?')
-    .run(status, closedAt || new Date().toISOString().slice(0, 10), id);
+  if (userId == null) throw new Error('close requires a userId — commitments are per-user');
+  // Owner-scoped: a user can only close their own commitments. Without the
+  // created_by predicate, any authenticated user could close anyone's rows.
+  const r = db.prepare('UPDATE commitments SET status = ?, closed_at = ? WHERE id = ? AND created_by = ?')
+    .run(status, closedAt || new Date().toISOString().slice(0, 10), id, userId);
+  if (!r.changes) throw new Error('commitment not found');
 }
 
 /**

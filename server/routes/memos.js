@@ -221,6 +221,18 @@ Diligence: ${founder.diligence_status || 'Not started'}`;
   res.json({ id: memoId, version, status: 'generating' });
 
   // Generate memo in background
+  // Per-user identity: the Superior Studios context (fund size, team names,
+  // thesis) is the owner's private context — a paying outside seat gets the
+  // same memo structure with their own firm referenced, never Danny's.
+  const { isOwner } = require('../lib/providerKeys');
+  const { getSetting } = require('../lib/aiIdentity');
+  const memoOwner = isOwner(req.user.id);
+  const memoFund = getSetting(req.user.id, 'profile_fund_name');
+  const firmRef = memoOwner ? 'Superior Studios' : (memoFund || 'the firm');
+  const icRef = memoOwner ? 'the investment committee (Brandon Cruz, Managing Partner)' : 'the investment committee';
+  const frameworksRef = memoOwner
+    ? "Use the frameworks Danny's team uses: Eniac dimensions, Gurley unit economics, Marks risk asymmetry, Munger mental models, Helmer 7 Powers."
+    : 'Use proven investment frameworks: unit economics, risk asymmetry, mental models, Helmer 7 Powers.';
   try {
     const response = await client.messages.create({
       model: MODEL,
@@ -235,9 +247,9 @@ Diligence: ${founder.diligence_status || 'Not started'}`;
       // file and never ran often enough for anyone to notice.
       // ⚠️ Sonnet 5 / Opus 4.7+ REJECT non-default temperature with a 400.
       temperature: 0,
-      system: `You are the IC Memo Writer for Superior Studios, a Chicago-based pre-seed venture fund (~$10M Fund I).
+      system: `You are the IC Memo Writer for ${memoOwner ? 'Superior Studios, a Chicago-based pre-seed venture fund (~$10M Fund I)' : (memoFund ? `${memoFund}, a venture fund` : 'a venture fund')}.
 
-You write investment committee memos that are direct, evidence-based, and intellectually honest. Your memos are the primary decision document for the investment committee (Brandon Cruz, Managing Partner).
+You write investment committee memos that are direct, evidence-based, and intellectually honest. Your memos are the primary decision document for ${icRef}.
 
 MEMO STRUCTURE:
 1. **Executive Summary** — 3-4 sentences: what the company does, why it matters, and the investment recommendation
@@ -248,7 +260,7 @@ MEMO STRUCTURE:
 6. **Competitive Advantage & Moat** — What's defensible? Apply Hamilton Helmer's 7 Powers where relevant
 7. **Key Risks & Mitigants** — Top 3-5 risks with severity and what would mitigate them
 8. **Investment Terms** — Round details, valuation, our check size, ownership
-9. **Portfolio Fit** — How this fits the Superior Studios thesis and existing portfolio
+9. **Portfolio Fit** — How this fits the ${firmRef} thesis and existing portfolio
 10. **Recommendation** — Clear: Commit / Continue Diligence / Pass, with reasoning
 
 CONVICTION — READ THIS BEFORE WRITING:
@@ -268,7 +280,7 @@ STYLE:
 - Be direct. No filler, no "this is an exciting opportunity."
 - Lead with evidence, not opinion.
 - Flag what you DON'T know — data gaps matter. An input we could not read is a gap, not evidence.
-- Use the frameworks Danny's team uses: Eniac dimensions, Gurley unit economics, Marks risk asymmetry, Munger mental models, Helmer 7 Powers.
+- ${frameworksRef}
 - Write for an audience of experienced investors who want signal, not noise.
 
 Return the memo as clean markdown text (no JSON wrapping). Use ## headers for each section.`,

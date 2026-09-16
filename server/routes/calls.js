@@ -22,12 +22,21 @@ router.post('/:founderId', async (req, res) => {
   const client = anthropicFor(req.user.id, 'call-summary');
   let structuredSummary = null;
 
+  // Per-user identity: the Superior Studios context is the owner's private
+  // context — a paying outside seat gets a neutral analyst prompt.
+  const { isOwner } = require('../lib/providerKeys');
+  const { getSetting } = require('../lib/aiIdentity');
+  const callFund = getSetting(req.user.id, 'profile_fund_name');
+  const callSystem = isOwner(req.user.id)
+    ? `You are an investment analyst at Superior Studios, a Chicago-based pre-seed venture fund. Parse meeting transcripts and extract structured call summaries. Be specific, not generic. Pull exact quotes when relevant.`
+    : `You are an investment analyst${callFund ? ` at ${callFund}` : ''}. Parse meeting transcripts and extract structured call summaries. Be specific, not generic. Pull exact quotes when relevant.`;
+
   if (client) {
     try {
       const response = await client.messages.create({
         model: MODEL,
         max_tokens: 2048,
-        system: `You are an investment analyst at Superior Studios, a Chicago-based pre-seed venture fund. Parse meeting transcripts and extract structured call summaries. Be specific, not generic. Pull exact quotes when relevant.`,
+        system: callSystem,
         messages: [{
           role: 'user',
           content: `Parse this meeting transcript for a call with ${founder.name}${founder.company ? ` from ${founder.company}` : ''}. Return a JSON object with this exact structure (no markdown, just raw JSON):
