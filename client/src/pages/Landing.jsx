@@ -8,7 +8,7 @@ import StuLogo from '../components/StuLogo';
 const inboxTiers = [
   {
     name: 'Must-meet',
-    accent: '#3B82F6',
+    accent: '#2563EB',
     rows: [
       {
         name: 'Ada Lovelace',
@@ -28,7 +28,7 @@ const inboxTiers = [
   },
   {
     name: 'Strong',
-    accent: '#8A8A9B',
+    accent: '#6B7280',
     rows: [
       {
         name: 'Alan Turing',
@@ -37,6 +37,12 @@ const inboxTiers = [
         chips: ['Z Fellows', 'ML research'],
         note: 'Published on efficient inference. Former lab lead, first-time founder.',
       },
+    ],
+  },
+  {
+    name: 'Watch',
+    accent: '#9CA3AF',
+    rows: [
       {
         name: 'Katherine Johnson',
         company: 'Orbital',
@@ -46,73 +52,59 @@ const inboxTiers = [
       },
     ],
   },
-  {
-    name: 'Watch',
-    accent: '#5A5A6B',
-    rows: [
-      {
-        name: 'Radia Perlman',
-        company: 'Meshnet',
-        score: 72,
-        chips: ['GitHub builders'],
-        note: 'Prolific protocol contributor. Early, worth tracking.',
-      },
-    ],
-  },
 ];
 
 const stats = [
   { value: '2,700+', label: 'founder profiles sourced and scored' },
   { value: '307', label: 'opportunities tracked in pipeline' },
-  { value: '10', label: 'scout signals, running every night' },
+  { value: '10', label: 'scout signals, running nightly' },
   { value: '10', label: 'founding seats, total' },
 ];
 
 const steps = [
   {
     n: '01',
-    title: 'Bring your own keys',
-    body: 'Connect your API keys during onboarding with guided setup. Your keys, your data, your spend — Stu runs on infrastructure you control.',
+    title: 'Connect your keys',
+    body: 'Guided onboarding connects your API keys in minutes. Your keys, your data, your spend.',
   },
   {
     n: '02',
-    title: 'Nightly AI scout',
-    body: 'While you sleep, Stu sweeps YC, a16z Speedrun, Z Fellows, Thiel Fellows, Emergent, The Residency, GitHub builders and the open web — then scores and tiers every founder by morning.',
+    title: 'Scouts run nightly',
+    body: 'Stu sweeps YC, a16z Speedrun, Z Fellows, Thiel Fellows, GitHub builders and the open web while you sleep.',
   },
   {
     n: '03',
-    title: 'Triage & assess',
-    body: 'Work a keyboard-driven inbox, read structured AI memos on every prospect, and move the real ones into a pipeline built for pre-seed.',
+    title: 'Wake up to the inbox',
+    body: 'A ranked list of founders with AI memos attached. Triage with t and x, move the real ones to pipeline.',
   },
 ];
 
 const pricingIncludes = [
-  'The full sourcing OS — inbox, pipeline, assessments',
-  'Nightly scout sweeps running on your own API keys',
-  'AI founder memos and structured evaluations',
-  'Keyboard-driven triage built for speed',
+  'Full sourcing OS — inbox, pipeline, assessments',
+  'Nightly scout sweeps on your own API keys',
+  'AI founder memos on every prospect',
   'Guided onboarding and setup',
 ];
 
 const faqs = [
   {
     q: 'Who is this for?',
-    a: 'Pre-seed and angel investors who source outside their personal network — people who want a systematic top of funnel without hiring a team of analysts. If your best deals come from work, not warm intros, Stu is built for you.',
+    a: 'Pre-seed and angel investors who source outside their personal network. If your best deals come from work instead of warm intros, Stu is built for you.',
   },
   {
     q: 'Do I need my own API keys?',
-    a: 'Yes. Stu runs on your keys for sourcing and AI, and onboarding walks you through connecting them in a few minutes. That keeps your data, your spend, and your control entirely yours — we never pool keys across users.',
+    a: 'Yes. Stu runs on your keys for sourcing and AI — onboarding walks you through connecting them in minutes. API usage is billed to your own provider accounts, so your spend and your data stay entirely yours. We never pool keys across users.',
   },
   {
     q: 'What happens after the 10 founding seats are claimed?',
-    a: 'Founding pricing closes permanently. Founding members keep full access at the founding price — a single $349 payment, never a subscription.',
+    a: 'Founding pricing closes permanently. Founding members keep full access at the founding terms — a single $349 payment, never a subscription.',
   },
   {
     q: 'Is my data separate from other investors?',
-    a: 'Completely. Your workspace — founders, pipeline, assessments, keys — is fully isolated per user. Nobody else sees your sourcing, and you never see theirs.',
+    a: 'Completely. Your workspace — founders, pipeline, assessments, keys — is fully isolated. Nobody else sees your sourcing, and you never see theirs.',
   },
   {
-    q: 'What do the nightly scouts actually cover?',
+    q: 'What do the nightly scouts cover?',
     a: 'YC, a16z Speedrun, Z Fellows, Thiel Fellows, Emergent, The Residency, GitHub builders, Illinois schools and companies, and the open web. Every profile is AI-scored and tiered before it hits your inbox.',
   },
 ];
@@ -133,11 +125,11 @@ function InboxMock() {
       <div className="inbox-head">
         <div>
           <div className="inbox-title">Source inbox</div>
-          <div className="inbox-sub">Scored overnight · 5 new</div>
+          <div className="inbox-sub">Scored overnight · 4 new</div>
         </div>
         <div className="inbox-counts">
           <span className="inbox-count"><b>2</b> must-meet</span>
-          <span className="inbox-count"><b>2</b> strong</span>
+          <span className="inbox-count"><b>1</b> strong</span>
           <span className="inbox-count"><b>1</b> watch</span>
         </div>
       </div>
@@ -194,14 +186,13 @@ export default function Landing() {
     <div className="landing-page">
       <style>{`
         .landing-page {
-          --bg: #0D0D10;
-          --surface: #16161C;
-          --surface-2: #1B1B23;
-          --border: #23232D;
-          --text-primary: #F0F0F3;
-          --text-secondary: #8A8A9B;
-          --accent: #3B82F6;
-          --accent-soft: rgba(59, 130, 246, 0.12);
+          --bg: #FBFBFA;
+          --surface: #FFFFFF;
+          --border: #E9E7E2;
+          --text-primary: #1A1A1A;
+          --text-secondary: #6E6E6E;
+          --accent: #2563EB;
+          --accent-soft: rgba(37, 99, 235, 0.08);
           background: var(--bg);
           color: var(--text-primary);
           min-height: 100vh;
@@ -209,47 +200,50 @@ export default function Landing() {
           overflow-x: hidden;
           -webkit-font-smoothing: antialiased;
         }
-        .landing-page *::selection { background: rgba(59, 130, 246, 0.25); }
+        .landing-page *::selection { background: rgba(37, 99, 235, 0.15); }
         .landing-page a { text-decoration: none; }
 
         .lp-wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
-        .lp-section { padding: 110px 0; position: relative; }
+        .lp-section { padding: 96px 0; }
 
         /* entrance */
-        .landing-fade { opacity: 0; transform: translateY(24px); animation: landingReveal 0.7s ease forwards; }
+        .landing-fade { opacity: 0; transform: translateY(20px); animation: landingReveal 0.6s ease forwards; }
         .landing-fade-d1 { animation-delay: 0.08s; }
-        .landing-fade-d2 { animation-delay: 0.18s; }
-        .landing-fade-d3 { animation-delay: 0.3s; }
-        .landing-fade-d4 { animation-delay: 0.42s; }
-        .landing-fade-d5 { animation-delay: 0.54s; }
+        .landing-fade-d2 { animation-delay: 0.16s; }
+        .landing-fade-d3 { animation-delay: 0.26s; }
+        .landing-fade-d4 { animation-delay: 0.36s; }
         @keyframes landingReveal { to { opacity: 1; transform: translateY(0); } }
 
-        /* nav */
+        /* sticky nav — one primary CTA always visible */
         .lp-nav {
+          position: sticky; top: 0; z-index: 50;
+          background: rgba(251, 251, 250, 0.88);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border-bottom: 1px solid var(--border);
+        }
+        .lp-nav-inner {
           display: flex; justify-content: space-between; align-items: center;
-          max-width: 1120px; margin: 0 auto; padding: 22px 24px 0;
+          max-width: 1120px; margin: 0 auto; padding: 14px 24px;
         }
         .lp-brand { display: flex; align-items: center; gap: 10px; }
-        .lp-brand span { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
-        .lp-signin {
-          color: var(--text-secondary); font-size: 14px; font-weight: 500;
-          transition: color 0.15s ease;
-        }
+        .lp-brand span { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; color: var(--text-primary); }
+        .lp-nav-actions { display: flex; align-items: center; gap: 20px; }
+        .lp-signin { color: var(--text-secondary); font-size: 14px; font-weight: 500; transition: color 0.15s ease; }
         .lp-signin:hover { color: var(--text-primary); }
+        .lp-nav-cta {
+          background: var(--text-primary); color: #fff;
+          font-size: 14px; font-weight: 600; padding: 10px 20px; border-radius: 8px;
+          transition: background 0.15s ease, transform 0.15s ease;
+        }
+        .lp-nav-cta:hover { background: #000; transform: translateY(-1px); }
 
         /* hero */
-        .lp-hero { text-align: center; padding: 110px 24px 70px; position: relative; }
-        .lp-hero::before {
-          content: ''; position: absolute; inset: 0; pointer-events: none;
-          background:
-            radial-gradient(600px 300px at 50% -60px, rgba(59,130,246,0.14), transparent 70%),
-            radial-gradient(400px 200px at 85% 40%, rgba(59,130,246,0.05), transparent 70%);
-        }
+        .lp-hero { text-align: center; padding: 88px 24px 56px; }
         .lp-eyebrow {
           display: inline-flex; align-items: center; gap: 8px;
           font-size: 13px; font-weight: 500; color: var(--text-secondary);
           border: 1px solid var(--border); border-radius: 999px;
-          padding: 7px 16px; margin-bottom: 28px; background: rgba(22,22,28,0.6);
+          padding: 7px 16px; margin-bottom: 26px; background: var(--surface);
         }
         .lp-eyebrow .dot {
           width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
@@ -257,57 +251,43 @@ export default function Landing() {
         }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
         .lp-h1 {
-          font-size: clamp(40px, 6vw, 68px); font-weight: 700;
-          letter-spacing: -0.04em; line-height: 1.04; margin: 0 0 22px;
+          font-size: clamp(38px, 5.6vw, 60px); font-weight: 700;
+          letter-spacing: -0.04em; line-height: 1.06; margin: 0 0 20px;
         }
         .lp-sub {
-          font-size: clamp(16px, 2.2vw, 19px); color: var(--text-secondary);
-          line-height: 1.65; max-width: 640px; margin: 0 auto 42px;
+          font-size: clamp(16px, 2vw, 18px); color: var(--text-secondary);
+          line-height: 1.6; max-width: 600px; margin: 0 auto 36px;
         }
-        .lp-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; position: relative; }
+        .lp-ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
         .lp-cta {
           display: inline-flex; align-items: center; gap: 8px;
           background: var(--accent); color: #fff; font-weight: 600; font-size: 15px;
           padding: 14px 30px; border-radius: 10px;
           transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
-          box-shadow: 0 8px 30px rgba(59,130,246,0.25);
+          box-shadow: 0 10px 28px rgba(37, 99, 235, 0.28);
         }
-        .lp-cta:hover { background: #2563EB; transform: translateY(-1px); }
-        .lp-cta-ghost {
-          display: inline-flex; align-items: center; gap: 8px;
-          background: transparent; border: 1px solid var(--border);
-          color: var(--text-secondary); font-weight: 500; font-size: 15px;
-          padding: 14px 30px; border-radius: 10px; transition: all 0.2s ease;
-        }
-        .lp-cta-ghost:hover { border-color: rgba(59,130,246,0.4); color: var(--text-primary); }
+        .lp-cta:hover { background: #1D4ED8; transform: translateY(-1px); }
+        .lp-micro { font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
 
         /* ── inbox mock ── */
-        .inbox-shell { max-width: 880px; margin: 0 auto; position: relative; }
-        .inbox-shell::before {
-          content: ''; position: absolute; inset: -40px -60px; pointer-events: none;
-          background: radial-gradient(500px 260px at 50% 0%, rgba(59,130,246,0.10), transparent 70%);
-        }
-        .inbox-caption {
-          text-align: center; font-size: 13px; color: var(--text-secondary);
-          margin-top: 18px;
-        }
+        .inbox-shell { max-width: 880px; margin: 0 auto; }
+        .inbox-caption { text-align: center; font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
         .inbox-mock {
-          position: relative; background: var(--surface);
+          background: var(--surface);
           border: 1px solid var(--border); border-radius: 16px;
           overflow: hidden; text-align: left;
-          box-shadow: 0 30px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.02) inset;
+          box-shadow: 0 24px 70px rgba(26, 26, 26, 0.10), 0 2px 6px rgba(26, 26, 26, 0.06);
         }
         .inbox-chrome {
           display: flex; align-items: center; gap: 12px;
           padding: 12px 16px; border-bottom: 1px solid var(--border);
-          background: rgba(0,0,0,0.25);
+          background: #F5F4F1;
         }
         .inbox-dots { display: flex; gap: 6px; }
-        .inbox-dots span { width: 10px; height: 10px; border-radius: 50%; background: #3A3A46; }
-        .inbox-dots span:first-child { background: #4A4A58; }
+        .inbox-dots span { width: 10px; height: 10px; border-radius: 50%; background: #D8D5CE; }
         .inbox-url {
           flex: 1; font-size: 12px; color: var(--text-secondary);
-          background: rgba(0,0,0,0.3); border: 1px solid var(--border);
+          background: var(--surface); border: 1px solid var(--border);
           border-radius: 6px; padding: 5px 12px; max-width: 280px;
         }
         .inbox-badge {
@@ -317,19 +297,19 @@ export default function Landing() {
         }
         .inbox-head {
           display: flex; justify-content: space-between; align-items: center;
-          padding: 20px 24px 16px; flex-wrap: wrap; gap: 12px;
+          padding: 20px 24px 14px; flex-wrap: wrap; gap: 12px;
         }
         .inbox-title { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
         .inbox-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
         .inbox-counts { display: flex; gap: 8px; }
         .inbox-count {
           font-size: 12px; color: var(--text-secondary);
-          background: var(--surface-2); border: 1px solid var(--border);
+          background: #F5F4F1; border: 1px solid var(--border);
           border-radius: 999px; padding: 5px 12px;
         }
         .inbox-count b { color: var(--text-primary); font-weight: 600; }
         .inbox-body { padding: 4px 16px 8px; }
-        .inbox-tier { margin-bottom: 14px; }
+        .inbox-tier { margin-bottom: 12px; }
         .inbox-tier-label {
           display: flex; align-items: center; gap: 8px;
           font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
@@ -338,22 +318,22 @@ export default function Landing() {
         .inbox-tier-dot { width: 7px; height: 7px; border-radius: 50%; }
         .inbox-row {
           display: flex; gap: 16px; align-items: flex-start;
-          background: var(--surface-2); border: 1px solid var(--border);
+          background: #FAF9F7; border: 1px solid var(--border);
           border-radius: 12px; padding: 16px 18px; margin-bottom: 8px;
-          transition: border-color 0.2s ease;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
-        .inbox-row:hover { border-color: rgba(59,130,246,0.35); }
-        .inbox-score { min-width: 64px; }
+        .inbox-row:hover { border-color: rgba(37, 99, 235, 0.4); box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08); }
+        .inbox-score { min-width: 60px; }
         .inbox-score-num { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
-        .inbox-score-bar { height: 4px; background: #2A2A36; border-radius: 4px; margin-top: 6px; overflow: hidden; }
-        .inbox-score-fill { height: 100%; background: linear-gradient(90deg, #2563EB, #60A5FA); border-radius: 4px; }
+        .inbox-score-bar { height: 4px; background: #E9E7E2; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+        .inbox-score-fill { height: 100%; background: linear-gradient(90deg, #1D4ED8, #60A5FA); border-radius: 4px; }
         .inbox-main { flex: 1; min-width: 0; }
         .inbox-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
         .inbox-company { font-weight: 400; color: var(--text-secondary); }
         .inbox-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
         .inbox-chip {
-          font-size: 11px; font-weight: 500; color: #9DB9E8;
-          background: var(--accent-soft); border: 1px solid rgba(59,130,246,0.25);
+          font-size: 11px; font-weight: 500; color: #1D4ED8;
+          background: var(--accent-soft); border: 1px solid rgba(37, 99, 235, 0.2);
           border-radius: 6px; padding: 3px 8px; white-space: nowrap;
         }
         .inbox-note { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
@@ -362,71 +342,65 @@ export default function Landing() {
           font-size: 11px; font-weight: 600; color: var(--text-secondary);
           border: 1px solid var(--border); border-radius: 6px;
           width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
-          background: rgba(0,0,0,0.25);
+          background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
         .inbox-foot {
           display: flex; gap: 20px; justify-content: center;
-          padding: 14px; border-top: 1px solid var(--border);
-          font-size: 12px; color: var(--text-secondary); background: rgba(0,0,0,0.2);
+          padding: 13px; border-top: 1px solid var(--border);
+          font-size: 12px; color: var(--text-secondary); background: #F5F4F1;
         }
         .inbox-foot b {
           display: inline-block; min-width: 18px; text-align: center;
           border: 1px solid var(--border); border-radius: 4px;
           padding: 1px 5px; margin-right: 5px; color: var(--text-primary); font-weight: 600;
-          background: rgba(255,255,255,0.03);
+          background: var(--surface);
         }
 
         /* stats band */
-        .lp-stats {
-          border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-          background: rgba(22,22,28,0.5);
-        }
+        .lp-stats { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
         .lp-stats-grid {
           display: grid; grid-template-columns: repeat(4, 1fr);
           max-width: 1120px; margin: 0 auto; padding: 0 24px;
         }
-        .lp-stat { padding: 40px 24px; text-align: center; border-left: 1px solid var(--border); }
+        .lp-stat { padding: 36px 20px; text-align: center; border-left: 1px solid var(--border); }
         .lp-stat:first-child { border-left: none; }
-        .lp-stat-value { font-size: 34px; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 6px; }
-        .lp-stat-label { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+        .lp-stat-value { font-size: 32px; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 4px; }
+        .lp-stat-label { font-size: 13px; color: var(--text-secondary); line-height: 1.45; }
         .lp-band-note {
-          text-align: center; font-size: 13px; color: var(--text-secondary);
-          max-width: 1120px; margin: 0 auto; padding: 18px 24px 0;
+          text-align: center; font-size: 12.5px; color: var(--text-secondary);
+          max-width: 1120px; margin: 0 auto; padding: 16px 24px 0;
         }
 
         /* section headers */
         .lp-kicker {
           font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
-          color: var(--accent); margin-bottom: 16px;
+          color: var(--accent); margin-bottom: 14px;
         }
         .lp-h2 {
-          font-size: clamp(28px, 4vw, 42px); font-weight: 700;
-          letter-spacing: -0.035em; line-height: 1.1; margin: 0 0 16px;
+          font-size: clamp(28px, 4vw, 40px); font-weight: 700;
+          letter-spacing: -0.035em; line-height: 1.12; margin: 0 0 14px;
         }
-        .lp-lede { font-size: 17px; color: var(--text-secondary); line-height: 1.65; max-width: 620px; margin: 0; }
+        .lp-lede { font-size: 16.5px; color: var(--text-secondary); line-height: 1.6; max-width: 600px; margin: 0; }
         .lp-center { text-align: center; }
         .lp-center .lp-lede { margin: 0 auto; }
 
         /* how it works */
-        .lp-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 56px; }
+        .lp-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 48px; }
         .lp-step {
           background: var(--surface); border: 1px solid var(--border);
-          border-radius: 16px; padding: 32px 28px;
+          border-radius: 14px; padding: 28px 26px;
         }
-        .lp-step-n {
-          font-size: 13px; font-weight: 700; letter-spacing: 0.1em;
-          color: var(--accent); margin-bottom: 18px;
-        }
-        .lp-step h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 10px; }
-        .lp-step p { font-size: 14.5px; color: var(--text-secondary); line-height: 1.65; margin: 0; }
+        .lp-step-n { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 14px; }
+        .lp-step h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; }
+        .lp-step p { font-size: 14.5px; color: var(--text-secondary); line-height: 1.6; margin: 0; }
 
         /* pricing */
         .lp-price-card {
-          max-width: 560px; margin: 56px auto 0;
-          background: linear-gradient(180deg, rgba(59,130,246,0.08), rgba(59,130,246,0.02));
-          border: 1px solid rgba(59,130,246,0.35); border-radius: 20px;
-          padding: 48px 44px; text-align: center; position: relative;
-          box-shadow: 0 24px 70px rgba(59,130,246,0.12);
+          max-width: 520px; margin: 48px auto 0;
+          background: var(--surface);
+          border: 1.5px solid rgba(37, 99, 235, 0.4); border-radius: 20px;
+          padding: 44px 40px; text-align: center; position: relative;
+          box-shadow: 0 24px 70px rgba(37, 99, 235, 0.12);
         }
         .lp-price-flag {
           position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
@@ -434,38 +408,42 @@ export default function Landing() {
           letter-spacing: 0.06em; text-transform: uppercase;
           padding: 6px 16px; border-radius: 999px; white-space: nowrap;
         }
-        .lp-price-name { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
-        .lp-price { font-size: 56px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+        .lp-price { font-size: 54px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; margin-top: 6px; }
         .lp-price-once { font-size: 14px; color: var(--text-secondary); margin-top: 10px; }
         .lp-price-once b { color: var(--text-primary); font-weight: 600; }
-        .lp-price-list { list-style: none; margin: 32px 0; padding: 0; text-align: left; }
+        .lp-price-list { list-style: none; margin: 28px 0; padding: 0; text-align: left; }
         .lp-price-list li {
           display: flex; gap: 12px; align-items: flex-start;
-          font-size: 15px; color: var(--text-primary); padding: 9px 0;
-          border-bottom: 1px solid rgba(35,35,45,0.6);
+          font-size: 14.5px; color: var(--text-primary); padding: 8px 0;
+          border-bottom: 1px solid #F1EFEA;
         }
         .lp-price-list li:last-child { border-bottom: none; }
         .lp-check { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
-        .lp-seats-note { font-size: 13px; color: var(--text-secondary); margin-top: 20px; line-height: 1.6; }
+        .lp-seats-note { font-size: 13px; color: var(--text-secondary); margin-top: 18px; line-height: 1.6; }
 
         /* faq */
-        .lp-faq { max-width: 720px; margin: 48px auto 0; }
+        .lp-faq { max-width: 700px; margin: 40px auto 0; }
         .lp-faq-item {
           border: 1px solid var(--border); border-radius: 12px;
-          margin-bottom: 12px; background: var(--surface); overflow: hidden;
+          margin-bottom: 10px; background: var(--surface); overflow: hidden;
         }
         .lp-faq-item summary {
-          cursor: pointer; padding: 20px 24px; font-size: 16px; font-weight: 600;
+          cursor: pointer; padding: 18px 22px; font-size: 15.5px; font-weight: 600;
           letter-spacing: -0.01em; list-style: none;
           display: flex; justify-content: space-between; align-items: center; gap: 16px;
         }
         .lp-faq-item summary::-webkit-details-marker { display: none; }
         .lp-faq-item summary .plus { color: var(--accent); font-size: 20px; font-weight: 400; flex-shrink: 0; transition: transform 0.2s ease; }
         .lp-faq-item[open] summary .plus { transform: rotate(45deg); }
-        .lp-faq-item .lp-faq-a { padding: 0 24px 22px; font-size: 15px; color: var(--text-secondary); line-height: 1.7; }
+        .lp-faq-item .lp-faq-a { padding: 0 22px 20px; font-size: 14.5px; color: var(--text-secondary); line-height: 1.65; }
+
+        /* final cta */
+        .lp-final { text-align: center; padding: 40px 24px 96px; }
+        .lp-final h2 { font-size: clamp(26px, 3.6vw, 36px); font-weight: 700; letter-spacing: -0.03em; margin: 0 0 12px; }
+        .lp-final p { font-size: 15.5px; color: var(--text-secondary); margin: 0 0 28px; }
 
         /* footer */
-        .lp-footer { border-top: 1px solid var(--border); padding: 48px 0 40px; }
+        .lp-footer { border-top: 1px solid var(--border); padding: 44px 0 36px; background: var(--surface); }
         .lp-footer-inner {
           max-width: 1120px; margin: 0 auto; padding: 0 24px;
           display: flex; justify-content: space-between; align-items: flex-start;
@@ -478,28 +456,34 @@ export default function Landing() {
 
         @media (max-width: 860px) {
           .lp-stats-grid { grid-template-columns: repeat(2, 1fr); }
-          .lp-stat { padding: 28px 16px; }
+          .lp-stat { padding: 24px 14px; }
           .lp-stat:nth-child(3) { border-left: none; }
-          .lp-stat-value { font-size: 28px; }
+          .lp-stat-value { font-size: 26px; }
           .lp-steps { grid-template-columns: 1fr; }
-          .lp-section { padding: 72px 0; }
-          .lp-hero { padding: 72px 24px 48px; }
+          .lp-section { padding: 64px 0; }
+          .lp-hero { padding: 64px 24px 40px; }
           .inbox-head { padding: 16px; }
           .inbox-body { padding: 4px 10px 8px; }
           .inbox-row { padding: 14px; gap: 12px; }
           .inbox-keys { display: none; }
           .inbox-foot { gap: 14px; font-size: 11px; }
-          .lp-price-card { padding: 40px 28px; }
+          .lp-price-card { padding: 36px 26px; }
+          .lp-nav-cta { padding: 9px 16px; }
         }
       `}</style>
 
-      {/* ── NAV ── */}
-      <nav className="lp-nav landing-fade">
-        <div className="lp-brand">
-          <StuLogo size={28} />
-          <span>Stu</span>
+      {/* ── STICKY NAV ── */}
+      <nav className="lp-nav">
+        <div className="lp-nav-inner">
+          <div className="lp-brand">
+            <StuLogo size={28} />
+            <span>Stu</span>
+          </div>
+          <div className="lp-nav-actions">
+            <Link to="/login" className="lp-signin">Sign in</Link>
+            <Link to="/signup" className="lp-nav-cta">Claim a founding seat</Link>
+          </div>
         </div>
-        <Link to="/login" className="lp-signin">Sign in</Link>
       </nav>
 
       {/* ── HERO ── */}
@@ -507,17 +491,15 @@ export default function Landing() {
         <div className="landing-fade landing-fade-d1">
           <span className="lp-eyebrow">
             <span className="dot" />
-            Founding seats now open — 10 available
+            Founding seats open — 10 available at $349
           </span>
         </div>
         <h1 className="lp-h1 landing-fade landing-fade-d2">
-          The AI sourcing OS<br />for pre-seed investors.
+          Wake up to a ranked inbox<br />of pre-seed founders.
         </h1>
         <p className="lp-sub landing-fade landing-fade-d3">
-          Stu runs nightly AI scout sweeps across YC, a16z Speedrun, Z&nbsp;Fellows,
-          Thiel Fellows, Emergent, The Residency, GitHub builders and the open web —
-          then scores every founder, tiers your inbox, and drafts the memo before
-          your first coffee.
+          Nightly AI scout sweeps across YC, a16z Speedrun, Z&nbsp;Fellows, Thiel Fellows,
+          GitHub builders and the open web — scored, tiered, and memo&rsquo;d before your first coffee.
         </p>
         <div className="lp-ctas landing-fade landing-fade-d4">
           <Link to="/signup" className="lp-cta">
@@ -526,13 +508,15 @@ export default function Landing() {
               <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </Link>
-          <Link to="/login" className="lp-cta-ghost">Sign in</Link>
+        </div>
+        <div className="lp-micro landing-fade landing-fade-d4">
+          One-time payment. Not a subscription.
         </div>
       </section>
 
       {/* ── PRODUCT VISUAL ── */}
-      <section style={{ padding: '20px 24px 110px' }}>
-        <div className="inbox-shell landing-fade landing-fade-d5">
+      <section style={{ padding: '16px 24px 96px' }}>
+        <div className="inbox-shell landing-fade landing-fade-d4">
           <InboxMock />
           <div className="inbox-caption">
             Illustrative sample — your inbox fills overnight with real founders from your scouts.
@@ -562,8 +546,7 @@ export default function Landing() {
             <div className="lp-kicker">How it works</div>
             <h2 className="lp-h2">Set it up once.<br />Wake up to deal flow.</h2>
             <p className="lp-lede">
-              No analysts, no scrapers to babysit, no tabs open at midnight.
-              Three steps and the machine runs itself.
+              No analysts. No scrapers to babysit. Three steps and the machine runs itself.
             </p>
           </div>
           <div className="lp-steps">
@@ -583,18 +566,16 @@ export default function Landing() {
         <div className="lp-wrap">
           <div className="lp-center landing-fade">
             <div className="lp-kicker">Pricing</div>
-            <h2 className="lp-h2">One seat. One payment.<br />Yours for good.</h2>
+            <h2 className="lp-h2">One payment. Yours for good.</h2>
             <p className="lp-lede">
-              Founding members get the full product at the founding price —
-              a single payment, not a subscription.
+              Founding members get the full product at the founding price — once.
             </p>
           </div>
           <div className="lp-price-card landing-fade landing-fade-d2">
             <div className="lp-price-flag">Founding seat</div>
-            <div className="lp-price-name">Stu — full sourcing OS</div>
             <div className="lp-price">$349</div>
             <div className="lp-price-once">
-              <b>One-time payment.</b> Not a subscription — you pay once, you keep access.
+              <b>One-time.</b> Not a subscription — you pay once, you keep access.
             </div>
             <ul className="lp-price-list">
               {pricingIncludes.map(item => (
@@ -613,8 +594,7 @@ export default function Landing() {
               </svg>
             </Link>
             <div className="lp-seats-note">
-              10 founding seats, total. When they're claimed, founding pricing closes permanently.
-              No countdown timers — just a real cap.
+              10 founding seats, total. When they&rsquo;re claimed, founding pricing closes permanently.
             </div>
           </div>
         </div>
@@ -629,7 +609,7 @@ export default function Landing() {
           </div>
           <div className="lp-faq">
             {faqs.map((f, i) => (
-              <details key={f.q} className={`lp-faq-item landing-fade landing-fade-d${Math.min(i + 1, 5)}`}>
+              <details key={f.q} className={`lp-faq-item landing-fade landing-fade-d${Math.min(i + 1, 4)}`}>
                 <summary>
                   {f.q}
                   <span className="plus">+</span>
@@ -638,6 +618,20 @@ export default function Landing() {
               </details>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── FINAL CTA ── */}
+      <section className="lp-final">
+        <div className="landing-fade">
+          <h2>Your inbox could be full by tomorrow.</h2>
+          <p>10 founding seats. One-time $349. When they&rsquo;re gone, they&rsquo;re gone.</p>
+          <Link to="/signup" className="lp-cta">
+            Claim a founding seat
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </Link>
         </div>
       </section>
 

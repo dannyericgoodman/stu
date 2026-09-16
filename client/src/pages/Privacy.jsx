@@ -37,8 +37,8 @@ export default function Privacy() {
     <div className="legal-page">
       <style>{`
         .legal-page {
-          --bg: #0D0D10; --surface: #16161C; --border: #23232D;
-          --text-primary: #F0F0F3; --text-secondary: #8A8A9B; --accent: #3B82F6;
+          --bg: #FBFBFA; --surface: #FFFFFF; --border: #E9E7E2;
+          --text-primary: #1A1A1A; --text-secondary: #6E6E6E; --accent: #2563EB;
           background: var(--bg); color: var(--text-primary);
           min-height: 100vh; font-family: 'DM Sans', system-ui, sans-serif;
           -webkit-font-smoothing: antialiased;
