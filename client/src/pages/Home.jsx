@@ -54,6 +54,7 @@ export default function Home() {
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);   // what was just set running
+  const [triaged, setTriaged] = useState(null); // what was just triaged from This Morning
 
   function loadAgents() { api.getAgents({ fresh: true }).then(setAgents).catch(() => {}); }
 
@@ -93,6 +94,38 @@ export default function Home() {
     } catch (e) {
       // Say what failed, in its own words. `/read` in particular refuses politely
       // and usefully ("Nothing to read yet — add a deck or call notes first").
+      setErr(e.message);
+    }
+  }
+
+  // ── This Morning triage ──
+  // The shortlist is triageable in place: Add to Pipeline (interested → Watching,
+  // published to the team's Airtable) or Pass, without opening the Source inbox.
+  // Same endpoints the inbox uses; the row leaves the list optimistically and a
+  // failure puts it back rather than pretending it worked.
+  async function triageShortlist(f, action) {
+    const before = shortlist;
+    setShortlist((s) => s && ({
+      ...s,
+      founders: s.founders.filter((x) => x.id !== f.id),
+      count: s.count - 1,
+      new_today: Math.max(0, s.new_today - (f.is_new ? 1 : 0)),
+    }));
+    try {
+      if (action === 'watch') {
+        const founder = await api.watchSourced(f.id);
+        const at = founder?.airtable;
+        const atNote = at?.created ? ' · in Airtable as Watching'
+          : at?.error ? ` · Airtable publish failed: ${at.error}`
+          : at?.skipped ? ` · Airtable skipped (${at.skipped})` : '';
+        setTriaged({ text: `${f.company || f.name} is on the pipeline as Watching${atNote}.` });
+      } else {
+        await api.dismissSourced(f.id);
+        setTriaged({ text: `${f.company || f.name} passed.` });
+      }
+      setTimeout(() => setTriaged((t) => (t && t.text.startsWith(f.company || f.name) ? null : t)), 8000);
+    } catch (e) {
+      setShortlist(before);
       setErr(e.message);
     }
   }
@@ -234,7 +267,7 @@ export default function Home() {
             prioritized, ranked list — both updated in the morning before I wake up."
             The inbox lives on Source and holds everything that cleared the gates.
             This is the short one: the handful worth his attention today. */}
-        <Shortlist data={shortlist} nav={nav} />
+        <Shortlist data={shortlist} nav={nav} onTriage={triageShortlist} triaged={triaged} onClearTriaged={() => setTriaged(null)} />
 
         {/* ── 4. WHAT NEEDS HIM ── only rows that are a task. */}
         <div className="border border-line-2 rounded-md bg-ground mb-4">
@@ -322,7 +355,7 @@ function externalUrl(u) {
   return /^https?:\/\//i.test(t) ? t : `https://${t.replace(/^\/+/, '')}`;
 }
 
-function Shortlist({ data, nav }) {
+function Shortlist({ data, nav, onTriage, triaged, onClearTriaged }) {
   if (!data) {
     return (
       <div className="border border-line-2 rounded-md bg-ground mb-4">
@@ -347,6 +380,15 @@ function Shortlist({ data, nav }) {
           </span>
         )}
       </div>
+
+      {/* Triage confirmation — a triage action that vanishes silently feels like
+          a delete, so the list says what just happened. */}
+      {triaged && (
+        <div className="flex items-center gap-2 px-3 h-6 border-b border-line bg-accent-soft text-mini text-ink">
+          <span className="flex-1 truncate">{triaged.text}</span>
+          <button className="text-ink-4 hover:text-ink-2 flex-none" onClick={onClearTriaged}>Dismiss</button>
+        </div>
+      )}
 
       {data.count === 0 ? (
         // Silence must mean "I looked". An empty list states that it ran.
@@ -389,6 +431,22 @@ function Shortlist({ data, nav }) {
                   Inbox
                 </button>
               )}
+              {/* Triage in place — the inbox's verbs, here. Add to Pipeline means
+                  interested: Watching in Stu, 4 · Watching in the team's Airtable. */}
+              <button
+                onClick={() => onTriage(f, 'watch')}
+                className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition flex-none"
+                title="Add to pipeline as Watching — also publishes to the team's Airtable"
+              >
+                Add to Pipeline
+              </button>
+              <button
+                onClick={() => onTriage(f, 'dismiss')}
+                className="px-2 h-5 rounded text-mini text-ink-3 border border-line-2 hover:bg-ground-4 hover:text-ink transition flex-none"
+                title="Pass for now"
+              >
+                Pass
+              </button>
             </div>
 
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
