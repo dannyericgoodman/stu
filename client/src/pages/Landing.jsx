@@ -78,13 +78,6 @@ const steps = [
   },
 ];
 
-const pricingIncludes = [
-  'Full sourcing OS — inbox, pipeline, assessments',
-  'Nightly scout sweeps on your own API keys',
-  'AI founder memos on every prospect',
-  'Guided onboarding and setup',
-];
-
 const faqs = [
   {
     q: 'Who is this for?',
@@ -262,8 +255,6 @@ export default function Landing() {
           box-shadow: 0 10px 28px rgba(37, 99, 235, 0.28);
         }
         .lp-cta:hover { background: #1D4ED8; transform: translateY(-1px); }
-        .lp-micro { font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
-
         /* ── inbox mock ── */
         .inbox-shell { max-width: 880px; margin: 0 auto; }
         .inbox-caption { text-align: center; font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
@@ -389,33 +380,6 @@ export default function Landing() {
         .lp-step h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; }
         .lp-step p { font-size: 14.5px; color: var(--text-secondary); line-height: 1.6; margin: 0; }
 
-        /* pricing */
-        .lp-price-card {
-          max-width: 520px; margin: 48px auto 0;
-          background: var(--surface);
-          border: 1.5px solid rgba(37, 99, 235, 0.4); border-radius: 20px;
-          padding: 44px 40px; text-align: center; position: relative;
-          box-shadow: 0 24px 70px rgba(37, 99, 235, 0.12);
-        }
-        .lp-price-flag {
-          position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
-          background: var(--accent); color: #fff; font-size: 12px; font-weight: 600;
-          letter-spacing: 0.06em; text-transform: uppercase;
-          padding: 6px 16px; border-radius: 999px; white-space: nowrap;
-        }
-        .lp-price { font-size: 54px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; margin-top: 6px; }
-        .lp-price-once { font-size: 14px; color: var(--text-secondary); margin-top: 10px; }
-        .lp-price-once b { color: var(--text-primary); font-weight: 600; }
-        .lp-price-list { list-style: none; margin: 28px 0; padding: 0; text-align: left; }
-        .lp-price-list li {
-          display: flex; gap: 12px; align-items: flex-start;
-          font-size: 14.5px; color: var(--text-primary); padding: 8px 0;
-          border-bottom: 1px solid #F1EFEA;
-        }
-        .lp-price-list li:last-child { border-bottom: none; }
-        .lp-check { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
-        .lp-seats-note { font-size: 13px; color: var(--text-secondary); margin-top: 18px; line-height: 1.6; }
-
         /* faq */
         .lp-faq { max-width: 700px; margin: 40px auto 0; }
         .lp-faq-item {
@@ -462,7 +426,6 @@ export default function Landing() {
           .inbox-row { padding: 14px; gap: 12px; }
           .inbox-keys { display: none; }
           .inbox-foot { gap: 14px; font-size: 11px; }
-          .lp-price-card { padding: 36px 26px; }
           .lp-nav-cta { padding: 9px 16px; }
         }
       `}</style>
@@ -505,9 +468,6 @@ export default function Landing() {
             </svg>
           </Link>
         </div>
-        <div className="lp-micro landing-fade landing-fade-d4">
-          One-time payment. Not a subscription.
-        </div>
       </section>
 
       {/* ── PRODUCT VISUAL ── */}
@@ -545,7 +505,7 @@ export default function Landing() {
               The established platforms charge five figures a year. I built the version
               I wanted to use every morning — the nightly sweep, the ranked inbox, memos
               that show their work — and ran it daily for the better part of a year.
-              Now it&rsquo;s yours, for one payment.
+              Now it&rsquo;s yours.
             </p>
           </div>
           <div className="lp-steps">
@@ -556,42 +516,6 @@ export default function Landing() {
                 <p>{s.body}</p>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ── PRICING ── */}
-      <section className="lp-section" style={{ paddingTop: 0 }}>
-        <div className="lp-wrap">
-          <div className="lp-center landing-fade">
-            <div className="lp-kicker">Pricing</div>
-            <h2 className="lp-h2">One payment. Yours for good.</h2>
-            <p className="lp-lede">
-              The sourcing power of the five-figure platforms — one payment, yours to keep.
-            </p>
-          </div>
-          <div className="lp-price-card landing-fade landing-fade-d2">
-            <div className="lp-price-flag">Stu</div>
-            <div className="lp-price">Pay once</div>
-            <div className="lp-price-once">
-              <b>One-time.</b> Not a subscription — pay once, keep access. Price shown at checkout.
-            </div>
-            <ul className="lp-price-list">
-              {pricingIncludes.map(item => (
-                <li key={item}>
-                  <svg className="lp-check" width="18" height="18" viewBox="0 0 18 18" fill="none">
-                    <path d="M3.5 9.5L7.5 13.5L14.5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  {item}
-                </li>
-              ))}
-            </ul>
-            <Link to="/signup" className="lp-cta" style={{ width: '100%', justifyContent: 'center' }}>
-              Get access
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </Link>
           </div>
         </div>
       </section>
@@ -621,7 +545,6 @@ export default function Landing() {
       <section className="lp-final">
         <div className="landing-fade">
           <h2>Your inbox could be full by tomorrow.</h2>
-          <p>One-time payment. Yours to keep.</p>
           <Link to="/signup" className="lp-cta">
             Get access
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
