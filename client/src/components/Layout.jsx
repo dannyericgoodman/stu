@@ -88,6 +88,8 @@ export default function Layout({ children }) {
     : utilityConfig;
   const [utilOpen, setUtilOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
 
 
   // Detect new deploys: capture the version this tab loaded with, then re-check on
