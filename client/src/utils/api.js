@@ -212,6 +212,7 @@ async function request(path, options = {}) {
     const e = new Error(err.error || 'Request failed');
     if (err.code) e.code = err.code; // preserve backend codes (no_key, spend_cap_exceeded, …)
     e.status = res.status;
+    e.body = err; // full body — e.g. { errors: [...] } on validation failures
     throw e;
   }
 
@@ -295,6 +296,15 @@ export const api = {
   getStewardOperator: (id) => request(`/assessments/${id}/steward-operator`),
   runStewardOperator: (id) => request(`/assessments/${id}/steward-operator`, { method: 'POST' }),
   pushAssessmentToNotion: (id) => request(`/assessments/${id}/push-to-notion`, { method: 'POST' }),
+
+  // Assessment Architect — the investor's own evaluation frameworks
+  getRubrics: () => request('/rubrics'),
+  createRubric: (data) => request('/rubrics', { method: 'POST', body: JSON.stringify(data) }),
+  updateRubric: (id, data) => request(`/rubrics/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteRubric: (id) => request(`/rubrics/${id}`, { method: 'DELETE' }),
+  duplicateRubric: (id) => request(`/rubrics/${id}/duplicate`, { method: 'POST' }),
+  setDefaultRubric: (id) => request(`/rubrics/${id}/default`, { method: 'POST' }),
+  generateRubric: (data) => request('/rubrics/generate', { method: 'POST', body: JSON.stringify(data) }),
 
   // Memos
   getMemos: (founderId) => request(`/memos/${founderId}`),

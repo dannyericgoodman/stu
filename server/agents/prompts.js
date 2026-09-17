@@ -10,6 +10,10 @@
 // do not decide.
 // ══════════════════════════════════════════════════════════
 
+// Score labels for rubric dimension minimums (used by buildRubricPrompt).
+// conviction.js never requires prompts.js, so this is cycle-free.
+const { RUNG_LABEL } = require('../lib/conviction');
+
 // ── The house rules every scoring agent inherits ──
 //
 // This block exists because the honesty was already written — it just lived in the
@@ -237,6 +241,118 @@ Return JSON (no markdown wrapping):
 }`,
   user: (context) => `Score this founder against the Founder Rubric. Abstain (null) wherever the materials do not support a judgment — that is the honest answer and it is more useful than a guess.\n\n${context}`,
 };
+
+// ── Assessment Architect: build a rubric prompt from any rubric ─────────
+// The rubric agent is generic: it scores whatever dimensions the user's rubric
+// defines, each phrased as a question, with evidence or an explicit abstain.
+// The wire format is IDENTICAL to founderRubric's (movements keyed by dimension
+// key, each {score, evidence, quotes}) so verify.js, the conviction engine, and
+// the detail UI work unchanged. The extra fields — top_risks, veto,
+// recommendation, one_line_conviction — are the memo layer Danny asked for:
+// risks and a veto/red-flag live next to the scores instead of only in prose.
+function buildRubricPrompt(rubric) {
+  const dims = rubric.dimensions || [];
+  const lb = dims.filter((d) => d.load_bearing);
+  const extras = rubric.extras || {};
+  const lbNames = lb.map((d) => d.label).join(' and ') || 'the load-bearing dimensions';
+
+  const dimSections = dims.map((d, i) => {
+    const evNote = d.evidence_strength ? ` · evidence in the literature: ${d.evidence_strength}` : '';
+    const lbMark = d.load_bearing ? ' ★ LOAD-BEARING — this dimension SETS the score, not just nudges it' : '';
+    const minRung = (RUNG_LABEL[d.min_rung] || 'public material').toLowerCase();
+    return `${i + 1}. ${String(d.label).toUpperCase()}${lbMark}  (weight ${d.weight}${evNote})
+   THE QUESTION: "${d.question}"
+   ${(d.guidance || '').split('\n').map((l) => '   ' + l.trim()).join('\n').trim()}
+   Do not score this below ${minRung}. If the materials don't reach that bar, return null — never guess.`;
+  }).join('\n\n');
+
+  const movementKeys = dims.map((d) => `    "${d.key}": { "score": 1-10 or null, "evidence": "2-3 sentences answering THE QUESTION with specifics. Quote them. If null, say exactly what is missing and what question would settle it.", "quotes": ["direct quotes from the materials, verbatim"] }`).join(',\n');
+
+  const driveBlock = extras.drive_lens ? `
+════════ THE DRIVE LENS — ${String(extras.drive_lens.title || 'DRIVE').toUpperCase()} ════════
+Not a score. A read you carry across all dimensions. It is a VARIANCE AMPLIFIER, not a
+quality filter — hold it honestly rather than treating it as a plus.
+${extras.drive_lens.body || ''}` : '';
+
+  const flagsBlock = Array.isArray(extras.yellow_flags) && extras.yellow_flags.length ? `
+════════ YELLOW FLAGS — DOCK, DON'T REWARD ════════
+Set these true only on real evidence. They dock the score in code.
+${extras.yellow_flags.map((f, i) => `${i + 1}. ${f.key} — ${f.label}. ${f.why || f.blurb || ''}`).join('\n')}
+Report them under "flags" in the JSON.` : '';
+
+  const flagKeys = Array.isArray(extras.yellow_flags) && extras.yellow_flags.length
+    ? extras.yellow_flags.map((f) => `    "${f.key}": true/false,`).join('\n')
+    : '';
+
+  // The legacy Founder Rubric prompt had a chip_on_shoulder read. Any rubric
+  // with a drive lens gets the same slot in the output contract. No leading or
+  // trailing commas here — the template adds them so the example JSON stays
+  // valid whether or not a drive lens exists.
+  const chipJson = extras.drive_lens ? `
+  "chip_on_shoulder": {
+    "present": true/false/null,
+    "direction": "work" | "people" | null,
+    "read": "One sentence. Null direction if you can't tell — this is a read, not a checkbox."
+  }` : '';
+
+  const system = `You score founders against a custom evaluation rubric: "${rubric.name}".
+${rubric.description || ''}
+
+${HOUSE}
+
+${VOICE}
+
+Score each dimension 1-10 on EVIDENCE, or null if the materials cannot support a judgment.
+Weights are applied in code — do not compute anything.
+
+════════ THE DIMENSIONS ════════
+${dimSections}
+
+HOW THE SCORE IS COMPUTED — so you score honestly:
+- The load-bearing dimensions (${lbNames}) SET the score. Everything else can only move it ±1.
+- A dimension you cannot evidence from the materials must be null, not a 5. Nulls on
+  load-bearing dimensions mean no score at all — that is the honest answer and it is
+  more useful than a guess.
+- One fatal flaw kills the deal regardless of the scores. If you see one, say so in
+  "veto" — do not average it away.
+${driveBlock}${flagsBlock}
+
+════════ WHAT YOU DO NOT DO ════════
+- You do NOT score the market. Market is a weighed risk note handled elsewhere. A soft market
+  does not lower a founder's score here — great founders navigate and pivot.
+- You do NOT assess personal conviction ("would we want to work with them"). That is the
+  investor's own go/no-go gate and it is deliberately kept away from you so it never inflates
+  a quality score.
+- You do NOT compute the conviction score or apply weights. Code does all of it. Give honest
+  per-dimension judgment and nothing else.
+
+${JSON_RULES}
+
+Return JSON (no markdown wrapping):
+{
+  "movements": {
+${movementKeys}
+  }${chipJson ? `,${chipJson}` : ''},
+  "top_risks": [
+    { "risk": "The single biggest thing that could kill this company.", "why_it_matters": "One sentence.", "mitigation_or_question": "What would de-risk it, or the question that would settle it." }
+  ],
+  "veto": {
+    "present": true/false,
+    "reason": "If true: the single fatal flaw that kills this deal regardless of the scores, in one sentence. Empty string if false."
+  },
+  "flags": {
+${flagKeys}${flagKeys ? '\n' : ''}    "flag_evidence": "If any flag is true, the specific evidence. If all false, empty string."
+  },
+  "recommendation": "pursue" | "watch" | "pass",
+  "one_line_conviction": "One sentence: the single reason to pursue or pass.",
+  "what_would_change_this": ["2-4 specific, askable questions that would move a null to a score or a 6 to an 8. These become the call agenda — make them worth asking."]
+}`;
+
+  return {
+    system,
+    user: (context) => `Score this founder against the rubric "${rubric.name}". Abstain (null) wherever the materials do not support a judgment — that is the honest answer and it is more useful than a guess.\n\n${context}`,
+  };
+}
 
 // ── Agent 1: Team Evaluator ──
 const team = {
@@ -1194,7 +1310,7 @@ THE WORLDVIEW (apply it faithfully; it is the whole reason this lens is in the r
 ${worldview}
 ${calibration ? '\n' + calibration + '\n' : ''}
 YOUR PLACE IN THE SYSTEM:
-You are the DEPTH the reader wants once the verdict has their attention. The conviction SCORE is computed elsewhere in code from the Founder Rubric — you do NOT score the founder, compute a number, or recommend invest/watch/pass. You give this lens's honest, grounded read and the questions it would ask. The other eight lenses will sometimes disagree with you; that is the point — do not soften your read to match a consensus you can't see.
+You are the DEPTH the reader wants once the verdict has their attention. The conviction SCORE is computed elsewhere in code from the rubric — you do NOT score the founder, compute a number, or recommend invest/watch/pass. You give this lens's honest, grounded read and the questions it would ask. The other eight lenses will sometimes disagree with you; that is the point — do not soften your read to match a consensus you can't see.
 
 TWO HARD RULES (both are checked, not trusted):
 1. NEVER FABRICATE. Every claim is grounded in the materials below and cites its source, or is flagged [ASSUMPTION]/[GAP]. Your quotes are verified verbatim against the source in code after this runs — an invented quote or number is caught and shown as unverified. A correctly flagged gap beats a confident guess every time.
@@ -1298,7 +1414,7 @@ ${HOUSE}
 ${VOICE}
 
 ════════ THE VERDICT IS ALREADY DECIDED ════════
-The conviction score/band comes from server/lib/conviction.js (the Founder Rubric's four movements) and is handed to you as a FACT. You explain it — you do not propose it, argue with it, or nudge it. You have NO override. If you think it's wrong, say so plainly in "disagreement_with_score" with the specific reason; a human reads that field. Do not shade the prose to move a number you can't move.
+The conviction score/band comes from server/lib/conviction.js (the rubric's dimensions, named below) and is handed to you as a FACT. You explain it — you do not propose it, argue with it, or nudge it. You have NO override. If you think it's wrong, say so plainly in "disagreement_with_score" with the specific reason; a human reads that field. Do not shade the prose to move a number you can't move.
 
 If conviction is INDETERMINATE there is NO score — this is a company we haven't learned enough about, not a bad one. Write the "what we don't know" case: what the materials established, what's missing, and the one question that would settle it. Do not imply a lean.
 
@@ -1349,9 +1465,16 @@ Return JSON (no markdown wrapping). Every string value is prose in Danny's voice
   },
   "top_priorities": ["The 3-5 questions from the agenda that most change the decision, highest first, each one line."]
 }`,
-  // The panel array, The Bear, and the decided conviction. Kept the same argument
-  // shape spirit as the old synthesis so the orchestrator call site stays legible.
-  user: (panel, bear, conviction, context) => `Chair the room. The verdict below is already decided — explain it, do not re-derive it.
+  // The panel array, The Bear, the decided conviction, and the rubric that judged
+  // this run (name + dimensions so the chair explains the actual yardstick, not
+  // a hard-coded "four movements"). Kept the same argument shape spirit as the
+  // old synthesis so the orchestrator call site stays legible.
+  user: (panel, bear, conviction, context, rubric) => `Chair the room. The verdict below is already decided — explain it, do not re-derive it.
+
+════════ THE RUBRIC THAT JUDGED THIS RUN ════════
+"${(rubric && rubric.name) || 'Founder Rubric'}": ${((rubric && rubric.blurb) || 'The evaluation framework this run was scored against.').trim()}
+Dimensions the conviction was computed from:
+${((rubric && rubric.dimensions) || []).map((d) => `- ${d.label}: ${d.question || d.blurb || ''}`).join('\n') || '- (dimensions not recorded)'}
 
 ════════ THE CONVICTION RESULT (decided in code — a fact, not a proposal) ════════
 ${JSON.stringify(conviction, null, 2)}
@@ -1373,6 +1496,10 @@ ${context}`,
 module.exports = {
   // The conviction layer — the only agent whose scores reach the verdict.
   founderRubric,
+  // buildRubricPrompt(rubric) — the generic rubric agent. founderRubric stays for
+  // Danny's default preset; every other rubric (presets and user-built) goes
+  // through the builder so dimensions are defined by the investor, not the code.
+  buildRubricPrompt,
   // The expert panel — nine named lenses that ARE the depth layer. Eight named
   // traditions here + The Bear (below) make the room of nine. Each writes the
   // shared lens schema; The Bear keeps its own schema because it alone feeds

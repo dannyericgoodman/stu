@@ -93,11 +93,13 @@ function getRubric(id) {
 }
 
 function getPreset(key) {
+  ensureSeeded();
   const row = db.prepare('SELECT * FROM assessment_rubrics WHERE is_preset = 1 AND preset_key = ?').get(key);
   return parseRubric(row);
 }
 
 function listRubrics(userId) {
+  ensureSeeded();
   const rows = db.prepare(
     `SELECT * FROM assessment_rubrics
      WHERE is_preset = 1 OR user_id = ?
@@ -114,6 +116,7 @@ function listRubrics(userId) {
 // Resolve which rubric an assessment runs under:
 //   explicit id (must be visible to the user) → user's default → pre-seed preset.
 function resolveRubric(userId, rubricId) {
+  ensureSeeded();
   if (rubricId) {
     const row = db.prepare(
       'SELECT * FROM assessment_rubrics WHERE id = ? AND (is_preset = 1 OR user_id = ?)'
@@ -194,8 +197,10 @@ function deleteRubric(userId, id) {
   const row = db.prepare('SELECT * FROM assessment_rubrics WHERE id = ? AND user_id = ?').get(id, userId);
   if (!row) throw Object.assign(new Error('Rubric not found.'), { status: 404 });
   const inUse = db.prepare('SELECT COUNT(*) AS n FROM opportunity_assessments WHERE rubric_id = ?').get(id).n;
-  db.prepare('DELETE FROM assessment_rubrics WHERE id = ?').run(id);
+  // Defaults reference the rubric via FK — clear the pointer first so the
+  // delete lands, then the rubric itself.
   db.prepare('DELETE FROM user_rubric_defaults WHERE user_id = ? AND rubric_id = ?').run(userId, id);
+  db.prepare('DELETE FROM assessment_rubrics WHERE id = ?').run(id);
   // Assessments that used it keep their stored output; rubric_id is nulled so
   // re-runs resolve to the default rather than a ghost.
   if (inUse) db.prepare('UPDATE opportunity_assessments SET rubric_id = NULL WHERE rubric_id = ?').run(id);
@@ -231,27 +236,58 @@ function duplicateRubric(userId, id) {
 }
 
 // ── Seed ─────────────────────────────────────────────────────────────────
-// Called from db.js at boot. Idempotent: skips when presets already exist.
+// Self-seeding on first use. db.js creates the tables but must NOT require
+// this module (rubrics requires db — a seed call from db.js hands a partial
+// exports object to whichever side loads second, depending on entry point).
+// Every read path below runs ensureSeeded() first. Idempotent.
+let _seeded = false;
+function ensureSeeded() {
+  if (_seeded) return;
+  seedPresets();
+  _seeded = true; // only set on success — a throw retries on the next call
+}
 
+// Seed the four built-in presets, and refresh them when the code definitions
+// change. Presets are code-owned: the DB row is a cache, not the source of
+// truth. UPSERT by preset_key — a deploy with edited preset content updates
+// existing rows instead of leaving stale definitions behind. User rubrics
+// (is_preset = 0) are never touched.
 function seedPresets() {
-  const n = db.prepare('SELECT COUNT(*) AS n FROM assessment_rubrics WHERE is_preset = 1').get().n;
-  if (n > 0) return 0;
   const ins = db.prepare(
     `INSERT INTO assessment_rubrics
      (user_id, preset_key, name, description, is_preset, dimensions, extras, scoring, gate_threshold, updated_at)
      VALUES (NULL, ?, ?, ?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
   );
+  const upd = db.prepare(
+    `UPDATE assessment_rubrics
+     SET name = ?, description = ?, dimensions = ?, extras = ?,
+         scoring = ?, gate_threshold = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE is_preset = 1 AND preset_key = ?`
+  );
+  const get = db.prepare(
+    'SELECT name, description, dimensions, extras, scoring, gate_threshold FROM assessment_rubrics WHERE is_preset = 1 AND preset_key = ?'
+  );
+  let changed = 0;
   db.transaction(() => {
     for (const p of PRESETS) {
-      ins.run(
-        p.preset_key, p.name, p.description,
-        JSON.stringify(p.dimensions), JSON.stringify(p.extras),
-        p.scoring, p.gate_threshold
-      );
+      const dims = JSON.stringify(p.dimensions);
+      const extras = JSON.stringify(p.extras || {});
+      const cur = get.get(p.preset_key);
+      if (!cur) {
+        ins.run(p.preset_key, p.name, p.description, dims, extras, p.scoring, p.gate_threshold);
+        changed++;
+      } else if (
+        cur.name !== p.name || (cur.description || '') !== (p.description || '') ||
+        cur.dimensions !== dims || cur.extras !== extras ||
+        cur.scoring !== p.scoring || Number(cur.gate_threshold) !== Number(p.gate_threshold)
+      ) {
+        upd.run(p.name, p.description, dims, extras, p.scoring, p.gate_threshold, p.preset_key);
+        changed++;
+      }
     }
   })();
-  console.log(`[DB] Seeded ${PRESETS.length} assessment rubric presets`);
-  return PRESETS.length;
+  if (changed) console.log(`[DB] Seeded/refreshed ${changed} assessment rubric preset(s)`);
+  return changed;
 }
 
 module.exports = {

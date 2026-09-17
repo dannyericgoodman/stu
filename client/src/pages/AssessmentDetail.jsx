@@ -7,9 +7,11 @@ import { PageHeader, DetailSection, Score, Tag, EmptyState } from '../components
 // Assessment detail — ONE scrollable page.
 //
 // The verdict is the Conviction Score (1-10) computed deterministically in
-// server/lib/conviction.js from the Founder Rubric's four movements. It is NOT the old
-// Team45/Product25/Market30 weighted average — those pillars survive here only as the
-// collapsed depth layer, explicitly labelled as informing rather than deciding.
+// server/lib/conviction.js from the assessment's rubric dimensions (the snapshot
+// stored on the row — Danny's Founder Rubric by default, any investor-defined
+// framework otherwise). It is NOT the old Team45/Product25/Market30 weighted
+// average — those pillars survive here only as the collapsed depth layer,
+// explicitly labelled as informing rather than deciding.
 //
 // The one semantic use of colour on this page is EVIDENCE RUNG: a low rung renders dim,
 // a high rung renders full-strength. Confidence is visible as contrast. Everything else
@@ -34,6 +36,16 @@ function parseOutput(raw) {
   if (!raw) return null;
   try { return typeof raw === 'string' ? JSON.parse(raw) : raw; }
   catch { return null; }
+}
+
+// The yardstick this run was scored against, from the immutable snapshot.
+// Falls back to the legacy name for runs that predate snapshots.
+function rubricNameOf(assessment) {
+  try {
+    const snap = parseOutput(assessment?.rubric_snapshot);
+    if (snap?.name) return snap.name;
+  } catch { /* legacy run */ }
+  return 'Founder Rubric — Pre-seed';
 }
 
 export default function AssessmentDetail() {
@@ -263,8 +275,8 @@ export default function AssessmentDetail() {
           {/* 2 ── Evidence strength: the trust chip, directly under the verdict */}
           <EvidenceStrength evidence={evidence} rung={rung} tone={tone} />
 
-          {/* 3 ── The four movements */}
-          <Movements conviction={conviction} rubric={rubric} tone={tone} />
+          {/* 3 ── Assessment dimensions (the rubric's questions) */}
+          <Movements conviction={conviction} rubric={rubric} rubricName={rubricNameOf(assessment)} tone={tone} />
 
           {/* 4 ── Docks + the calculation */}
           <Docks conviction={conviction} />
@@ -302,7 +314,7 @@ function Verdict({ conviction, synthesis, rubric, tone }) {
         <div className="text-3xl font-semibold text-gray-400">Not scored</div>
         <p className="text-sm text-gray-600 mt-2 max-w-xl">
           This assessment predates the conviction engine, or its run never reached synthesis. Re-run it to score
-          against the Founder Rubric.
+          against your framework.
         </p>
       </section>
     );
@@ -314,6 +326,16 @@ function Verdict({ conviction, synthesis, rubric, tone }) {
   return (
     <section>
       <div className="text-2xs font-semibold uppercase tracking-wide text-gray-400 mb-3">Conviction</div>
+
+      {/* Fatal flaw — a veto forces the band to Pass regardless of the number.
+          It is the single most important line on the page, so it sits on top. */}
+      {det && conviction.vetoed && (
+        <div className="rounded-lg border border-danger/40 bg-red-50 p-4 mb-5">
+          <p className="text-sm font-semibold text-danger">Fatal flaw</p>
+          <p className="text-sm text-gray-700 leading-relaxed mt-1">{conviction.veto_reason}</p>
+          <p className="text-xs text-gray-500 mt-2">One disqualifier kills the deal — no average can save it. The score above is preserved for reference; the call is Pass.</p>
+        </div>
+      )}
 
       <div className="flex items-start gap-6">
         {/* The score slot. Indeterminate renders a deliberate blank — never a number. */}
@@ -360,9 +382,9 @@ function Verdict({ conviction, synthesis, rubric, tone }) {
 
       {det && conviction.gate_applied && (
         <p className="text-xs text-gray-500 leading-relaxed mt-3 max-w-2xl">
-          Capped below Top-quartile: the founder did not clear the bar on both Earned Insight
-          and Execution &amp; Learning Velocity. Vision and Talent Magnetism differentiate among
-          founders who clear those two — they don't substitute for them.
+          Capped below Top-quartile: the founder did not clear the bar on the load-bearing
+          {conviction.load_bearing_labels?.length ? ` (${conviction.load_bearing_labels.join(' and ')})` : ' dimensions'}.
+          The other dimensions differentiate among founders who clear those — they don't substitute for them.
         </p>
       )}
 
@@ -453,19 +475,19 @@ function EvidenceStrength({ evidence, rung, tone }) {
 // 3 ── The four movements
 // ════════════════════════════════════════════════════════
 
-function Movements({ conviction, rubric, tone }) {
+function Movements({ conviction, rubric, rubricName, tone }) {
   const movements = conviction?.movements;
   if (!movements || Object.keys(movements).length === 0) return null;
 
   return (
     <section className="border-t border-gray-200 pt-6">
-      <div className="text-2xs font-semibold uppercase tracking-wide text-gray-400 mb-1">The four movements</div>
-      <p className="text-xs text-gray-400 mb-5">The Founder Rubric. These, and only these, produce the conviction score.</p>
+      <div className="text-2xs font-semibold uppercase tracking-wide text-gray-400 mb-1">Assessment dimensions</div>
+      <p className="text-xs text-gray-400 mb-5">{rubricName}. These, and only these, produce the conviction score.</p>
       {/* When the rubric agent crashed, conviction was computed from an empty movement set,
           so every movement reads "the agent abstained". It didn't — it died. Say so. */}
       {rubric?.error && (
         <p className="text-sm text-danger mb-5">
-          The Founder Rubric agent failed, so nothing below was actually scored. These are empty slots, not judgments.
+          The {rubricName} agent failed, so nothing below was actually scored. These are empty slots, not judgments.
         </p>
       )}
       <div className="space-y-6">

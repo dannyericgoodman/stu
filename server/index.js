@@ -677,6 +677,7 @@ app.use('/api/founders', requireAuth, denyMcpRest, require('./routes/founders'))
 app.use('/api/notes', requireAuth, denyMcpRest, require('./routes/notes'));
 app.use('/api/sourcing', requireAuth, mcpScopeFor('sourcing'), require('./routes/sourcing'));
 app.use('/api/assessments', requireAuth, denyMcpRest, require('./routes/assessments'));
+app.use('/api/rubrics', requireAuth, denyMcpRest, require('./routes/rubrics'));
 app.use('/api/deal-room', requireAuth, denyMcpRest, require('./routes/dealRoom'));
 app.use('/api/calls', requireAuth, denyMcpRest, require('./routes/calls'));
 app.use('/api/ai', requireAuth, denyMcpRest, require('./routes/ai'));

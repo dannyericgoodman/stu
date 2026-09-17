@@ -513,12 +513,34 @@ router.post('/', async (req, res) => {
   }
 
   // Create assessment record
+  //
+  // The rubric this version is judged by. Meeting Prep is a briefing pass, not an
+  // investability eval — it ignores rubric selection entirely. Otherwise:
+  //   explicit rubric_id → that rubric
+  //   re-run with no rubric_id → the previous version's rubric (visible in the UI),
+  //     so a re-score never silently changes the yardstick
+  //   fresh run, no rubric_id → user's default → pre-seed preset
+  // The resolved rubric is SNAPSHOT onto the row: future edits to the rubric must
+  // not rewrite this assessment's history.
+  let rubricId = null;
+  let rubricSnapshot = null;
+  if (assessmentType !== 'meeting_prep') {
+    const { resolveRubric } = require('../lib/rubrics');
+    const explicit = req.body.rubric_id || null;
+    const carryId = (!explicit && previousAssessmentId)
+      ? db.prepare('SELECT rubric_id FROM opportunity_assessments WHERE id = ?').get(previousAssessmentId)?.rubric_id
+      : null;
+    const rubric = resolveRubric(req.user.id, explicit || carryId || null);
+    rubricId = rubric.id;
+    rubricSnapshot = JSON.stringify(rubric);
+  }
+
   let result;
   try {
     result = db.prepare(`
-      INSERT INTO opportunity_assessments (founder_id, inputs, status, group_id, version_number, created_by, assessment_type)
-      VALUES (?, ?, 'processing_inputs', ?, ?, ?, ?)
-    `).run(validFounderId, JSON.stringify(inputs || {}), gid, versionNumber, req.user.id, assessmentType);
+      INSERT INTO opportunity_assessments (founder_id, inputs, status, group_id, version_number, created_by, assessment_type, rubric_id, rubric_snapshot)
+      VALUES (?, ?, 'processing_inputs', ?, ?, ?, ?, ?, ?)
+    `).run(validFounderId, JSON.stringify(inputs || {}), gid, versionNumber, req.user.id, assessmentType, rubricId, rubricSnapshot);
   } catch (err) {
     console.error('[Assessment] Insert error:', err);
     return res.status(500).json({ error: 'Failed to create assessment' });
@@ -739,11 +761,12 @@ router.post('/:id/rerun', async (req, res) => {
 
   // Merge: carry forward founder_id + assessment_type (a re-run of a Meeting Prep must stay
   // a Meeting Prep, not silently default back to the 4-agent investability eval), combine
-  // old inputs with new
+  // old inputs with new. The rubric is carried forward verbatim — a re-run re-scores
+  // against the SAME yardstick; switching rubrics is a separate explicit action.
   const result = db.prepare(`
-    INSERT INTO opportunity_assessments (founder_id, inputs, status, group_id, version_number, created_by, assessment_type)
-    VALUES (?, ?, 'processing_inputs', ?, ?, ?, ?)
-  `).run(assessment.founder_id, JSON.stringify(newInputs || {}), gid, versionNumber, req.user.id, assessment.assessment_type || 'assessment');
+    INSERT INTO opportunity_assessments (founder_id, inputs, status, group_id, version_number, created_by, assessment_type, rubric_id, rubric_snapshot)
+    VALUES (?, ?, 'processing_inputs', ?, ?, ?, ?, ?, ?)
+  `).run(assessment.founder_id, JSON.stringify(newInputs || {}), gid, versionNumber, req.user.id, assessment.assessment_type || 'assessment', assessment.rubric_id || null, assessment.rubric_snapshot || null);
   const newId = result.lastInsertRowid;
 
   // Build change summary
@@ -1022,12 +1045,28 @@ async function runAssessmentAgents(assessmentId, founderId) {
       return;
     }
 
+    // ── Which rubric judges this run ──
+    // The snapshot on the row is the yardstick: immutable history. Rows that
+    // predate snapshots resolve the live rubric instead, falling back to the
+    // pre-seed preset if the rubric was deleted.
+    const rubricRow = db.prepare('SELECT rubric_id, rubric_snapshot FROM opportunity_assessments WHERE id = ?').get(assessmentId);
+    let rubric = null;
+    try { rubric = rubricRow?.rubric_snapshot ? JSON.parse(rubricRow.rubric_snapshot) : null; } catch { rubric = null; }
+    if (!rubric) {
+      const { resolveRubric } = require('../lib/rubrics');
+      rubric = resolveRubric(ownerId, rubricRow?.rubric_id || null);
+    }
+    // Danny's pre-seed rubric keeps its battle-tested legacy prompt verbatim;
+    // every other rubric gets a prompt built from its own dimensions.
+    const rubricPrompt = rubric.preset_key === 'founder-preseed'
+      ? AGENT_PROMPTS.founderRubric
+      : AGENT_PROMPTS.buildRubricPrompt(rubric);
+
     // ── The rubric runs FIRST, alone. Then the depth layer fans out. ──
     //
-    // `founderRubric` scores the four movements of the canonical Founder Rubric and is
-    // the ONLY input to the conviction score. (It used to be a manual button on a
-    // separate tab running the archived 9-trait rubric, so the fund's actual evaluation
-    // framework never ran unless you knew to click it.)
+    // The rubric agent is the ONLY input to the conviction score. (It used to be a
+    // manual button on a separate tab running the archived 9-trait rubric, so the
+    // fund's actual evaluation framework never ran unless you knew to click it.)
     //
     // It is not in the parallel batch, for a reason a live end-to-end run taught me:
     // firing everything at once made the rubric — the one agent whose output IS the
@@ -1043,13 +1082,13 @@ async function runAssessmentAgents(assessmentId, founderId) {
       r.status === 'fulfilled' ? r.value : { error: r.reason?.message || `${name} agent failed` };
 
     const [rubricResult] = await Promise.allSettled([
-      runAgent(client, AGENT_PROMPTS.founderRubric, cappedContext, signal),
+      runAgent(client, rubricPrompt, cappedContext, signal),
     ]);
     if (signal.aborted) {
       console.log(`[Assessment] Run ${assessmentId} was cancelled`);
       return;
     }
-    const rubricOut = settle(rubricResult, 'Founder Rubric');
+    const rubricOut = settle(rubricResult, 'Rubric');
     if (rubricOut.error) {
       console.error(`[Assessment ${assessmentId}] rubric agent failed (${rubricOut.error}) — no conviction score; the room + agenda still run as the deliverable`);
     }
@@ -1093,7 +1132,7 @@ async function runAssessmentAgents(assessmentId, founderId) {
     const failedVoices = [
       ...panel.filter((l) => l.error).map((l) => `${l.label} (${l.error})`),
       ...(bearOut.error ? [`The Bear (${bearOut.error})`] : []),
-      ...(rubricOut.error ? [`Founder Rubric (${rubricOut.error})`] : []),
+      ...(rubricOut.error ? [`${rubric.name || 'Rubric'} (${rubricOut.error})`] : []),
     ];
     if (failedVoices.length) {
       console.error(`[Assessment ${assessmentId}] voices failed: ${failedVoices.join('; ')}`);
@@ -1156,12 +1195,24 @@ async function runAssessmentAgents(assessmentId, founderId) {
       },
       bearAdjustment: bearOut?.bear_adjustment ?? 0,
       flags: (rubricFailed ? {} : rubricOut?.flags) || {},
+      // The rubric's own shape, from the snapshot: dimensions normalize the
+      // preset's min_rung onto the engine's needs scale; yellow_flags map onto
+      // flag_defs; a veto forces the band to Pass regardless of the number.
+      dimensions: (rubric.dimensions || []).map((d) => ({
+        key: d.key, label: d.label, blurb: d.question,
+        weight: d.weight, needs: d.min_rung, load_bearing: !!d.load_bearing,
+      })),
+      gate_threshold: rubric.gate_threshold || 6,
+      flag_defs: (rubric.extras?.yellow_flags || []).map((f) => ({
+        key: f.key, label: f.label, why: f.blurb, amount: f.dock,
+      })),
+      veto: rubricFailed ? null : (rubricOut?.veto || null),
     });
     if (rubricFailed) {
       conviction.determinate = false;
       conviction.score = null;
       conviction.band = null;
-      conviction.reason = `The Founder Rubric agent failed (${rubricOut.error}). No conviction score — this is a system failure, not a judgment about the company. Re-run.`;
+      conviction.reason = `The ${rubric.name || 'rubric'} agent failed (${rubricOut.error}). No conviction score — this is a system failure, not a judgment about the company. Re-run.`;
     }
 
     db.prepare('UPDATE opportunity_assessments SET conviction_output = ?, conviction_score = ?, conviction_band = ? WHERE id = ?')
@@ -1178,7 +1229,7 @@ async function runAssessmentAgents(assessmentId, founderId) {
     // already-decided conviction; it cannot move the number (correctSynthesisScores
     // stamps the code's verdict over anything the model emitted).
     try {
-      const synthesis = await runPanelSynthesis(client, AGENT_PROMPTS.panelSynthesis, panel, bearOut, cappedContext, signal, conviction);
+      const synthesis = await runPanelSynthesis(client, AGENT_PROMPTS.panelSynthesis, panel, bearOut, cappedContext, signal, conviction, rubric);
       if (signal.aborted) return;
 
       // Override synthesis scores with deterministic computation. agentOutputs has no
@@ -1576,13 +1627,13 @@ const SYNTHESIS_MAX_TOKENS = 16000;
 
 // Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
 // lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
-async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction) {
+async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric) {
   const response = await anthropicCreateWithRetry(client, {
     model: ASSESSMENT_MODEL,
     max_tokens: SYNTHESIS_MAX_TOKENS,
     temperature: SCORING_TEMPERATURE,
     system: prompt.system,
-    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context) }],
+    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric) }],
   });
 
   const text = response.content[0].text.trim();

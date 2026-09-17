@@ -167,6 +167,36 @@ db.exec(`
   );
 `);
 
+// ── Assessment rubrics: "what are you assessing?" ──
+// Every user gets their own evaluation architecture instead of inheriting one.
+// A rubric = named set of weighted dimensions (phrased as questions) + scoring
+// envelope. Presets (user_id NULL) ship with the product; users duplicate or
+// build their own. See server/lib/rubrics.js and server/lib/rubric-presets.js.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS assessment_rubrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id),
+    preset_key TEXT,
+    name TEXT NOT NULL,
+    description TEXT,
+    is_preset INTEGER DEFAULT 0,
+    dimensions TEXT NOT NULL DEFAULT '[]',
+    extras TEXT NOT NULL DEFAULT '{}',
+    scoring TEXT DEFAULT 'gate',
+    gate_threshold REAL DEFAULT 6,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_rubric_defaults (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    rubric_id INTEGER NOT NULL REFERENCES assessment_rubrics(id)
+  );
+`);
+addColumn('opportunity_assessments', 'rubric_id', 'INTEGER');
+addColumn('opportunity_assessments', 'rubric_snapshot', 'TEXT');
+
 // ── Deal room ──
 db.exec(`
   CREATE TABLE IF NOT EXISTS deal_room (

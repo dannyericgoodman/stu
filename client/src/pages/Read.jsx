@@ -179,6 +179,13 @@ function ReadBody({ a, conv }) {
   const syn = parse(a.synthesis_output) || {};
   return (
     <>
+      {conv?.determinate && conv.vetoed && (
+        <div className="rounded-lg border border-danger/40 bg-danger/5 p-4">
+          <div className="text-small font-semibold text-danger">Fatal flaw</div>
+          <p className="text-small text-ink-2 leading-relaxed mt-1">{conv.veto_reason}</p>
+          <p className="text-mini text-ink-4 mt-1.5">One disqualifier kills the deal. The score is preserved for reference; the call is Pass.</p>
+        </div>
+      )}
       <Section title="Key takeaways" body={syn.key_takeaways} lead />
       <Section title="The founders" body={syn.founders} lenses="Founder Edge · Hard Problems · Long Game" />
       <Section title="The product" body={syn.product} lenses="Monopoly · Deep-Tech · Networks" />
@@ -490,15 +497,14 @@ function Verdict({ conv }) {
       </div>
       <p className="text-mini text-ink-3 mt-2">
         Evidence: {conv.rung_label}
-        {conv.gate_applied && ' · capped — the load-bearing movements did not clear'}
+        {conv.gate_applied && ' · capped — the load-bearing dimensions did not clear'}
       </p>
     </div>
   );
 }
 
-// The two movements that SET the score. The other two can only move it ±1.
-const LOAD_BEARING = ['earned_insight', 'execution_velocity'];
-
+// Which dimensions SET the score (the rest only differentiate). Read off the
+// conviction detail — never hard-coded, since any rubric defines its own.
 function Movements({ conv }) {
   // ── movements is an OBJECT keyed by movement name, not an array. ──
   // Found by running the engine for real: my first pass called .map() on it and
@@ -515,10 +521,10 @@ function Movements({ conv }) {
 
   return (
     <div className="border-t border-line pt-3">
-      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">The four movements</div>
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-2">Assessment dimensions</div>
       <div className="space-y-3">
         {entries.map(([key, m]) => {
-          const lb = LOAD_BEARING.includes(key);
+          const lb = m.load_bearing;
           return (
             <div key={key}>
               <div className="flex items-baseline gap-2">
@@ -798,7 +804,9 @@ function Held({ conv, a }) {
         <div className="text-large font-semibold text-ink">No score</div>
         <p className="text-small text-ink-2 mt-1 leading-relaxed max-w-md">
           {conv?.reason ||
-            'The load-bearing movements — earned insight and execution velocity — could not be scored from these inputs.'}
+            (conv?.load_bearing_labels?.length
+              ? `The load-bearing dimensions — ${conv.load_bearing_labels.join(' and ')} — could not be scored from these inputs.`
+              : 'The load-bearing dimensions could not be scored from these inputs.')}
         </p>
         <p className="text-mini text-ink-3 mt-2">
           Evidence: {conv?.rung_label || 'none'}. Below "observed in conversation" there is no score —

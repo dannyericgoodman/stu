@@ -62,6 +62,7 @@ const navConfig = [
   { to: '/network', label: 'Network' },
 ];
 const utilityConfig = [
+  { to: '/frameworks', label: 'Frameworks' },
   { to: '/settings', label: 'Settings' },
   { to: '/health', label: 'Health' },
   { to: '/releases', label: 'Releases' }, // Danny likes the changelog — it stays.

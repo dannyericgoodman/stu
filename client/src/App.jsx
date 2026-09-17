@@ -44,6 +44,9 @@ const Assess = lazy(() => import('./pages/Assess'));
 const Read = lazy(() => import('./pages/Read'));
 const AssessmentDetail = lazy(() => import('./pages/AssessmentDetail'));
 const AskStu = lazy(() => import('./pages/AskStu'));
+// Frameworks — the Assessment Architect. A tool Danny reaches for when his
+// yardstick needs editing, not a morning screen. Lazy like Network.
+const Frameworks = lazy(() => import('./pages/Frameworks'));
 // Network — the people graph behind every founder ask. Lazy: it is a tool Danny
 // reaches for when a founder asks him for something, not a morning screen.
 const Network = lazy(() => import('./pages/Network'));
@@ -150,6 +153,7 @@ function AppRoutes() {
       <Route path="/assess" element={<ProtectedRoute><Assess /></ProtectedRoute>} />
       <Route path="/assess/:id" element={<ProtectedRoute><Read /></ProtectedRoute>} />
       <Route path="/assess/:id/full" element={<ProtectedRoute><AssessmentDetail /></ProtectedRoute>} />
+      <Route path="/frameworks" element={<ProtectedRoute><Frameworks /></ProtectedRoute>} />
       <Route path="/hiring" element={<ProtectedRoute><HiringHome /></ProtectedRoute>} />
       <Route path="/hiring/:id" element={<ProtectedRoute><HiringRole /></ProtectedRoute>} />
       <Route path="/network" element={<ProtectedRoute><Network /></ProtectedRoute>} />

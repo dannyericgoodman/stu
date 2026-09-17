@@ -38,7 +38,33 @@ const PRESETS = [
       'Pre-seed is a bet on the founder\u2019s next 18 months of LEARNING, not today\u2019s snapshot.',
     scoring: 'gate',
     gate_threshold: 6,
-    extras: { drive_lens: true, yellow_flags: true },
+    extras: {
+      // Danny's drive lens, lifted verbatim from the legacy Founder Rubric prompt.
+      // Not a score — a read the agent carries across all dimensions.
+      drive_lens: {
+        title: 'Chip on shoulder',
+        body:
+          'Not a score. A read you carry across all dimensions. It is a VARIANCE AMPLIFIER, not a\n' +
+          'quality filter — hold it honestly rather than treating it as a plus.\n' +
+          '- PLUS: chip channeled into the WORK. "I\'ll show them by making the thing."\n' +
+          '- FLAG: chip channeled into PEOPLE. Grievance, dominating, status-seeking. Predicts blowups and\n' +
+          '  an inability to keep A-players.',
+      },
+      yellow_flags: [
+        {
+          key: 'charisma_over_substance',
+          label: 'Charisma over substance',
+          why: 'Storytelling outrunning substance. This predicts GETTING FUNDED, not winning. A great pitch with thin operating detail underneath is this flag. Note the trap: a polished deck is designed to trigger the opposite reaction in you. Dock it.',
+          amount: 0.5,
+        },
+        {
+          key: 'grievance_grandiosity',
+          label: 'Grievance / grandiosity',
+          why: 'The chip aimed at people rather than the work. Predicts blowups and an inability to keep A-players.',
+          amount: 0.5,
+        },
+      ],
+    },
     dimensions: [
       {
         key: 'earned_insight',
@@ -124,7 +150,7 @@ const PRESETS = [
       'In deep tech, market timing is secondary to the technical question — diligence starts with physics, not TAM.',
     scoring: 'gate',
     gate_threshold: 6,
-    extras: { drive_lens: false, yellow_flags: true },
+    extras: { yellow_flags: [] },
     dimensions: [
       {
         key: 'technical_feasibility',
@@ -216,7 +242,7 @@ const PRESETS = [
       'In fintech, distribution partnerships matter as much as product — "who lets you reach the customer" is a diligence question, not a GTM footnote.',
     scoring: 'gate',
     gate_threshold: 6,
-    extras: { drive_lens: false, yellow_flags: true },
+    extras: { yellow_flags: [] },
     dimensions: [
       {
         key: 'regulatory_path',
@@ -305,7 +331,7 @@ const PRESETS = [
       'Consumer is won on loops and retention — acquisition without retention is a leak, not a business.',
     scoring: 'gate',
     gate_threshold: 6,
-    extras: { drive_lens: false, yellow_flags: true },
+    extras: { yellow_flags: [] },
     dimensions: [
       {
         key: 'growth_retention',

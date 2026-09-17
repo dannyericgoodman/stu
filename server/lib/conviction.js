@@ -120,7 +120,7 @@ const BANDS = [
 const CALIBRATION_NOTE =
   'This is an evidence-organising score, not a prediction. It has never been checked ' +
   'against an outcome: Stu has assessed 6 companies and has no outcome loop, so the ' +
-  'score does not learn. Weights come from the Founder Rubric; the gate threshold and ' +
+  'score does not learn. Weights come from the assessment rubric; the gate threshold and ' +
   'the dock magnitudes are author-set and unvalidated. Treat it as a structured prior ' +
   'and a question list — the judgment stays yours.';
 
@@ -334,19 +334,47 @@ function coerceScore(raw) {
  * @param {object} args.marketRisk { structurally_dead: bool, note: string }
  * @param {number} args.bearAdjustment  raw from the bear agent
  * @param {object} args.flags      { charisma_over_substance: bool, grievance_grandiosity: bool }
+ *                                  — or whatever keys the rubric's yellow_flags define.
+ * @param {array}  args.flag_defs  [{ key, label, why, amount }] from
+ *                                  rubric.extras.yellow_flags. Omit for the two legacy
+ *                                  Danny flags (backward compat).
+ * @param {object} args.veto       { present: bool, reason: string } — a fatal flaw
+ *                                  the agent surfaced. A veto forces the band to
+ *                                  Pass: one disqualifier kills a deal no average
+ *                                  can save, the way ICs actually work.
+ * @param {array}  args.dimensions [{ key, label, blurb, weight, needs, load_bearing }]
+ *                                  The rubric's dimensions. Omit for the legacy
+ *                                  Founder Rubric four movements (backward compat).
+ * @param {number} args.gate_threshold  min load-bearing score to "clear the gate"
+ *                                  (author-set default 6, unvalidated — see below).
  */
-function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, bearAdjustment = 0, flags = {} } = {}) {
+function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, bearAdjustment = 0, flags = {}, veto = null, dimensions = null, gate_threshold = 6, flag_defs = null } = {}) {
+  // The engine is generic over dimensions; the legacy four movements are just the
+  // default rubric. Every behavior below that used to hardcode movement keys now
+  // reads them off DIM.
+  const DIM = dimensions || Object.entries(MOVEMENTS).map(([key, def]) => ({
+    key,
+    label: def.label,
+    blurb: def.blurb,
+    weight: def.weight,
+    needs: def.needs,
+    evidence_strength: def.evidence_strength,
+    load_bearing: LOAD_BEARING.includes(key),
+  }));
+  const dimByKey = Object.fromEntries(DIM.map((d) => [d.key, d]));
+  const lbKeys = DIM.filter((d) => d.load_bearing).map((d) => d.key);
+
   const detail = {};
-  let weighted = 0;
   let totalWeight = 0;
   const unscorable = [];
 
-  for (const [key, def] of Object.entries(MOVEMENTS)) {
+  for (const def of DIM) {
+    const key = def.key;
     const m = (movements && typeof movements === 'object' && !Array.isArray(movements) ? movements[key] : null) || {};
     const { value: raw, fault, raw: badRaw } = coerceScore(m.score);
 
-    // Three independent ways a movement can be unscorable, and they are different facts:
-    //   (a) the rung is too low for this movement to be honestly readable
+    // Three independent ways a dimension can be unscorable, and they are different facts:
+    //   (a) the rung is too low for this dimension to be honestly readable
     //   (b) the agent looked and abstained
     //   (c) the agent returned something unusable — a system fault, not a judgment
     const belowRung = rung < def.needs;
@@ -356,7 +384,8 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
       label: def.label,
       blurb: def.blurb,
       weight: def.weight,
-      evidence_strength: def.evidence_strength,
+      load_bearing: !!def.load_bearing,
+      evidence_strength: def.evidence_strength || null,
       needs_rung: def.needs,
       needs_rung_label: RUNG_LABEL[def.needs],
       score: scorable ? raw : null,
@@ -376,7 +405,6 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
     };
 
     if (scorable) {
-      weighted += raw * def.weight;
       totalWeight += def.weight;
     } else {
       unscorable.push(key);
@@ -384,7 +412,7 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
   }
 
   // ── The determinacy gate ────────────────────────────────────────────────
-  // If either load-bearing movement can't be scored, we do not have a
+  // If any load-bearing dimension can't be scored, we do not have a
   // conviction. We have a question list. Saying so is the product.
   //
   // A system fault ALSO kills the score, even when the load-bearing pair parsed fine.
@@ -398,17 +426,18 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
   // reintroduced by the engine itself. If the model did not follow the schema, the
   // response is not trustworthy — not partially trustworthy. Re-run it.
   const systemFault = Object.values(detail).some((d) => d.fault === 'invalid');
-  const missingLoadBearing = LOAD_BEARING.filter((k) => !detail[k].scorable);
+  const missingLoadBearing = lbKeys.filter((k) => !detail[k].scorable);
   if (missingLoadBearing.length > 0 || totalWeight === 0 || systemFault) {
     // Distinguish "we haven't learned enough yet" from "the machine broke". Both give
     // no score, but only one of them is about the company, and telling a user to go ask
     // better questions when the real problem is a malformed model response is its own
     // small lie.
+    const lbLabels = lbKeys.map((k) => dimByKey[k].label).join(' and ');
     const reason = systemFault
       ? 'The rubric agent returned scores that could not be read. No conviction score — this is a system fault, not a judgment about the company. Re-run.'
       : rung < RUNG.OBSERVED
-        ? `We have ${RUNG_LABEL[rung].toLowerCase()}. Earned Insight and Learning Velocity are only readable once the founder has answered questions — the rubric's own tests require it. No conviction score until then.`
-        : 'The agents could not find evidence for the movements that carry the most weight. No conviction score.';
+        ? `We have ${RUNG_LABEL[rung].toLowerCase()}. ${lbLabels} ${lbKeys.length > 1 ? 'are' : 'is'} only readable once the founder has answered questions — the rubric's own tests require it. No conviction score until then.`
+        : 'The agents could not find evidence for the dimensions that carry the most weight. No conviction score.';
 
     return {
       determinate: false,
@@ -418,7 +447,8 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
       rung_label: RUNG_LABEL[rung],
       movements: detail,
       unscorable,
-      missing_load_bearing: missingLoadBearing.map((k) => MOVEMENTS[k].label),
+      missing_load_bearing: missingLoadBearing.map((k) => dimByKey[k].label),
+      load_bearing_labels: lbKeys.map((k) => dimByKey[k].label),
       system_fault: systemFault,
       reason,
       calculation: null,
@@ -453,17 +483,17 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
   // labels MIXED and says not to over-weight. 23% of memo-band results had a
   // load-bearing movement at 5 or below. That is the compensation the rubric forbids.
   //
-  // So: Earned Insight and Execution & Learning Velocity SET the score. Nonconsensus
-  // Vision and Talent Magnetism can only move it ±1 — enough to separate two founders
-  // who both cleared the gate, never enough to carry one who didn't.
-  const ei = detail.earned_insight.score;
-  const ev = detail.execution_velocity.score;
-  const loadBearingBase = (ei + ev) / 2;
+  // So: the load-bearing dimensions SET the score. The rest can only move it ±1 —
+  // enough to separate two founders who both cleared the gate, never enough to
+  // carry one who didn't. This generalizes: whatever a user's rubric marks
+  // load-bearing plays the role Earned Insight and Execution Velocity played.
+  const lbScores = lbKeys.map((k) => detail[k].score);
+  const loadBearingBase = lbScores.reduce((a, b) => a + b, 0) / lbScores.length;
 
-  // The differentiator: mean of movements 3 and 4, centred on 5.5, scaled to ±1.
-  // Movements that abstained simply don't differentiate.
-  const diffScores = ['nonconsensus_vision', 'talent_magnetism']
-    .map((k) => detail[k].score)
+  // The differentiator: mean of the non-load-bearing dimensions, centred on 5.5,
+  // scaled to ±1. Dimensions that abstained simply don't differentiate.
+  const diffScores = DIM.filter((d) => !d.load_bearing)
+    .map((d) => detail[d.key].score)
     .filter((s) => typeof s === 'number');
   const differentiator = diffScores.length
     ? Math.max(-1, Math.min(1, (diffScores.reduce((a, b) => a + b, 0) / diffScores.length - 5.5) / 4.5))
@@ -473,9 +503,9 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
 
   // AUTHOR-SET, NOT RUBRIC-DERIVED: the rubric says "clear 1-2" without defining it.
   // 6 is my threshold, not Danny's, and it is unvalidated. It is still a more faithful
-  // reading than letting a 5 on both STRONG movements reach "write a memo".
-  const CLEARS_LOAD_BEARING = 6;
-  const clearedGate = Math.min(ei, ev) >= CLEARS_LOAD_BEARING;
+  // reading than letting a 5 on both STRONG dimensions reach "write a memo".
+  // Per-rubric override via gate_threshold.
+  const clearedGate = Math.min(...lbScores) >= gate_threshold;
 
   // ── Docks. Never boosts. ────────────────────────────────────────────────
   const docks = [];
@@ -502,11 +532,22 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
   }
 
   // Yellow flags. Rubric: "Dock, don't reward."
-  if (isTrue(flags.charisma_over_substance)) {
-    docks.push({ key: 'charisma', amount: -0.5, why: 'Storytelling outrunning substance — predicts getting funded, not winning' });
-  }
-  if (isTrue(flags.grievance_grandiosity)) {
-    docks.push({ key: 'grievance', amount: -0.5, why: 'Chip aimed at people rather than the work — variance and retention risk' });
+  // With flag_defs (a rubric's own extras.yellow_flags) each true flag docks its
+  // configured amount. Without them, the two legacy Danny flags apply exactly
+  // as before — same keys, same amounts, same copy.
+  if (Array.isArray(flag_defs) && flag_defs.length) {
+    for (const f of flag_defs) {
+      if (f && f.key && isTrue(flags[f.key])) {
+        docks.push({ key: f.key, amount: -(Number(f.amount) || 0.5), why: f.why || f.label || f.key });
+      }
+    }
+  } else {
+    if (isTrue(flags.charisma_over_substance)) {
+      docks.push({ key: 'charisma', amount: -0.5, why: 'Storytelling outrunning substance — predicts getting funded, not winning' });
+    }
+    if (isTrue(flags.grievance_grandiosity)) {
+      docks.push({ key: 'grievance', amount: -0.5, why: 'Chip aimed at people rather than the work — variance and retention risk' });
+    }
   }
 
   // Docks are capped in aggregate. Uncapped they summed to -3.5 — enough to take a 9.0
@@ -519,25 +560,37 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
 
   let score = Math.max(1, Math.min(10, round1(base + dockTotal)));
 
-  // The gate. Movements 3 and 4 differentiate among founders who clear 1-2 — they
-  // cannot carry a founder who didn't.
+  // The gate. Non-load-bearing dimensions differentiate among founders who clear
+  // the load-bearing set — they cannot carry a founder who didn't.
   let gateApplied = false;
   if (!clearedGate && score >= 7) {
     score = 6.9;
     gateApplied = true;
   }
 
-  const parts = `Earned Insight ${ei} + Execution ${ev} → base ${round1(loadBearingBase)}` +
+  // ── The veto. ─────────────────────────────────────────────────────────
+  // One fatal flaw kills the deal no average can save — this mirrors how ICs
+  // actually work. The score is still computed and shown (it's informative),
+  // but the band is forced to Pass and the reason rides along.
+  const vetoed = isTrue(veto?.present);
+  const vetoReason = vetoed ? (veto.reason || 'The rubric agent flagged a fatal flaw.') : null;
+
+  const lbDesc = lbKeys.map((k) => `${dimByKey[k].label} ${detail[k].score}`).join(' + ');
+  const parts = `${lbDesc} → base ${round1(loadBearingBase)}` +
     `, differentiator ${differentiator >= 0 ? '+' : ''}${round1(differentiator)}` +
     (docks.length ? `, docks ${round1(dockTotal)}${dockCapped ? ` (capped from ${round1(rawDockTotal)})` : ''}` : '') +
-    (gateApplied ? `, capped at 6.9 — did not clear ${CLEARS_LOAD_BEARING} on both load-bearing movements` : '');
+    (gateApplied ? `, capped at 6.9 — did not clear ${gate_threshold} on every load-bearing dimension` : '') +
+    (vetoed ? `, VETO — band forced to Pass` : '');
 
   return {
     determinate: true,
     score,
-    band: bandFor(score),
+    band: vetoed ? BANDS.find((b) => b.key === 'pass') : bandFor(score),
+    vetoed,
+    veto_reason: vetoReason,
     cleared_gate: clearedGate,
     gate_applied: gateApplied,
+    load_bearing_labels: lbKeys.map((k) => dimByKey[k].label),
     dock_capped: dockCapped,
     // Shipped with the number, every time. The engine's whole thesis is that a claim
     // should be sized to its evidence; that applies to the engine itself.

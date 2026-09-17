@@ -41,6 +41,11 @@ export default function Assess() {
   // Re-run context
   const [rerunPreviousInputs, setRerunPreviousInputs] = useState([]);
   const [rerunMode, setRerunMode] = useState(false);
+  const [rerunRubricName, setRerunRubricName] = useState(null);
+
+  // Rubric picker — which yardstick this run is scored against.
+  const [rubrics, setRubrics] = useState([]);
+  const [rubricId, setRubricId] = useState('');
 
   useEffect(() => {
     loadData();
@@ -55,9 +60,10 @@ export default function Assess() {
   async function loadData() {
     setLoading(true);
     try {
-      const [a, f] = await Promise.all([api.getAssessments(), api.getFounders()]);
+      const [a, f, r] = await Promise.all([api.getAssessments(), api.getFounders(), api.getRubrics().catch(() => ({ rubrics: [] }))]);
       setAssessments(a);
       setFounders(f);
+      setRubrics(r.rubrics || []);
     } catch (err) {
       console.error(err);
     }
@@ -73,6 +79,11 @@ export default function Assess() {
       if (assessment.founder_id) setFounderId(String(assessment.founder_id));
       setRerunPreviousInputs(inputs);
       setRerunMode(true);
+      // A re-run re-scores against the SAME yardstick — surface which one.
+      try {
+        const snap = typeof assessment.rubric_snapshot === 'string' ? JSON.parse(assessment.rubric_snapshot) : assessment.rubric_snapshot;
+        if (snap?.name) setRerunRubricName(snap.name);
+      } catch { /* no snapshot — legacy run */ }
     } catch (err) {
       console.error('Failed to load rerun context:', err);
     }
@@ -179,6 +190,9 @@ export default function Assess() {
       const payload = {
         founder_id: founderId ? parseInt(founderId) : null,
         assessment_type: isPrepTask ? 'meeting_prep' : 'assessment',
+        // The yardstick. Empty → the user's default framework (→ Founder Rubric —
+        // Pre-seed). Meeting Prep ignores this; re-runs carry the prior rubric.
+        ...(rubricId && !isPrepTask && !rerunMode ? { rubric_id: parseInt(rubricId) } : {}),
         inputs: {
           decks: decks.map(d => ({ label: d.label, content: d.content, fileName: d.fileName, mimeType: d.mimeType, base64: d.base64 })),
           transcripts: transcripts.filter(t => t.content).map(t => ({ label: t.label, content: t.content })),
@@ -229,7 +243,7 @@ export default function Assess() {
         title={showNew && isAssessmentTask ? 'Founder Assessment' : showNew && isMemoTask ? 'Deal Memo' : showNew && isPrepTask ? 'Meeting Prep' : 'Assess'}
         subtitle={
           rerunMode ? 'Add new materials and re-evaluate'
-          : showNew && isAssessmentTask ? 'Score a founder against the Founder Rubric. A call transcript is what makes the rubric scorable — a deck or a website alone cannot evidence earned insight or learning velocity.'
+          : showNew && isAssessmentTask ? 'Score a founder against your framework. A call transcript is what makes the questions answerable — a deck or a website alone cannot evidence most of them.'
           : showNew && isMemoTask ? 'Run the full multi-agent eval and get it formatted as your Recommendation › Management › Model › Market › Momentum › Malfeasance › Conditions memo.'
           : showNew && isPrepTask ? 'Founder, company, website, and any materials → a pre-meeting briefing: founder profile, thesis fit, questions to ask, and what to watch for.'
           : 'Multi-agent evaluations of your pipeline founders'
@@ -282,6 +296,35 @@ export default function Assess() {
               </div>
               {founderId && <p className="text-xs text-gray-400 mt-2">CRM notes and call history will be automatically included.</p>}
             </div>
+
+            {/* Rubric picker — not for Meeting Prep (a briefing, not an eval).
+                In re-run mode the prior version's yardstick carries forward. */}
+            {!isPrepTask && (rerunMode ? (
+              <div className="card p-4 bg-gray-50">
+                <h3 className="text-sm font-semibold text-gray-500 mb-1">Framework</h3>
+                <p className="text-sm text-gray-600">
+                  Re-scoring against <span className="font-medium">{rerunRubricName || 'the same framework as the previous version'}</span> — the yardstick doesn't change on a re-run.
+                </p>
+              </div>
+            ) : (
+              <div className="card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-700">Framework</h3>
+                  <Link to="/frameworks" className="text-xs text-blue-600 hover:underline">Build your own →</Link>
+                </div>
+                <select
+                  value={rubricId}
+                  onChange={e => setRubricId(e.target.value)}
+                  className="input w-full text-sm"
+                >
+                  <option value="">Default — {rubrics.find(r => r.is_default)?.name || 'Founder Rubric — Pre-seed'}</option>
+                  {rubrics.filter(r => !r.is_default).map(r => (
+                    <option key={r.id} value={r.id}>{r.name}{r.is_preset ? ' (preset)' : ''} — {r.dimensions?.length || 0} questions</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400 mt-2">What this run is scored against. A call transcript is what makes a framework scorable — a deck or a website alone can't evidence most questions.</p>
+              </div>
+            ))}
 
             {/* Previous inputs (re-run mode) */}
             {rerunMode && rerunPreviousInputs.length > 0 && (
