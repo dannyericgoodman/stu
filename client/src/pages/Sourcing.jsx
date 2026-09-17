@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
+import { fireConfettiCannons } from '../utils/confetti';
 
 // ══════════════════════════════════════════════════════════════════════════
 // Sourcing — the inbox. Study and triage people you have never met.
@@ -320,6 +321,7 @@ export default function Sourcing() {
         // link — a triage action that vanishes silently feels like a delete.
         setJustTracked({ name: row.name, company: row.company, id: founder?.id });
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 6000);
+        fireConfettiCannons();
       } else if (action === 'watch') {
         const founder = await api.watchSourced(row.id);
         // "Add to Pipeline" = Danny is interested: the card lands in his PERSONAL
@@ -328,6 +330,7 @@ export default function Sourcing() {
         // by hand.
         setJustTracked({ name: row.name, company: row.company, id: founder?.id, note: ' · your ledger, Stage 1' });
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 8000);
+        fireConfettiCannons();
       } else if (action === 'dismiss') await api.dismissSourced(row.id);
       else if (action === 'hide') await api.hideForeverSourced(row.id);
     } catch (e) {

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../utils/api';
+import { fireConfettiCannons } from '../utils/confetti';
 
 export default function AddFounder() {
   const navigate = useNavigate();
@@ -41,6 +42,7 @@ export default function AddFounder() {
     setError('');
     try {
       const founder = await api.createFounder(form);
+      fireConfettiCannons();
       navigate(`/founders/${founder.id}`);
     } catch (err) {
       setError(err.message);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
+import { fireConfettiCannons } from '../utils/confetti';
 import KanbanBoard from '../components/KanbanBoard';
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -350,6 +351,7 @@ export default function Pipeline() {
     });
     setData((d) => ({ ...d, rows: [...d.rows, created] }));
     setComposing(false);
+    fireConfettiCannons();
     // Straight into the card. He added it because he has something to put in it.
     nav(`/founders/${created.id}`);
   }
