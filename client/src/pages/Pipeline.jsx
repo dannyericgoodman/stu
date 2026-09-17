@@ -268,6 +268,15 @@ export default function Pipeline() {
     return m;
   }, [data]);
 
+  // The column subtitles — what each stage MEANS on the dock. The label says
+  // where a card is; the hint says what to do with it. Served by
+  // server/lib/ledgerStages.js so the client keeps no copy.
+  const stageHint = useMemo(() => {
+    const m = {};
+    for (const s of data?.stages || []) m[s.key] = s.hint;
+    return m;
+  }, [data]);
+
   const rows = useMemo(() => {
     if (!data) return [];
     let out = data.rows;
@@ -398,7 +407,7 @@ export default function Pipeline() {
       )}
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
         <span className="text-small font-semibold text-ink">Pipeline</span>
-        <span className="text-mini text-ink-4">your ledger — Stu never touches the team's Airtable</span>
+        <span className="text-mini text-ink-4" title="Your loading dock: founders land here, you figure out who's worth talking to, and you add the keepers to Airtable yourself. Stu never writes to Airtable.">the loading dock for your Airtable pipeline — Stu never writes to Airtable</span>
         <button
           onClick={() => setComposing(true)}
           className="px-2 h-6 rounded text-mini font-medium bg-ground-4 text-ink hover:bg-line"
@@ -481,8 +490,8 @@ export default function Pipeline() {
             stages={(data.stages || []).map((s) => s.key)}
             stageField="ledger_stage"
             stageLabels={stageLabel}
+            stageHints={stageHint}
             showAllStages
-            tracks={[]}
             onStageChange={onLedgerStageChange}
             onDelete={onDelete}
           />

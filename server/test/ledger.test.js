@@ -249,6 +249,21 @@ test('4a on a founder the team already tracks leaves the Airtable link alone', a
   assert.strictEqual(row.airtable_founder_record_id, 'recKNOWN', 'the existing link is untouched');
 });
 
+// ── 6b. Stage copy must never promise an Airtable write ─────────────────
+// 2026-09-17 — the 4a hint once read "published to Airtable" after writes were
+// disabled. The dock's words are a contract: if a hint promises a write, the
+// no-write rule is already broken in the user's head.
+test('no ledger stage hint promises an Airtable write', () => {
+  const { LEDGER_STAGES } = require('../lib/ledgerStages');
+  for (const s of LEDGER_STAGES) {
+    assert.ok(s.hint && s.hint.length > 0, `${s.key} has a hint`);
+    assert.ok(!/airtable/i.test(s.hint) || /yourself|never/i.test(s.hint),
+      `${s.key} hint must not promise an Airtable write: "${s.hint}"`);
+  }
+  const fourA = LEDGER_STAGES.find((s) => s.key === 'invest_pipeline');
+  assert.ok(/yourself/i.test(fourA.hint), '4a says the hand-add is his');
+});
+
 test('the Airtable push service itself refuses every write', async () => {
   const f = { id: 1, name: 'X', airtable_founder_record_id: 'recX' };
   // realCreate/realPush are the genuine (now-disabled) service functions —

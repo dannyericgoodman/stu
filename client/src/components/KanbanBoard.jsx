@@ -6,13 +6,15 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 // ══════════════════════════════════════════════════════════════════════════
-// The board. Move companies you already know through your deal stages.
+// The loading dock. Founders land here, Danny figures out who's worth talking
+// to, and the keepers go into Airtable — by his hand, never Stu's.
 //
-// Rewritten onto the design system. What it replaced had colored columns (blue,
-// yellow), avatar circles, colored badges, and cards so tall only three fit on a
-// screen — and it led with the PERSON's name on a board of COMPANIES.
+// Five stages, left to right, is the whole point: Identified → Outreach Sent →
+// Meeting Set → Investment Pipeline (his "add to Airtable" shortlist) or Pass.
+// The board is Stu-local for every stage. It reads Airtable (next steps,
+// one-liners) but never writes it.
 //
-// Three rules it now obeys:
+// Three rules it obeys:
 //   · Color means state, never decoration. The columns are hairlines and ground.
 //     A stage is a POSITION, and position is already the signal; painting it too
 //     says the same thing twice in a louder voice.
@@ -28,38 +30,24 @@ import { useNavigate } from 'react-router-dom';
 // state. It kept its own column, and that column said what it was.
 //
 // It is now almost always empty, and deliberately so: the server only sends cards
-// that HAVE a stage (routes/pipeline.js), because a card with no stage is not an
-// opportunity — it's untriaged sourcing output, and it belongs in Sourcing. The
-// column stays for the case the server is wrong. An empty lane costs one hairline.
-//
-// ── ONE BOARD, ONE AXIS, AND A BADGE ──
-// Danny: "Let's merge Investment and Admissions pipelines, consolidating.
-// Investment and/or Admissions Pipeline should be a badge I can edit on each card,
-// similar to what I have in Airtable."
-//
-// So `stage_status` is the only axis, spelled in Airtable's words, and the
-// Resident/Investment track moved from being a whole separate BOARD to a chip on
-// the card. This mirrors how Airtable models it — one Admission Status field, one
-// Pipeline multi-select — which is the point: the tool should read like the base
-// he actually maintains.
+// that HAVE a ledger stage, because a card with no stage is not an opportunity —
+// it's untriaged sourcing output, and it belongs in Sourcing. The column stays
+// for the case the server is wrong. An empty lane costs one hairline.
 // ══════════════════════════════════════════════════════════════════════════
 
 const NO_STAGE = '(no stage)';
 
-// A stage nobody is in AND nobody moves INTO on purpose. Airtable's option list
-// carries history — "Stage 0: Legacy (Density)" predates the fund, and the two
-// Resident-Only Stage 3s were never adopted. Rendering an empty lane for each
-// would put four dead columns between Danny and the deals he's working.
-// An empty lane he might legitimately drag into (Stage 2, Stage 4) still shows.
+// The ledger is the board's only axis now: five stages, always shown, in order.
+// A stage nobody is in still renders — an empty lane on the dock is information
+// (nothing waiting at this step), not noise.
 const isDeadEnd = (s) => /^Stage 0:/.test(s) || /^Stage 5:/.test(s);
 
-export default function KanbanBoard({ founders, stages, tracks, onStageChange, onTracksChange, onDelete,
-  // The ledger (2026-09-17) reuses this board over its own axis: pass
-  // stageField="ledger_stage" plus stageLabels for the column headers, and
-  // showAllStages so all five ledger stages render even when empty. Passing
-  // tracks={[]} hides the track badges — tracks are an Airtable concept and the
-  // ledger is Danny's personal workflow.
-  stageField = 'stage_status', stageLabels = null, showAllStages = false }) {
+export default function KanbanBoard({ founders, stages, onStageChange, onDelete,
+  // The five ledger stages come from the server (server/lib/ledgerStages.js):
+  // stageField picks the row field, stageLabels the column headers, stageHints
+  // the one-line subtitle under each header saying what the stage means.
+  // showAllStages renders every stage even when empty.
+  stageField = 'stage_status', stageLabels = null, stageHints = null, showAllStages = false }) {
   const [activeId, setActiveId] = useState(null);
   const nav = useNavigate();
 
@@ -77,11 +65,7 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
       else if (grouped[s]) grouped[s].push(f);
       else grouped[s] = [f]; // a stage not in the canonical list still shows itself
     }
-    // 12 stages is a lot of horizontal travel, and Airtable's list carries options
-    // Danny's book has never used (Stage 0, the two Resident-Only Stage 3s). Show a
-    // lane if it holds anything; otherwise show it only if it's a live stage he
-    // could plausibly drag into. Terminal stages with nothing in them are noise.
-    // (The ledger opts out: its five stages are all live, always.)
+    // The five ledger stages are all live, always — an empty lane is information.
     const keys = Object.keys(grouped)
       .filter((k) => k !== NO_STAGE)
       .filter((k) => grouped[k].length > 0 || showAllStages || !isDeadEnd(k));
@@ -113,10 +97,9 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
             key={stage}
             id={stage}
             label={(stageLabels && stageLabels[stage]) || stage}
+            hint={stageHints && stageHints[stage]}
             rows={columns[stage]}
             unstaged={stage === NO_STAGE}
-            allTracks={tracks}
-            onTracksChange={onTracksChange}
             onDelete={onDelete}
             onOpen={(id) => nav(`/founders/${id}`)}
           />
@@ -128,7 +111,7 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
   );
 }
 
-function Column({ id, label, rows, unstaged, onOpen, allTracks, onTracksChange, onDelete }) {
+function Column({ id, label, hint, rows, unstaged, onOpen, onDelete }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div
@@ -137,13 +120,22 @@ function Column({ id, label, rows, unstaged, onOpen, allTracks, onTracksChange, 
         isOver && !unstaged ? 'border-accent bg-accent-soft' : 'border-line-2 bg-ground-2'
       }`}
     >
-      <div className="flex items-center gap-2 h-6 px-2 border-b border-line flex-shrink-0">
-        {/* The stage name is the label. No dot, no hue — the column IS the state. */}
-        <span className={`text-micro font-semibold uppercase truncate ${unstaged ? 'text-ink-4' : 'text-ink-2'}`}>
-          {label}
-        </span>
-        <div className="flex-1" />
-        <span className="num text-micro text-ink-4">{rows.length}</span>
+      <div className="px-2 pt-1.5 pb-1 border-b border-line flex-shrink-0">
+        <div className="flex items-center gap-2">
+          {/* The stage name is the label. No dot, no hue — the column IS the state. */}
+          <span className={`text-micro font-semibold uppercase truncate ${unstaged ? 'text-ink-4' : 'text-ink-2'}`}>
+            {label}
+          </span>
+          <div className="flex-1" />
+          <span className="num text-micro text-ink-4">{rows.length}</span>
+        </div>
+        {/* The dock subtitle: what this stage means and what to do with a card
+            sitting in it. The label says where; the hint says what next. */}
+        {hint && !unstaged && (
+          <p className="text-micro text-ink-4 leading-snug mt-0.5" title={hint}>
+            {hint}
+          </p>
+        )}
       </div>
 
       <div className="p-1 space-y-1 overflow-y-auto max-h-[calc(100vh-160px)]">
@@ -155,7 +147,7 @@ function Column({ id, label, rows, unstaged, onOpen, allTracks, onTracksChange, 
           </p>
         )}
         {rows.map((r) => (
-          <Card key={r.id} row={r} onOpen={onOpen} allTracks={allTracks} onTracksChange={onTracksChange} onDelete={onDelete} />
+          <Card key={r.id} row={r} onOpen={onOpen} onDelete={onDelete} />
         ))}
         {!rows.length && !unstaged && (
           <div className="h-8 flex items-center justify-center text-mini text-ink-4">—</div>
@@ -166,54 +158,6 @@ function Column({ id, label, rows, unstaged, onOpen, allTracks, onTracksChange, 
 }
 
 const BAND_LABEL = { anchor: 'Anchor', memo: 'Memo', monitor: 'Monitor', pass: 'Pass', indeterminate: 'Held' };
-
-// ── THE TRACK BADGE ──
-// Danny: "a badge I can edit on each card, similar to what I have in Airtable."
-//
-// Two chips, R and I. Lit = on that track. Click toggles, and the toggle writes
-// through to Airtable's Pipeline multi-select (routes/pipeline.js PATCH /:id/tracks).
-//
-// Why single letters: the card is 220px and the company name is the one primary
-// ink on it. "Resident" and "Investment" spelled out would be two more strings
-// competing with the name for the same eye. The title attribute carries the word.
-//
-// Why onPointerDown stops propagation: this chip sits inside a draggable card. The
-// drag sensor claims the pointer at 8px of travel, so without this a click that
-// wobbles becomes a drag and the badge silently never toggles.
-function TrackBadge({ row, allTracks, onTracksChange }) {
-  // An explicitly empty track list means "no track axis here" (the personal
-  // ledger, 2026-09-17) — render nothing rather than the default badges.
-  if (Array.isArray(allTracks) && allTracks.length === 0) return null;
-  const on = new Set(row.tracks || []);
-  const opts = allTracks && allTracks.length ? allTracks : ['Resident', 'Investment'];
-
-  return (
-    <div className="flex items-center gap-0.5" onPointerDown={(e) => e.stopPropagation()}>
-      {opts.map((t) => {
-        const lit = on.has(t);
-        return (
-          <button
-            key={t}
-            title={lit ? `${t} — click to remove` : `Add to ${t}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!onTracksChange) return;
-              const next = lit ? [...on].filter((x) => x !== t) : [...on, t];
-              onTracksChange(row.id, next);
-            }}
-            className={`w-4 h-4 rounded-sm text-micro font-semibold leading-none transition ${
-              lit
-                ? 'bg-ink-2 text-ground border border-ink-2'
-                : 'bg-transparent text-ink-4 border border-line-2 hover:border-line-3 hover:text-ink-3'
-            }`}
-          >
-            {t[0]}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 // Airtable's one-liner field is a working field, so it holds working notes — seen on
 // the real board: "(Exited Founder) To be added", rendered as if it were an insight.
@@ -228,7 +172,7 @@ function insightOf(row) {
   return c;
 }
 
-function Card({ row, onOpen, dragging, allTracks, onTracksChange, onDelete }) {
+function Card({ row, onOpen, dragging, onDelete }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: String(row.id) });
 
   return (
@@ -303,8 +247,6 @@ function Card({ row, onOpen, dragging, allTracks, onTracksChange, onDelete }) {
       )}
 
       <div className="flex items-center gap-2 mt-1">
-        <TrackBadge row={row} allTracks={allTracks} onTracksChange={onTracksChange} />
-
         {/* Bands are typographic. A colored verdict tells him what to think before
             he has read the evidence. His call outranks Stu's read. */}
         {row.my_band ? (

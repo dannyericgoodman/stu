@@ -9,10 +9,10 @@
 // workflow, Stu-only, and never syncs anywhere. A row is in his personal ledger
 // iff ledger_stage IS NOT NULL.
 const LEDGER_STAGES = [
-  { key: 'identified', label: 'Stage 1: Identified', hint: 'Saw them in the inbox, liked them. Nothing sent yet.' },
+  { key: 'identified', label: 'Stage 1: Identified', hint: 'Fresh arrivals — from the inbox or + New. Worth a look?' },
   { key: 'outreach', label: 'Stage 2: Outreach Sent', hint: 'You reached out. Waiting to hear back.' },
-  { key: 'meeting', label: 'Stage 3: Meeting Set', hint: 'A conversation is on the calendar or happened.' },
-  { key: 'invest_pipeline', label: 'Stage 4a: Investment Pipeline', hint: 'Handed to the team — published to Airtable.' },
+  { key: 'meeting', label: 'Stage 3: Meeting Set', hint: 'Talking or just talked — decide what happens next.' },
+  { key: 'invest_pipeline', label: 'Stage 4a: Investment Pipeline', hint: 'The keepers — you add these to Airtable yourself.' },
   { key: 'pass', label: 'Stage 4b: Pass', hint: 'Not for us. Kept as a record, not a maybe.' },
 ];
 
