@@ -539,12 +539,13 @@ export default function Landing() {
       <section className="lp-section">
         <div className="lp-wrap">
           <div className="landing-fade">
-            <div className="lp-kicker">How it works</div>
-            <h2 className="lp-h2">Sourcing is a daily practice.<br />Stu does the daily part.</h2>
+            <div className="lp-kicker">Why Stu</div>
+            <h2 className="lp-h2">Built by an investor,<br />not a data vendor.</h2>
             <p className="lp-lede">
-              The best investors meet more founders. Stu sweeps YC, a16z Speedrun, Z Fellows,
-              Thiel Fellows, GitHub builders and the open web every night, and ranks what it finds
-              against your thesis. You just meet people.
+              The established platforms charge five figures a year. I built the version
+              I wanted to use every morning — the nightly sweep, the ranked inbox, memos
+              that show their work — and ran it daily for the better part of a year.
+              Now it&rsquo;s yours, for one payment.
             </p>
           </div>
           <div className="lp-steps">
