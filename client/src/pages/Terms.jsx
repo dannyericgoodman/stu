@@ -8,7 +8,7 @@ const sections = [
   },
   {
     h: 'The founding seat',
-    p: 'A founding seat costs $349 as a single, one-time payment. It is not a subscription: there are no recurring charges, ever. Your payment buys ongoing access to the product at the founding terms. Only 10 founding seats exist; when they are claimed, founding pricing closes permanently.',
+    p: 'A founding seat is a single, one-time payment, shown to you at checkout before you pay. It is not a subscription: there are no recurring charges, ever. Your payment buys ongoing access to the product at the founding terms. Only 10 founding seats exist; when they are claimed, founding pricing closes permanently.',
   },
   {
     h: 'Your account and API keys',
