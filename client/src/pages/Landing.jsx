@@ -88,7 +88,7 @@ const pricingIncludes = [
 const faqs = [
   {
     q: 'Who is this for?',
-    a: 'Early-stage investors — pre-seed, seed, and angels — who source outside their personal network. If your best deals come from work instead of warm intros, Stu is built for you.',
+    a: 'Pre-seed, seed, and angel investors who run their own ground game. If your best deals come from work instead of warm intros, Stu is built for you.',
   },
   {
     q: 'Do I need my own API keys?',
@@ -493,8 +493,9 @@ export default function Landing() {
           Wake up to a ranked inbox<br />of founders.
         </h1>
         <p className="lp-sub landing-fade landing-fade-d3">
-          Nightly AI scout sweeps across YC, a16z Speedrun, Z&nbsp;Fellows, Thiel Fellows,
-          GitHub builders and the open web — scored, tiered, and memo&rsquo;d before your first coffee.
+          Stu works the founder sources you&rsquo;d never have time to cover — YC, a16z Speedrun,
+          Z&nbsp;Fellows, Thiel Fellows, GitHub builders and the open web. Every profile scored,
+          tiered, and memo&rsquo;d before your first coffee.
         </p>
         <div className="lp-ctas landing-fade landing-fade-d4">
           <Link to="/signup" className="lp-cta">
@@ -539,9 +540,11 @@ export default function Landing() {
         <div className="lp-wrap">
           <div className="landing-fade">
             <div className="lp-kicker">How it works</div>
-            <h2 className="lp-h2">Set it up once.<br />Wake up to deal flow.</h2>
+            <h2 className="lp-h2">Sourcing is a daily practice.<br />Stu does the daily part.</h2>
             <p className="lp-lede">
-              No analysts. No scrapers to babysit. Three steps and the machine runs itself.
+              The best investors meet more founders. Stu sweeps the sources you&rsquo;d never
+              have time to cover — every night — and ranks what it finds against your thesis.
+              You just meet people.
             </p>
           </div>
           <div className="lp-steps">
@@ -563,7 +566,7 @@ export default function Landing() {
             <div className="lp-kicker">Pricing</div>
             <h2 className="lp-h2">One payment. Yours for good.</h2>
             <p className="lp-lede">
-              Get the full product — one payment, yours to keep.
+              The sourcing power of the five-figure platforms — one payment, yours to keep.
             </p>
           </div>
           <div className="lp-price-card landing-fade landing-fade-d2">
@@ -583,7 +586,7 @@ export default function Landing() {
               ))}
             </ul>
             <Link to="/signup" className="lp-cta" style={{ width: '100%', justifyContent: 'center' }}>
-              Claim your seat
+              Get access
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
