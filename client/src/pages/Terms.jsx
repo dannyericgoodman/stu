@@ -7,8 +7,8 @@ const sections = [
     p: 'Stu is AI-powered founder-sourcing software for early-stage investors: nightly scout sweeps, an AI-scored triage inbox, structured founder assessments, and pipeline tracking. Stu is a research and workflow tool — it is not investment advice, and nothing in the product should be treated as a recommendation to invest.',
   },
   {
-    h: 'The founding seat',
-    p: 'A founding seat is a single, one-time payment, shown to you at checkout before you pay. It is not a subscription: there are no recurring charges, ever. Your payment buys ongoing access to the product at the founding terms. Only 10 founding seats exist; when they are claimed, founding pricing closes permanently.',
+    h: 'Payment',
+    p: 'Stu is a single, one-time payment, shown to you at checkout before you pay. It is not a subscription: there are no recurring charges, ever. Your payment buys ongoing access to the product.',
   },
   {
     h: 'Your account and API keys',
@@ -24,11 +24,11 @@ const sections = [
   },
   {
     h: 'Payments',
-    p: 'Payments are processed securely by Stripe. We never see or store your card number. Founding seat purchases are final — but if the product materially does not work as described, contact us at support@stu.vc and we will make it right.',
+    p: 'Payments are processed securely by Stripe. We never see or store your card number. Purchases are final — but if the product materially does not work as described, contact us at support@stu.vc and we will make it right.',
   },
   {
     h: 'Changes',
-    p: 'We may update these terms as the product evolves. Continued use of Stu after changes take effect counts as acceptance. If a change materially affects founding members, we will say so plainly.',
+    p: 'We may update these terms as the product evolves. Continued use of Stu after changes take effect counts as acceptance. If a change materially affects paid users, we will say so plainly.',
   },
 ];
 

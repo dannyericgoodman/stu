@@ -58,7 +58,6 @@ const stats = [
   { value: '2,700+', label: 'founder profiles sourced and scored' },
   { value: '307', label: 'opportunities tracked in pipeline' },
   { value: '10', label: 'scout signals, running nightly' },
-  { value: '10', label: 'founding seats, total' },
 ];
 
 const steps = [
@@ -94,10 +93,6 @@ const faqs = [
   {
     q: 'Do I need my own API keys?',
     a: 'Yes. Stu runs on your keys for sourcing and AI — onboarding walks you through connecting them in minutes. API usage is billed to your own provider accounts, so your spend and your data stay entirely yours. We never pool keys across users.',
-  },
-  {
-    q: 'What happens after the 10 founding seats are claimed?',
-    a: 'Founding pricing closes permanently. Founding members keep full access at the founding terms — a single one-time payment, never a subscription.',
   },
   {
     q: 'Is my data separate from other investors?',
@@ -481,7 +476,7 @@ export default function Landing() {
           </div>
           <div className="lp-nav-actions">
             <Link to="/login" className="lp-signin">Sign in</Link>
-            <Link to="/signup" className="lp-nav-cta">Claim a founding seat</Link>
+            <Link to="/signup" className="lp-nav-cta">Get access</Link>
           </div>
         </div>
       </nav>
@@ -491,7 +486,7 @@ export default function Landing() {
         <div className="landing-fade landing-fade-d1">
           <span className="lp-eyebrow">
             <span className="dot" />
-            Founding seats open — 10 available
+            Now open
           </span>
         </div>
         <h1 className="lp-h1 landing-fade landing-fade-d2">
@@ -503,7 +498,7 @@ export default function Landing() {
         </p>
         <div className="lp-ctas landing-fade landing-fade-d4">
           <Link to="/signup" className="lp-cta">
-            Claim a founding seat
+            Get access
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -568,11 +563,11 @@ export default function Landing() {
             <div className="lp-kicker">Pricing</div>
             <h2 className="lp-h2">One payment. Yours for good.</h2>
             <p className="lp-lede">
-              Founding members get the full product at the founding price — once.
+              Get the full product — one payment, yours to keep.
             </p>
           </div>
           <div className="lp-price-card landing-fade landing-fade-d2">
-            <div className="lp-price-flag">Founding seat</div>
+            <div className="lp-price-flag">Stu</div>
             <div className="lp-price">Pay once</div>
             <div className="lp-price-once">
               <b>One-time.</b> Not a subscription — pay once, keep access. Price shown at checkout.
@@ -593,9 +588,6 @@ export default function Landing() {
                 <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </Link>
-            <div className="lp-seats-note">
-              10 founding seats, total. When they&rsquo;re claimed, founding pricing closes permanently.
-            </div>
           </div>
         </div>
       </section>
@@ -625,9 +617,9 @@ export default function Landing() {
       <section className="lp-final">
         <div className="landing-fade">
           <h2>Your inbox could be full by tomorrow.</h2>
-          <p>10 founding seats. One-time payment. When they&rsquo;re gone, they&rsquo;re gone.</p>
+          <p>One-time payment. Yours to keep.</p>
           <Link to="/signup" className="lp-cta">
-            Claim a founding seat
+            Get access
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>

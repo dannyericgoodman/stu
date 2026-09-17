@@ -47,8 +47,8 @@ export default function Payment() {
           <div className="flex justify-center mb-3">
             <StuLogo size={40} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Claim your founding seat</h1>
-          <p className="text-sm text-gray-500 mt-1">One payment. Lifetime access. One of ten.</p>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Get access to Stu</h1>
+          <p className="text-sm text-gray-500 mt-1">One payment. Yours to keep.</p>
         </div>
 
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
@@ -61,8 +61,8 @@ export default function Payment() {
             {seats && (
               <p className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 mt-3 inline-block">
                 {seats.remaining > 0
-                  ? `${seats.remaining} of ${seats.total} founding seats remaining`
-                  : 'All founding seats are claimed'}
+                  ? `${seats.remaining} of ${seats.total} seats remaining`
+                  : 'All seats are claimed'}
               </p>
             )}
           </div>
@@ -101,7 +101,7 @@ export default function Payment() {
             disabled={loading}
             className="btn-primary w-full justify-center text-base py-3"
           >
-            {loading ? 'Redirecting to checkout...' : 'Claim founding seat — $349'}
+            {loading ? 'Redirecting to checkout...' : 'Get access — $349'}
           </button>
 
           <div className="flex items-center justify-center gap-4 mt-4">
