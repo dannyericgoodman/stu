@@ -99,8 +99,9 @@ export default function Home() {
   }
 
   // ── This Morning triage ──
-  // The shortlist is triageable in place: Add to Pipeline (interested → Watching,
-  // published to the team's Airtable) or Pass, without opening the Source inbox.
+  // The shortlist is triageable in place: Add to Pipeline (interested → the
+  // personal ledger at Stage 1: Identified, Stu-only) or Pass, without opening
+  // the Source inbox.
   // Same endpoints the inbox uses; the row leaves the list optimistically and a
   // failure puts it back rather than pretending it worked.
   async function triageShortlist(f, action) {
@@ -428,11 +429,12 @@ function Shortlist({ data, nav, onTriage, triaged, onClearTriaged }) {
                 </button>
               )}
               {/* Triage in place — the inbox's verbs, here. Add to Pipeline means
-                  interested: Watching in Stu, 4 · Watching in the team's Airtable. */}
+                  interested: the founder lands in his personal ledger at
+                  Stage 1: Identified, Stu-only. */}
               <button
                 onClick={() => onTriage(f, 'watch')}
                 className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition flex-none"
-                title="Add to pipeline as Watching — also publishes to the team's Airtable"
+                title="Add to pipeline as Watching"
               >
                 Add to Pipeline
               </button>

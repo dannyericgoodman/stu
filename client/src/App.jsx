@@ -43,7 +43,6 @@ const Assess = lazy(() => import('./pages/Assess'));
 // it holds the depth layer and the materials list this doesn't surface yet.
 const Read = lazy(() => import('./pages/Read'));
 const AssessmentDetail = lazy(() => import('./pages/AssessmentDetail'));
-const AskStu = lazy(() => import('./pages/AskStu'));
 // Frameworks — the Assessment Architect. A tool Danny reaches for when his
 // yardstick needs editing, not a morning screen. Lazy like Network.
 const Frameworks = lazy(() => import('./pages/Frameworks'));
@@ -130,7 +129,6 @@ function AppRoutes() {
         user.onboarding_complete ? <Navigate to="/" replace /> :
         <Onboarding />
       } />
-      <Route path="/ask" element={<ProtectedRoute><AskStu /></ProtectedRoute>} />
       {/* THREE SURFACES OVER ONE SUBSTRATE.
           Danny, after seeing sourcing and the board stacked on one screen: "we're
           conflating two actions here: 1) I need an inbox to study and triage new

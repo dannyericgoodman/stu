@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { NavLink, useMatch, useLocation } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import DannyAI from './DannyAI';
 import SearchPalette from './SearchPalette';
 import StuLogo from './StuLogo';
-import { api, fetchAppVersion } from '../utils/api';
+import { fetchAppVersion } from '../utils/api';
 
 // Four lenses + the assistant. Everything operational lives in the utility menu.
 // Four destinations, not twelve.
@@ -89,10 +88,7 @@ export default function Layout({ children }) {
     : utilityConfig;
   const [utilOpen, setUtilOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [founderData, setFounderData] = useState(null);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+
 
   // Detect new deploys: capture the version this tab loaded with, then re-check on
   // an interval and whenever the tab regains focus. If the server version changed,
@@ -112,18 +108,6 @@ export default function Layout({ children }) {
     window.addEventListener('focus', onFocus);
     return () => { cancelled = true; clearInterval(interval); window.removeEventListener('focus', onFocus); };
   }, []);
-
-  // Detect founder detail page and load context for AI sidebar
-  const founderMatch = useMatch('/founders/:id');
-  useEffect(() => {
-    if (founderMatch?.params?.id) {
-      api.getFounder(founderMatch.params.id)
-        .then(f => setFounderData(f))
-        .catch(() => setFounderData(null));
-    } else {
-      setFounderData(null);
-    }
-  }, [founderMatch?.params?.id]);
 
   // Cmd+K listener
   useEffect(() => {
@@ -248,11 +232,6 @@ export default function Layout({ children }) {
             <StuLogo size={20} />
             <span className="text-sm font-semibold text-gray-900">Stu</span>
           </div>
-          <button onClick={() => setAiOpen(!aiOpen)} className={`p-1 transition-colors ${aiOpen ? 'text-blue-600' : 'text-gray-400'}`}>
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-            </svg>
-          </button>
         </header>
 
         <div className="flex-1 flex overflow-hidden">
@@ -269,25 +248,6 @@ export default function Layout({ children }) {
             {bleed ? children : <div className="max-w-5xl mx-auto px-5 py-8 md:px-8">{children}</div>}
           </main>
 
-          {/* Stu AI toggle */}
-          <button
-            onClick={() => setAiOpen(!aiOpen)}
-            className={`hidden md:flex items-center justify-center w-10 flex-shrink-0 border-l transition-colors ${
-              aiOpen ? 'bg-blue-50 border-gray-200 text-blue-600' : 'bg-white border-gray-200 text-gray-400 hover:text-blue-600'
-            }`}
-            title={founderData ? `Stu AI (${founderData.name})` : 'Toggle Stu AI'}
-          >
-            <div className="flex flex-col items-center gap-1">
-              <svg className="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-              </svg>
-              {founderData && (
-                <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-              )}
-            </div>
-          </button>
-
-          {aiOpen && <DannyAI onClose={() => setAiOpen(false)} founderData={founderData} />}
         </div>
       </div>
 

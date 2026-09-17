@@ -143,7 +143,7 @@ function Column({ id, label, hint, rows, unstaged, onOpen, onDelete }) {
           // Says what it is rather than pretending. These aren't under
           // consideration — nobody has said anything about them yet.
           <p className="text-mini text-ink-4 px-1 pb-1 leading-snug">
-            No deal stage set. Drag one onto a column to start tracking it.
+            No stage set. Drag one onto a column to start tracking it.
           </p>
         )}
         {rows.map((r) => (

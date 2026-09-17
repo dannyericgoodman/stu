@@ -345,7 +345,6 @@ export const api = {
   getSettings: () => request('/settings'),
   updateSetting: (key, value) => request(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
   testAnthropic: () => request('/settings/test-anthropic'),
-  getPipelineConfig: () => request('/settings/pipeline-config'),
   getSourcingCriteria: () => request('/settings/sourcing-criteria'),
   completeOnboarding: () => request('/settings/complete-onboarding', { method: 'POST' }),
 
@@ -382,6 +381,9 @@ export const api = {
   // The ledger is its own cache key — it must not serve (or be served by) the
   // old merged-board cache.
   getLedger: (opts) => cachedGet('/pipeline/ledger', opts),
+  // Per-stage card counts for the user's ledger stages — the stage editor uses
+  // this to block deleting a stage that still holds cards.
+  getStageCounts: () => request('/pipeline/stage-counts'),
   // A ledger move. Invalidates the ledger AND the card.
   setLedgerStage: (id, stage) =>
     after(
@@ -530,51 +532,6 @@ export const api = {
   sendBriefNow: () => request('/newsletter/send-now', { method: 'POST' }),
   getBriefDigestPreview: () => request('/newsletter/digest-preview'),
   getBriefArchive: () => request('/newsletter/archive'),
-
-  // Stu tool-use chat
-  stuChat: async function* (messages, mode) {
-    const token = getToken();
-    const res = await fetch(`${API_BASE}/stu/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify(mode ? { messages, mode } : { messages })
-    });
-
-    if (res.status === 401) {
-      setToken(null);
-      setUser(null);
-      window.location.href = '/login';
-      return;
-    }
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Request failed' }));
-      yield { type: 'error', error: err.error || `Server error (${res.status})` };
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            yield data;
-          } catch {}
-        }
-      }
-    }
-  },
 
   // Talent — Portfolio companies
   getTalentPortfolio: () => request('/talent/portfolio'),

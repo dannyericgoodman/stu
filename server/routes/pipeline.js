@@ -304,30 +304,43 @@ router.get('/ledger', (req, res) => {
       tracks: vocab.tracksFromStu(r.pipeline_tracks),
     }));
 
-  // Ledger order: working stages first (identified → outreach → meeting), then
-  // the two terminal outcomes. Within a stage, most recently touched first.
-  const rank = { identified: 0, outreach: 1, meeting: 2, invest_pipeline: 3, pass: 4 };
+  // The board's columns come from the USER's stages (per-user
+  // `pipeline_stages` setting, defaulting to the five in
+  // server/lib/ledgerStages.js). Column order is the stage order.
+  const stages = ledgerStages.toWireStages(ledgerStages.getStages(req.user.id));
+  const rank = Object.fromEntries(stages.map((s, i) => [s.key, i]));
   out.sort(
     (a, b) =>
       (rank[a.ledger_stage] ?? 9) - (rank[b.ledger_stage] ?? 9) ||
       String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''))
   );
 
-  res.json({ rows: out, stages: ledgerStages.LEDGER_STAGES, total: out.length });
+  res.json({ rows: out, stages, total: out.length });
 });
 
-// PATCH /api/pipeline/:id/ledger-stage  { stage: 'identified' | 'outreach' | 'meeting' | 'invest_pipeline' | 'pass' }
-//
-// The ledger's write path. Stu-local for every stage EXCEPT 4a: dragging to
-// "Stage 4a: Investment Pipeline" publishes the founder to the team's Airtable
-// base — that drag IS the publish-to-team decision, so it passes
-// { explicit: true } (the only caller allowed to) and returns what Airtable
-// said, the same contract as the old stage drag.
-//
-// 4a with an existing Airtable record pushes Investment Status →
+// ── GET /api/pipeline/stage-counts ──
+// How many live ledger cards sit in each of the user's stages. Used by the
+// stage editor to block deleting a stage that still holds cards.
+// NOTE: defined BEFORE /:id so Express doesn't match "stage-counts" as an id.
+router.get('/stage-counts', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT ledger_stage, COUNT(*) AS n FROM founders
+       WHERE created_by = ? AND is_deleted = 0 AND ledger_stage IS NOT NULL
+         AND represented_by_founder_id IS NULL
+       GROUP BY ledger_stage`
+    )
+    .all(req.user.id);
+  const counts = {};
+  for (const r of rows) counts[r.ledger_stage] = r.n;
+  res.json({ counts });
+});
+
+// PATCH /api/pipeline/:id/ledger-stage  { stage: '<one of the user's stages>' }
 // ══════════════════════════════════════════════════════════════════════════
-// PATCH /api/pipeline/:id/ledger-stage — move a card between the five ledger
-// stages. 2026-09-17: the ledger is Danny's private record. Stage 4a
+// PATCH /api/pipeline/:id/ledger-stage — move a card between the user's
+// configured ledger stages (server/lib/ledgerStages.js). 2026-09-17: the
+// ledger is Danny's private record. Stage 4a
 // ("Investment Pipeline") is a Stu-internal label only — it does NOT write to
 // Airtable. Stu never writes to Airtable, full stop; the team base is
 // hand-maintained. (Danny: "I don't want you writing to Airtable.")
@@ -337,10 +350,11 @@ router.patch('/:id/ledger-stage', async (req, res) => {
   if (!founder) return res.status(404).json({ error: 'not found' });
 
   const stage = req.body?.stage;
-  if (!ledgerStages.isLedgerStage(stage)) {
+  const userStages = ledgerStages.getStages(req.user.id);
+  if (!userStages.some((s) => s.id === stage)) {
     return res.status(400).json({
       error: 'Not one of your ledger stages.',
-      allowed: ledgerStages.LEDGER_STAGE_KEYS,
+      allowed: userStages.map((s) => s.id),
     });
   }
 
@@ -350,9 +364,10 @@ router.patch('/:id/ledger-stage', async (req, res) => {
   db.prepare('UPDATE founders SET ledger_stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(stage, founder.id);
 
-  if (stage === 'pass') {
-    // A pass is a verdict, not just a position — record it so the learning
-    // loop and the "what you advance" panel see the same call he made here.
+  // The user's PASS-designated stage is a verdict, not just a position —
+  // record it so the learning loop and the "what you advance" panel see the
+  // same call he made here. Keyed on the user's pass stage, not a hardcoded id.
+  if (stage === ledgerStages.getPassStage(req.user.id)) {
     db.prepare(`
       INSERT INTO founder_triage (founder_id, user_id, verdict, triaged_at)
       VALUES (?, ?, 'pass', CURRENT_TIMESTAMP)
@@ -1124,17 +1139,17 @@ router.patch('/:id/tracks', async (req, res) => {
   ).run(csv, founder.id);
 
   // ── THE BADGE DOES NOT GO TO AIRTABLE ──
-  // Danny, asked how far the Airtable write should go: "I'm comfortable with you
-  // publishing stage updates to Airtable. But that's it. I'm going to primarily
-  // work in Stu, and then choose to enter my own context to the team view in
-  // Airtable depending on what I want them to see."
+  // Stu is read-only against the team's base — the badge is Stu-local, full
+  // stop. Danny hand-maintains Airtable himself, and no badge change, stage
+  // drag, or publish call in Stu writes there. (Danny, 2026-09-17: "I don't
+  // want you writing to Airtable.")
   //
-  // So the stage publishes and nothing else does. That has a consequence which has
-  // to be handled here rather than discovered later: the nightly sync UNIONS tracks
-  // (Airtable may add a track, never remove one). With no push, a badge Danny
-  // switches OFF in Stu would be switched straight back ON at 5:45am by an Airtable
-  // record that still says Investment — his edit silently undone overnight, which
-  // is the exact class of bug that made this board lie for four months.
+  // That has a consequence which has to be handled here rather than discovered
+  // later: the nightly sync UNIONS tracks (Airtable may add a track, never
+  // remove one). With no push, a badge Danny switches OFF in Stu would be
+  // switched straight back ON at 5:45am by an Airtable record that still says
+  // Investment — his edit silently undone overnight, which is the exact class
+  // of bug that made this board lie for four months.
   //
   // `tracks_set_by_user_at` is the fix: once Danny has touched a founder's badge,
   // Stu owns that founder's tracks and the sync stops unioning them. His edit is
@@ -1479,15 +1494,16 @@ router.post('/', (req, res) => {
     });
   }
 
-  // A manually added card lands in the PERSONAL ledger at Stage 1: Identified
-  // (2026-09-17). stage_status stays NULL: it is the mirror column ("what
-  // Airtable says") and this row has no Airtable record — writing an Airtable
-  // stage here would be the mirror-column lie. pipeline_tracks is kept for
-  // continuity but no longer drives any board.
+  // A manually added card lands in the PERSONAL ledger at the user's ENTRY
+  // stage (default: Stage 1: Identified). stage_status stays NULL: it is the
+  // mirror column ("what Airtable says") and this row has no Airtable record —
+  // writing an Airtable stage here would be the mirror-column lie.
+  // pipeline_tracks is kept for continuity but no longer drives any board.
+  const entryStage = ledgerStages.getEntryStage(req.user.id);
   const r = db.prepare(`
     INSERT INTO founders (name, company, website_url, stage, status, pipeline_tracks, stage_status, ledger_stage, created_by)
-    VALUES (?, ?, ?, 'Pre-seed', 'Sourced', ?, NULL, 'identified', ?)
-  `).run(name, company, website || null, req.body?.pipeline_tracks || 'investment', req.user.id);
+    VALUES (?, ?, ?, 'Pre-seed', 'Sourced', ?, NULL, ?, ?)
+  `).run(name, company, website || null, req.body?.pipeline_tracks || 'investment', entryStage, req.user.id);
 
   // A card that reads itself, the moment it exists. See readWebsiteSoon.
   if (website) readWebsiteSoon(r.lastInsertRowid, website, req.user.id);

@@ -110,7 +110,7 @@ test('CRUD lifecycle: create → update → default → duplicate → delete', (
       { key: 'q1', label: 'Q1', question: 'First question?', weight: 3, min_rung: 2, load_bearing: true },
       { key: 'q2', label: 'Q2', question: 'Second question?', weight: 2, min_rung: 1, load_bearing: false },
     ],
-    extras: { yellow_flags: [{ key: 'hype', label: 'Hype', blurb: 'Sizzle only', dock: 0.5 }] },
+    extras: { yellow_flags: [{ key: 'hype', label: 'Hype', blurb: 'Sizzle only', amount: 0.5 }] },
     gate_threshold: 5,
   });
   createdIds.push(r.id);
@@ -178,7 +178,7 @@ test('equivalence: pre-seed preset through the generic engine scores like the le
       key: d.key, label: d.label, weight: d.weight, needs: d.min_rung, load_bearing: !!d.load_bearing,
     })),
     gate_threshold: preset.gate_threshold,
-    flag_defs: (preset.extras.yellow_flags || []).map((f) => ({ key: f.key, label: f.label, why: f.blurb, amount: f.dock })),
+    flag_defs: (preset.extras.yellow_flags || []).map((f) => ({ key: f.key, label: f.label, why: f.why || f.blurb, amount: f.amount ?? f.dock })),
   });
   assert.equal(generic.score, legacy.score, `scores match (${legacy.score})`);
   assert.equal(generic.band.key, legacy.band.key, 'bands match');

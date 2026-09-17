@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const ledgerStages = require('../lib/ledgerStages');
 const { VALID_TIE_TYPES } = require('../pipeline/sourcing-engine');
 
 // Hard rule: the Pipeline only ever shows founders with a VERIFIED Chicago/IL tie.
@@ -142,17 +143,18 @@ router.get('/runs', (req, res) => {
   res.json(runs);
 });
 
-// POST /api/sourcing/approve/:id — add to Danny's personal ledger at Stage 1: Identified.
-// (2026-09-17: the old investment/admissions track split is gone; approve and
-// watch both land in the personal ledger. Airtable is never written here.)
-// Atomic: the INSERT (founders) and the UPDATE (sourced_founders) happen in ONE
-// transaction, with a status re-check inside the tx, so a crash or a double-click can
+// POST /api/sourcing/approve/:id — "Add to Pipeline" (full approve).
+// Creates the card in the user's PERSONAL ledger at their ENTRY stage
+// (default: Stage 1: Identified). Stu-only — Stu never writes to Airtable.
+// Atomic like watch: the INSERT (founders) and the UPDATE (sourced_founders)
 // never create a duplicate or an orphan. Carries the FULL sourcing evidence forward.
 router.post('/approve/:id', (req, res) => {
   let tags = [], pedigreeSignals = [], builderSignals = [];
   const parse = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
   const userId = req.user.id;
   const sourcedId = req.params.id;
+  // New cards land in the user's ENTRY stage (default: 'identified').
+  const entryStage = ledgerStages.getEntryStage(userId);
 
   const insertFounder = db.prepare(`
     INSERT INTO founders (
@@ -183,7 +185,7 @@ router.post('/approve/:id', (req, res) => {
         sourced.source || 'sourcing-engine', sourced.confidence_score, sourced.confidence_rationale,
         sourced.chicago_connection || null, sourced.location_city || null, 'Pre-seed',
         tags.find(t => ['AI/ML', 'Fintech', 'Healthtech', 'SaaS', 'Defense', 'Climate', 'DevTools', 'Biotech', 'Proptech', 'Edtech', 'Cybersecurity'].includes(t)) || null,
-        JSON.stringify(tags), 'Sourced', 'admissions', 'Sourced', 'identified',
+        JSON.stringify(tags), 'Sourced', 'admissions', 'Sourced', entryStage,
         sourced.company_one_liner || null,
         pedigreeSignals.length ? pedigreeSignals.join(', ') : null,
         builderSignals.length ? builderSignals.join(', ') : null,
@@ -207,14 +209,17 @@ router.post('/approve/:id', (req, res) => {
     return res.status(500).json({ error: 'Approve failed: ' + err.message });
   }
 
-  // Airtable is NOT written here (team base = explicit publish-to-team only).
+  // Airtable is NOT written here. The team base is hand-maintained; Stu never
+  // writes to Airtable (2026-09-17). Approved founders live in the personal
+  // ledger until he adds them to Airtable himself.
   res.json(founder);
 });
 
 // POST /api/sourcing/watch/:id — "Add to Pipeline": Danny is interested.
-// Creates the card in his PERSONAL ledger at Stage 1: Identified. Stu-only —
-// no Airtable write (2026-09-17: Airtable is the team's record; the ledger is
-// his). The publish-to-team moment is the drag to Stage 4a, not this click.
+// Creates the card in his PERSONAL ledger at his ENTRY stage (default: Stage 1:
+// Identified). Stu-only — Stu never writes to Airtable (2026-09-17: the team
+// base is hand-maintained; the ledger is his). There is no publish-to-team
+// moment anymore: a card is his alone until he adds it to Airtable himself.
 // Atomic like approve: the INSERT (founders) and the UPDATE (sourced_founders)
 // happen in ONE transaction with a status re-check inside, so a double-click
 // can never create a duplicate or an orphan.
@@ -223,6 +228,8 @@ router.post('/watch/:id', async (req, res) => {
   const parse = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
   const userId = req.user.id;
   const sourcedId = req.params.id;
+  // New cards land in the user's ENTRY stage (default: 'identified').
+  const entryStage = ledgerStages.getEntryStage(userId);
 
   const insertFounder = db.prepare(`
     INSERT INTO founders (
@@ -253,7 +260,7 @@ router.post('/watch/:id', async (req, res) => {
         sourced.source || 'sourcing-engine', sourced.confidence_score, sourced.confidence_rationale,
         sourced.chicago_connection || null, sourced.location_city || null, 'Pre-seed',
         tags.find(t => ['AI/ML', 'Fintech', 'Healthtech', 'SaaS', 'Defense', 'Climate', 'DevTools', 'Biotech', 'Proptech', 'Edtech', 'Cybersecurity'].includes(t)) || null,
-        JSON.stringify(tags), 'Watching', null, 'investment', 'identified',
+        JSON.stringify(tags), 'Watching', null, 'investment', entryStage,
         sourced.company_one_liner || null,
         pedigreeSignals.length ? pedigreeSignals.join(', ') : null,
         builderSignals.length ? builderSignals.join(', ') : null,

@@ -538,7 +538,7 @@ function computeConviction({ movements = {}, rung = RUNG.NONE, marketRisk = {}, 
   if (Array.isArray(flag_defs) && flag_defs.length) {
     for (const f of flag_defs) {
       if (f && f.key && isTrue(flags[f.key])) {
-        docks.push({ key: f.key, amount: -(Number(f.amount) || 0.5), why: f.why || f.label || f.key });
+        docks.push({ key: f.key, amount: -(Number(f.amount ?? f.dock) || 0.5), why: f.why || f.label || f.key });
       }
     }
   } else {

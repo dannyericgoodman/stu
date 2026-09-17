@@ -1,40 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../utils/api';
 
-const COLORS = ['gray', 'blue', 'amber', 'green', 'red', 'purple'];
-
-const COLOR_CLASSES = {
-  gray: 'bg-gray-100 text-gray-600',
-  blue: 'bg-blue-50 text-blue-700',
-  amber: 'bg-amber-50 text-amber-700',
-  green: 'bg-emerald-50 text-emerald-700',
-  red: 'bg-red-50 text-red-700',
-  purple: 'bg-purple-50 text-purple-700',
-};
-
-const DEFAULT_ADMISSIONS = [
-  { name: 'Sourced', color: 'gray' },
-  { name: 'Outreach', color: 'blue' },
-  { name: 'First Call Scheduled', color: 'blue' },
-  { name: 'First Call Complete', color: 'blue' },
-  { name: 'Second Call Scheduled', color: 'amber' },
-  { name: 'Second Call Complete', color: 'amber' },
-  { name: 'Admitted', color: 'green' },
-  { name: 'Active Resident', color: 'green' },
-  { name: 'Density Resident', color: 'green' },
-  { name: 'Alumni', color: 'gray' },
-  { name: 'Hold/Nurture', color: 'amber' },
-  { name: 'Not Admitted', color: 'red' },
-];
-
-const DEFAULT_DEALS = [
-  { name: 'Under Consideration', color: 'blue' },
-  { name: 'First Meeting', color: 'blue' },
-  { name: 'Partner Call', color: 'amber' },
-  { name: 'Memo Draft', color: 'amber' },
-  { name: 'IC Review', color: 'amber' },
-  { name: 'Committed', color: 'green' },
-  { name: 'Passed', color: 'red' },
+// The default five pipeline stages, matching server/lib/ledgerStages.js.
+// Served from the server on every load (GET /api/settings returns pipeline_stages);
+// this copy is only the reset target and the first-run fallback.
+const DEFAULT_PIPELINE_STAGES = [
+  { id: 'identified', label: 'Stage 1: Identified', subtitle: 'Fresh arrivals — from the inbox or + New. Worth a look?', is_entry: true, is_pass: false },
+  { id: 'outreach', label: 'Stage 2: Outreach Sent', subtitle: 'You reached out. Waiting to hear back.', is_entry: false, is_pass: false },
+  { id: 'meeting', label: 'Stage 3: Meeting Set', subtitle: 'Talking or just talked — decide what happens next.', is_entry: false, is_pass: false },
+  { id: 'invest_pipeline', label: 'Stage 4a: Investment Pipeline', subtitle: 'The keepers — you add these to Airtable yourself.', is_entry: false, is_pass: false },
+  { id: 'pass', label: 'Stage 4b: Pass', subtitle: 'Not for us. Kept as a record, not a maybe.', is_entry: false, is_pass: false },
 ];
 
 const STAGE_OPTIONS = ['Pre-seed', 'Seed', 'Series A', 'Any'];
@@ -97,66 +72,6 @@ function TagInput({ tags, onAdd, onRemove, placeholder }) {
   );
 }
 
-function StageRow({ stage, index, total, onChange, onMove, onDelete }) {
-  return (
-    <div className="flex items-center gap-2 group">
-      <div className="flex flex-col gap-0.5">
-        <button
-          type="button"
-          onClick={() => onMove(index, -1)}
-          disabled={index === 0}
-          className="text-gray-300 hover:text-gray-500 disabled:opacity-30 disabled:cursor-default p-0.5"
-          title="Move up"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={() => onMove(index, 1)}
-          disabled={index === total - 1}
-          className="text-gray-300 hover:text-gray-500 disabled:opacity-30 disabled:cursor-default p-0.5"
-          title="Move down"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-      </div>
-      <span className="text-xs text-gray-400 w-5 text-right tabular-nums">{index + 1}</span>
-      <input
-        type="text"
-        value={stage.name}
-        onChange={(e) => onChange(index, 'name', e.target.value)}
-        className="input flex-1"
-        placeholder="Stage name"
-      />
-      <select
-        value={stage.color}
-        onChange={(e) => onChange(index, 'color', e.target.value)}
-        className="select w-28"
-      >
-        {COLORS.map(c => (
-          <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-        ))}
-      </select>
-      <span className={`badge ${COLOR_CLASSES[stage.color]} w-16 justify-center text-[10px]`}>
-        Preview
-      </span>
-      <button
-        type="button"
-        onClick={() => onDelete(index)}
-        className="text-gray-300 hover:text-red-500 transition-colors p-1 opacity-0 group-hover:opacity-100"
-        title="Remove stage"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-        </svg>
-      </button>
-    </div>
-  );
-}
 
 function CustomQueryRow({ query, index, onChange, onDelete }) {
   return (
@@ -223,9 +138,10 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState('pipeline');
   const [loadError, setLoadError] = useState('');
 
-  // Pipeline state
-  const [admissionsStages, setAdmissionsStages] = useState([]);
-  const [dealStages, setDealStages] = useState([]);
+  // Pipeline state — the user's own stages for the loading-dock board.
+  // Canonical shape: { id, label, subtitle, is_entry, is_pass }.
+  const [pipelineStages, setPipelineStages] = useState([]);
+  const [stageCounts, setStageCounts] = useState({});
   const pipelineSave = useSaveState();
 
   // Sourcing state
@@ -296,8 +212,7 @@ export default function Settings() {
     async function load() {
       try {
         const settings = await api.getSettings();
-        setAdmissionsStages(settings.pipeline_admissions_stages || DEFAULT_ADMISSIONS);
-        setDealStages(settings.pipeline_deal_stages || DEFAULT_DEALS);
+        setPipelineStages(settings.pipeline_stages || DEFAULT_PIPELINE_STAGES.map((s) => ({ ...s })));
         setLocations(settings.sourcing_locations || []);
         setSchools(settings.sourcing_schools || []);
         setCompanies(settings.sourcing_companies || []);
@@ -325,6 +240,12 @@ export default function Settings() {
         setGmailAppPassword(asStr(settings.newsletter_gmail_app_password));
         setNewsletterLabel(settings.newsletter_label || 'Stu/News');
         setFundName(settings.profile_fund_name || '');
+        // Per-stage card counts, so the editor can block deleting a stage that
+        // still holds cards. Read-only; failure here just disables the guard.
+        try {
+          const { counts } = await api.getStageCounts();
+          setStageCounts(counts || {});
+        } catch { /* leave the guard empty */ }
         loadSources();
       } catch (err) {
         setLoadError(err.message || 'Failed to load settings');
@@ -335,15 +256,13 @@ export default function Settings() {
     load();
   }, []);
 
-  // Pipeline handlers
-  function updateStage(type, index, field, value) {
-    const setter = type === 'admissions' ? setAdmissionsStages : setDealStages;
-    setter(prev => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
+  // Pipeline stage handlers
+  function updatePipelineStage(index, field, value) {
+    setPipelineStages(prev => prev.map((s, i) => i === index ? { ...s, [field]: value } : s));
   }
 
-  function moveStage(type, index, direction) {
-    const setter = type === 'admissions' ? setAdmissionsStages : setDealStages;
-    setter(prev => {
+  function movePipelineStage(index, direction) {
+    setPipelineStages(prev => {
       const next = [...prev];
       const target = index + direction;
       if (target < 0 || target >= next.length) return prev;
@@ -352,25 +271,70 @@ export default function Settings() {
     });
   }
 
-  function deleteStage(type, index) {
-    const setter = type === 'admissions' ? setAdmissionsStages : setDealStages;
-    setter(prev => prev.filter((_, i) => i !== index));
+  function setPipelineFlag(index, flag) {
+    // Exactly one entry stage and one pass stage — setting one unsets the rest.
+    setPipelineStages(prev => prev.map((s, i) => ({ ...s, [flag]: i === index })));
   }
 
-  function addStage(type) {
-    const setter = type === 'admissions' ? setAdmissionsStages : setDealStages;
-    setter(prev => [...prev, { name: '', color: 'gray' }]);
+  async function deletePipelineStage(index) {
+    const stage = pipelineStages[index];
+    if (!stage) return;
+    // Refresh counts at delete time so the guard can't go stale.
+    let counts = stageCounts;
+    try {
+      const r = await api.getStageCounts();
+      counts = r.counts || {};
+      setStageCounts(counts);
+    } catch { /* fall back to the loaded counts */ }
+    const n = counts[stage.id] || 0;
+    if (n > 0) {
+      pipelineSave.setError(`Can't delete "${stage.label}" — it has ${n} card${n === 1 ? '' : 's'} on the board. Move them first.`);
+      return;
+    }
+    setPipelineStages(prev => {
+      let next = prev.filter((_, i) => i !== index).map((s) => ({ ...s }));
+      // If the deleted stage was entry/pass, the first (entry) / last (pass)
+      // remaining stage takes over so the flags are never empty.
+      if (next.length > 0) {
+        if (stage.is_entry && !next.some((s) => s.is_entry)) next[0].is_entry = true;
+        if (stage.is_pass && !next.some((s) => s.is_pass)) next[next.length - 1].is_pass = true;
+      }
+      return next;
+    });
+  }
+
+  function addPipelineStage() {
+    setPipelineStages(prev => [...prev, {
+      id: `custom-${Date.now().toString(36)}`,
+      label: '',
+      subtitle: '',
+      is_entry: false,
+      is_pass: false,
+    }]);
   }
 
   function resetPipeline() {
-    setAdmissionsStages([...DEFAULT_ADMISSIONS]);
-    setDealStages([...DEFAULT_DEALS]);
+    setPipelineStages(DEFAULT_PIPELINE_STAGES.map((s) => ({ ...s })));
   }
 
   async function savePipeline() {
     await pipelineSave.doSave(async () => {
-      await api.updateSetting('pipeline_admissions_stages', admissionsStages);
-      await api.updateSetting('pipeline_deal_stages', dealStages);
+      // Every stage needs an id and a label — the server normalizes and drops
+      // anything unusable, so validate here to say what's wrong instead.
+      const stages = pipelineStages.map((s) => ({
+        id: String(s.id || '').trim(),
+        label: String(s.label || '').trim(),
+        subtitle: String(s.subtitle || ''),
+        is_entry: !!s.is_entry,
+        is_pass: !!s.is_pass,
+      }));
+      const ids = stages.map((s) => s.id);
+      if (stages.length === 0) throw new Error('You need at least one stage.');
+      if (stages.some((s) => !s.id || !s.label)) throw new Error('Every stage needs a name.');
+      if (new Set(ids).size !== ids.length) throw new Error('Stage ids must be unique.');
+      await api.updateSetting('pipeline_stages', stages);
+      // Saved — the in-memory copy is now what's on disk.
+      setPipelineStages(stages);
     });
   }
 
@@ -489,62 +453,114 @@ export default function Settings() {
         ))}
       </div>
 
-      {/* Pipeline Tab */}
+      {/* Pipeline Tab — the user's own board stages */}
       {activeTab === 'pipeline' && (
         <div className="space-y-6">
-          {/* Admissions Pipeline */}
           <div className="card p-6">
             <div className="mb-4">
-              <h2 className="text-sm font-semibold text-gray-900">Admissions Pipeline</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Stages for tracking founder/resident admissions.</p>
+              <h2 className="text-sm font-semibold text-gray-900">Pipeline stages</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                The columns on your Pipeline board. Rename them, reorder them, add your own —
+                they stay yours. One stage takes new cards, one stage records a pass.
+              </p>
             </div>
-            <div className="space-y-2">
-              {admissionsStages.map((stage, i) => (
-                <StageRow
-                  key={i}
-                  stage={stage}
-                  index={i}
-                  total={admissionsStages.length}
-                  onChange={(idx, field, val) => updateStage('admissions', idx, field, val)}
-                  onMove={(idx, dir) => moveStage('admissions', idx, dir)}
-                  onDelete={(idx) => deleteStage('admissions', idx)}
-                />
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => addStage('admissions')}
-              className="btn-ghost mt-3 text-xs"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Add stage
-            </button>
-          </div>
 
-          {/* Deal Pipeline */}
-          <div className="card p-6">
-            <div className="mb-4">
-              <h2 className="text-sm font-semibold text-gray-900">Deal Pipeline</h2>
-              <p className="text-xs text-gray-500 mt-0.5">Stages for tracking investment deal flow.</p>
+            <div className="grid sm:grid-cols-2 gap-3 mb-5">
+              <div>
+                <label className="label">New cards start in</label>
+                <select
+                  className="select w-full"
+                  value={(pipelineStages.findIndex((s) => s.is_entry) + 1) || 1}
+                  onChange={(e) => setPipelineFlag(Number(e.target.value) - 1, 'is_entry')}
+                >
+                  {pipelineStages.map((s, i) => (
+                    <option key={s.id} value={i + 1}>{s.label || `Stage ${i + 1}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Pass stage</label>
+                <select
+                  className="select w-full"
+                  value={(pipelineStages.findIndex((s) => s.is_pass) + 1) || 1}
+                  onChange={(e) => setPipelineFlag(Number(e.target.value) - 1, 'is_pass')}
+                >
+                  {pipelineStages.map((s, i) => (
+                    <option key={s.id} value={i + 1}>{s.label || `Stage ${i + 1}`}</option>
+                  ))}
+                </select>
+              </div>
             </div>
+
             <div className="space-y-2">
-              {dealStages.map((stage, i) => (
-                <StageRow
-                  key={i}
-                  stage={stage}
-                  index={i}
-                  total={dealStages.length}
-                  onChange={(idx, field, val) => updateStage('deals', idx, field, val)}
-                  onMove={(idx, dir) => moveStage('deals', idx, dir)}
-                  onDelete={(idx) => deleteStage('deals', idx)}
-                />
+              {pipelineStages.map((stage, i) => (
+                <div key={stage.id} className="flex items-center gap-2 group">
+                  <div className="flex flex-col gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => movePipelineStage(i, -1)}
+                      disabled={i === 0}
+                      className="text-gray-300 hover:text-gray-500 disabled:opacity-30 disabled:cursor-default p-0.5"
+                      title="Move up"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => movePipelineStage(i, 1)}
+                      disabled={i === pipelineStages.length - 1}
+                      className="text-gray-300 hover:text-gray-500 disabled:opacity-30 disabled:cursor-default p-0.5"
+                      title="Move down"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                  </div>
+                  <span className="text-xs text-gray-400 w-5 text-right tabular-nums">{i + 1}</span>
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <input
+                      type="text"
+                      value={stage.label}
+                      onChange={(e) => updatePipelineStage(i, 'label', e.target.value)}
+                      className="input w-full"
+                      placeholder="Stage name"
+                    />
+                    <input
+                      type="text"
+                      value={stage.subtitle}
+                      onChange={(e) => updatePipelineStage(i, 'subtitle', e.target.value)}
+                      className="input w-full text-xs text-gray-500"
+                      placeholder="What this stage means (shows under the column)"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 flex-none">
+                    {stage.is_entry && <span className="badge bg-blue-50 text-blue-700 text-[10px]">entry</span>}
+                    {stage.is_pass && <span className="badge bg-gray-100 text-gray-600 text-[10px]">pass</span>}
+                    {(stageCounts[stage.id] || 0) > 0 && (
+                      <span className="text-[10px] text-gray-400 tabular-nums" title="Cards on the board">
+                        {stageCounts[stage.id]} on board
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => deletePipelineStage(i)}
+                      className="text-gray-300 hover:text-red-500 transition-colors p-1 opacity-0 group-hover:opacity-100"
+                      title="Remove stage"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
             <button
               type="button"
-              onClick={() => addStage('deals')}
+              onClick={addPipelineStage}
               className="btn-ghost mt-3 text-xs"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -566,7 +582,6 @@ export default function Settings() {
           )}
         </div>
       )}
-
       {/* Profile Tab */}
       {activeTab === 'profile' && (
         <div className="space-y-6">
@@ -921,7 +936,7 @@ export default function Settings() {
 
 // ── API & MCP Access tab ──
 // Lets a user connect their own agent (Claude Desktop, Cursor, scripts) to Stu's
-// Talent/Sourcing tools. Stu is free with an account; usage runs on the user's own keys.
+// Talent/Sourcing tools. Usage runs on the user's own keys.
 function McpAccessTab() {
   const [info, setInfo] = useState(null);
   const [tokens, setTokens] = useState([]);
@@ -961,7 +976,7 @@ function McpAccessTab() {
       <div className="card p-6">
         <h2 className="text-sm font-semibold text-gray-900">Connect your agent to Stu</h2>
         <p className="text-sm text-gray-600 mt-2 leading-relaxed">
-          Stu is free with an account. Connect Claude Desktop, Cursor, or any MCP client to
+          Connect Claude Desktop, Cursor, or any MCP client to
           search your Talent candidates and sourced founders, filter by builder signals
           (e.g. <span className="font-mono text-xs bg-gray-100 px-1 rounded">just_departed</span>),
           and read your monitor alerts — straight from your own agent.

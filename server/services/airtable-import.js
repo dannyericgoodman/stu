@@ -28,12 +28,13 @@
  *                           composed by a read-only `Pipeline Stage` formula.
  *
  * That last one is the substantive change. The old base fused residency and
- * investment into one string ("Stage 3: Evaluating (Investment + Resident)"); the
- * new base keeps them as independent axes, either of which may be blank. Stu
- * already had columns for exactly this — `resident_status` (empty until now) and
- * `deal_status` (already spelling 'Under Consideration' / 'Passed' in Airtable's
- * own words) — so the two axes land in them directly, and `stage_status` holds the
- * composed stage the board sorts on. See lib/airtableVocab.
+ * investment into one string ("Stage 3: Evaluating (Investment + Resident)");
+ * the new base keeps them as independent axes, either of which may be blank.
+ * `resident_status` (empty until now) is AUTHORITATIVE — Airtable's split
+ * investment status lands in `stage_status`, the composed stage the board
+ * sorts on. `deal_status` is NOT written by this import: it is Stu's own
+ * field and appears only in the NEVER TOUCHED list below. See
+ * lib/airtableVocab.
  *
  * ══════════════════════════════════════════════════════════════════════════
  * WHY THIS FILE WAS REWRITTEN (2026-07-16)
@@ -106,8 +107,8 @@
  *   opinion about them. Enforced by test/mirror-integrity.test.js.
  *
  * This is a ONE-WAY read. It does not write to Airtable — see airtable-sync.js,
- * whose gate requires an explicit publish-to-team action. Airtable is shared with
- * the team; nothing automatic goes back up it.
+ * whose writers are permanently disabled. Airtable is shared with the team;
+ * nothing goes back up it.
  */
 
 const db = require('../db');

@@ -115,7 +115,7 @@ export default function FrameworksPanel() {
   function addFlag() {
     const flags = draft.extras?.yellow_flags || [];
     if (flags.length >= 3) return;
-    setDraft(d => ({ ...d, extras: { ...(d.extras || {}), yellow_flags: [...flags, { key: '', label: '', blurb: '', dock: 0.5 }] } }));
+    setDraft(d => ({ ...d, extras: { ...(d.extras || {}), yellow_flags: [...flags, { key: '', label: '', blurb: '', amount: 0.5 }] } }));
   }
 
   function updateFlag(i, patch) {
@@ -418,7 +418,7 @@ export default function FrameworksPanel() {
                   <div key={i} className="flex items-center gap-2 mb-2">
                     <input value={f.label || ''} onChange={e => updateFlag(i, { label: e.target.value, key: f.key || e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_') })} placeholder="Label — e.g. Hype over substance" className="input text-sm flex-1" />
                     <input value={f.blurb || ''} onChange={e => updateFlag(i, { blurb: e.target.value })} placeholder="What it looks like" className="input text-sm flex-[2]" />
-                    <select value={f.dock ?? 0.5} onChange={e => updateFlag(i, { dock: parseFloat(e.target.value) })} className="input text-sm !w-auto" title="How much it docks">
+                    <select value={f.amount ?? 0.5} onChange={e => updateFlag(i, { amount: parseFloat(e.target.value) })} className="input text-sm !w-auto" title="How much it docks">
                       <option value={0.25}>−0.25</option>
                       <option value={0.5}>−0.5</option>
                       <option value={1}>−1</option>

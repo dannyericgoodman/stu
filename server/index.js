@@ -582,10 +582,9 @@ function jsonLimit(opts, what) {
 
 // Rate limiting
 app.use('/api', jsonLimit({ windowMs: 15 * 60 * 1000, max: 200, skip: isLivenessProbe }, 'API'));
-// LLM chat surfaces (ai.js + stu.js tool-loop) — frequency-cap separately from the global bucket.
+// LLM chat surface — frequency-cap separately from the global bucket.
 const aiLimiter = jsonLimit({ windowMs: 15 * 60 * 1000, max: 50 }, 'AI chat');
 app.use('/api/ai', aiLimiter);
-app.use('/api/stu', aiLimiter);
 app.use('/api/auth/register', jsonLimit({ windowMs: 15 * 60 * 1000, max: 5 }, 'registration'));
 // The fan-out / discovery / LLM-spend endpoints are the most expensive (web-search fan-out
 // + many LLM calls, all billed to the user's key). Throttle hard, on top of the spend cap.
@@ -681,7 +680,6 @@ app.use('/api/rubrics', requireAuth, denyMcpRest, require('./routes/rubrics'));
 app.use('/api/deal-room', requireAuth, denyMcpRest, require('./routes/dealRoom'));
 app.use('/api/calls', requireAuth, denyMcpRest, require('./routes/calls'));
 app.use('/api/ai', requireAuth, denyMcpRest, require('./routes/ai'));
-app.use('/api/stu', requireAuth, denyMcpRest, require('./routes/stu'));
 app.use('/api/memos', requireAuth, denyMcpRest, require('./routes/memos'));
 app.use('/api/files', requireAuth, denyMcpRest, require('./routes/files'));
 app.use('/api/search', requireAuth, denyMcpRest, require('./routes/search'));

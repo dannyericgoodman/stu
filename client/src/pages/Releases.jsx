@@ -266,7 +266,7 @@ const RELEASES = [
       },
       {
         product: 'Platform',
-        change: 'Stu now speaks MCP: connect your own AI agent (Claude Desktop, Cursor, a script) directly to your Talent and Sourcing data, discovery, and monitors. Generate an access token in Settings → API & MCP Access and point your agent at stu.vc/mcp, then just ask it "find me YC founders who just left." Stu is free with an account, bring-your-own-key: your usage runs on your own API keys (encrypted at rest, with a daily spend cap), so you control cost and Stu never bills you.',
+        change: 'Stu now speaks MCP: connect your own AI agent (Claude Desktop, Cursor, a script) directly to your Talent and Sourcing data, discovery, and monitors. Generate an access token in Settings → API & MCP Access and point your agent at stu.vc/mcp, then just ask it "find me YC founders who just left." Bring-your-own-key: your usage runs on your own API keys (encrypted at rest, with a daily spend cap), so you control cost.',
         benefit: 'Drive Stu from the AI tools you already use, on your own keys — your data, your cost, your control.',
       },
     ],

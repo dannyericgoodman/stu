@@ -634,15 +634,15 @@ export default function Sourcing() {
                   </span>
                 )}
                 {/* "Add" is the money action — Danny is interested, the founder
-                    lands in the pipeline as Watching and a Watching row is
-                    published to the team's Airtable. "Pass" is its quiet
+                    lands in his personal pipeline ledger at Stage 1: Identified.
+                    Stu-only — Stu never writes to Airtable. "Pass" is its quiet
                     sibling: same row, same height, secondary styling so the
                     primary decision keeps the visual weight. Short labels so
                     both fit without clipping the column. */}
                 <button
                   onClick={(e) => { e.stopPropagation(); triage(r, 'watch'); }}
                   className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition flex-none whitespace-nowrap"
-                  title="Add to pipeline as Watching — also publishes to the team's Airtable (t)"
+                  title="Add to pipeline as Watching (t)"
                 >
                   Add
                 </button>

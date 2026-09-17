@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const secrets = require('../lib/secrets');
 const { resolveKey, readUserKey, MODEL } = require('../lib/providerKeys');
+const ledgerStages = require('../lib/ledgerStages');
 
 // Credentials that must be encrypted at rest (never echoed back to the client).
 function isSensitiveSettingKey(key) {
@@ -10,29 +11,10 @@ function isSensitiveSettingKey(key) {
 }
 
 const DEFAULT_SETTINGS = {
-  pipeline_admissions_stages: JSON.stringify([
-    { name: 'Sourced', color: 'gray' },
-    { name: 'Outreach', color: 'blue' },
-    { name: 'First Call Scheduled', color: 'blue' },
-    { name: 'First Call Complete', color: 'blue' },
-    { name: 'Second Call Scheduled', color: 'amber' },
-    { name: 'Second Call Complete', color: 'amber' },
-    { name: 'Admitted', color: 'green' },
-    { name: 'Active Resident', color: 'green' },
-    { name: 'Density Resident', color: 'green' },
-    { name: 'Alumni', color: 'gray' },
-    { name: 'Hold/Nurture', color: 'amber' },
-    { name: 'Not Admitted', color: 'red' },
-  ]),
-  pipeline_deal_stages: JSON.stringify([
-    { name: 'Under Consideration', color: 'blue' },
-    { name: 'First Meeting', color: 'blue' },
-    { name: 'Partner Call', color: 'amber' },
-    { name: 'Memo Draft', color: 'amber' },
-    { name: 'IC Review', color: 'amber' },
-    { name: 'Committed', color: 'green' },
-    { name: 'Passed', color: 'red' },
-  ]),
+  // The user's own pipeline steps, stored per-user. Default = the five ledger
+  // stages (server/lib/ledgerStages.js). Nothing in the app speaks the old
+  // Admissions/Deal stage vocabulary anymore, so those settings are gone.
+  pipeline_stages: JSON.stringify(ledgerStages.defaultStages()),
   sourcing_locations: JSON.stringify([]),
   sourcing_schools: JSON.stringify([]),
   sourcing_companies: JSON.stringify([]),
@@ -50,24 +32,6 @@ function parseValue(val) {
     return val;
   }
 }
-
-// GET /api/settings/pipeline-config — convenience endpoint for pipeline stages
-// NOTE: Defined BEFORE /:key to prevent Express param matching
-router.get('/pipeline-config', (req, res) => {
-  const rows = db.prepare(
-    "SELECT setting_key, setting_value FROM user_settings WHERE user_id = ? AND setting_key IN ('pipeline_admissions_stages', 'pipeline_deal_stages')"
-  ).all(req.user.id);
-
-  const userSettings = {};
-  for (const row of rows) {
-    userSettings[row.setting_key] = row.setting_value;
-  }
-
-  res.json({
-    admissions_stages: parseValue(userSettings.pipeline_admissions_stages || DEFAULT_SETTINGS.pipeline_admissions_stages),
-    deal_stages: parseValue(userSettings.pipeline_deal_stages || DEFAULT_SETTINGS.pipeline_deal_stages),
-  });
-});
 
 // GET /api/settings/sourcing-criteria — convenience endpoint for sourcing config
 // NOTE: Defined BEFORE /:key to prevent Express param matching

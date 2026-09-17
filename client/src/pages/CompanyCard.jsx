@@ -32,6 +32,19 @@ export default function CompanyCard() {
   const [err, setErr] = useState(null);
   const [enriching, setEnriching] = useState(false);
   const [flash, setFlash] = useState(null);
+  // The ledger stage labels, exactly as the Pipeline board shows them — served
+  // by the server (server/lib/ledgerStages.js); the client keeps no copy.
+  const [stageLabels, setStageLabels] = useState(null);
+  useEffect(() => {
+    api.getLedger().then((d) => {
+      const m = {};
+      for (const s of d?.stages || []) m[s.key] = s.label;
+      setStageLabels(m);
+    }).catch(() => {});
+  }, []);
+  const ledgerStageLabel = c?.ledger_stage
+    ? (stageLabels ? stageLabels[c.ledger_stage] || c.ledger_stage : c.ledger_stage)
+    : null;
 
   const load = useCallback(() => {
     api.getPipelineCompany(id).then(setC).catch((e) => setErr(e.message));
@@ -95,7 +108,7 @@ export default function CompanyCard() {
           className="text-small font-semibold text-ink"
           placeholder="Company name"
         />
-        <Stage stage={c.funnel_stage} />
+        <Stage stage={ledgerStageLabel} />
         <div className="flex-1" />
         <RunRead founderId={id} company={c} />
       </div>
@@ -283,7 +296,15 @@ export default function CompanyCard() {
           )}
 
           <Block label="Deal">
-            <Field label="Stage" value={c.deal_status} onSave={(v) => save('deal_status', v)} />
+            {/* Ledger stage — Danny's own workflow, Stu-only. Read-only here:
+                it is changed by dragging the card on the Pipeline board. */}
+            <div className="flex items-baseline gap-2 min-h-6 group">
+              <span className="w-24 text-mini text-ink-4 flex-shrink-0" title="Changed by dragging the card on the Pipeline board.">Stage</span>
+              <span className="flex-1 min-w-0">
+                <span className="text-mini text-ink-2 truncate block">{ledgerStageLabel || '—'}</span>
+                <span className="text-micro text-ink-4 block mt-0.5">Changed by dragging the card on the Pipeline board.</span>
+              </span>
+            </div>
             <Field label="Round" value={c.stage} onSave={(v) => save('stage', v)} />
             <Field label="ARR" value={c.arr} onSave={(v) => save('arr', v)} num />
             <Field label="Burn / mo" value={c.monthly_burn} onSave={(v) => save('monthly_burn', v)} num />

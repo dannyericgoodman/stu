@@ -75,7 +75,6 @@ async function buildHealthReport(userId) {
     newsletter_sync: 'Daily Brief sync',
     sourcing_run: 'Sourcing run',
     notion_push: 'Notion mirror push',
-    publish_to_team: 'Publish to team (Airtable)',
   };
   for (const [job, label] of Object.entries(jobLabels)) {
     const r = lastRun(job, userId);

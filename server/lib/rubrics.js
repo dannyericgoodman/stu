@@ -31,6 +31,7 @@ function parseRubric(row) {
     preset_key: row.preset_key,
     name: row.name,
     description: row.description,
+    blurb: row.description,
     is_preset: !!row.is_preset,
     scoring: row.scoring || 'gate',
     gate_threshold: row.gate_threshold != null ? Number(row.gate_threshold) : 6,
@@ -41,7 +42,8 @@ function parseRubric(row) {
       question: d.question || '',
       guidance: d.guidance || '',
       weight: Number(d.weight) || 1,
-      min_rung: d.min_rung != null ? Number(d.min_rung) : RUNG.OBSERVED,
+      // Default 2 (STATED) — matches the architect prompt's promise, not OBSERVED.
+      min_rung: d.min_rung != null ? Number(d.min_rung) : RUNG.STATED,
       load_bearing: !!d.load_bearing,
     })),
     created_at: row.created_at,

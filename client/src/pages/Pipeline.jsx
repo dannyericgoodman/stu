@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../utils/api';
 import KanbanBoard from '../components/KanbanBoard';
 
@@ -12,7 +12,7 @@ import KanbanBoard from '../components/KanbanBoard';
 // Stage 1: Identified to Stage 2: Outreach Sent to Stage 3: Meeting Set
 // Stage 4a: Add to Investment Pipeline or Stage 4b: Pass"
 //
-// So this page is ONE thing now: his personal ledger, over HIS five stages.
+// So this page is ONE thing now: his personal ledger, over HIS stages.
 // It is not the Airtable mirror anymore — the team's record lives in Airtable
 // itself. A row is in the ledger iff founders.ledger_stage IS NOT NULL.
 //
@@ -23,8 +23,8 @@ import KanbanBoard from '../components/KanbanBoard';
 //
 // What the old board taught: a kanban whose axis is someone else's vocabulary
 // drifts (22 declined founders resurrected as live prospects). This axis has
-// five values, defined once in server/lib/ledgerStages.js, sent with the
-// payload — the client keeps no copy.
+// user-configurable values, defined once in server/lib/ledgerStages.js, sent
+// with the payload — the client keeps no copy.
 // ══════════════════════════════════════════════════════════════════════════
 
 const BAND_LABEL = { anchor: 'Anchor', memo: 'Memo', monitor: 'Monitor', pass: 'Pass', indeterminate: 'Held' };
@@ -156,7 +156,7 @@ function Band({ band, score, muted }) {
 // downstream can untangle them — which is why the server refuses a bare company and
 // why this doesn't offer one. The website is optional and does real work: fill it in
 // and the card reads the site before he's finished typing the name.
-function Composer({ onCreate, onClose }) {
+function Composer({ onCreate, onClose, entryLabel }) {
   const [v, setV] = useState({ company: '', name: '', website_url: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -219,7 +219,7 @@ function Composer({ onCreate, onClose }) {
               part: a card he adds here is his alone, and it stays that way —
               Stu never writes to the team's Airtable. */}
           <span className="text-micro text-ink-4 flex-1 truncate" title="A card you add here stays in Stu. Stu never writes to the team's Airtable.">
-            Stage 1: Identified · stays in Stu
+            {entryLabel || 'Stage 1: Identified'} · stays in Stu
           </span>
           <button onClick={onClose} className="text-mini text-ink-3 hover:text-ink px-2">Cancel</button>
           <button
@@ -237,10 +237,9 @@ function Composer({ onCreate, onClose }) {
 
 export default function Pipeline() {
   const nav = useNavigate();
-  const [params, setParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  // The ledger IS a kanban — five stages, left to right, is the whole point.
+  // The ledger IS a kanban — the stages left to right are the whole point.
   // An existing saved preference still wins.
   const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'kanban');
   // Null until asked for. The panel is opt-in because the honest answer early on is
@@ -251,7 +250,6 @@ export default function Pipeline() {
   const [cursor, setCursor] = useState(0);
   const [composing, setComposing] = useState(false);
   const [undo, setUndo] = useState(null);
-  const stage = params.get('stage') || '';
 
   useEffect(() => { localStorage.setItem('stu_pipeline_view', view); }, [view]);
 
@@ -277,10 +275,15 @@ export default function Pipeline() {
     return m;
   }, [data]);
 
+  // The label of the user's ENTRY stage — the composer lands new cards there.
+  const entryLabel = useMemo(() => {
+    const stages = data?.stages || [];
+    return (stages.find((s) => s.is_entry) || stages[0])?.label || '';
+  }, [data]);
+
   const rows = useMemo(() => {
     if (!data) return [];
     let out = data.rows;
-    if (stage) out = out.filter((r) => r.funnel_stage === stage);
     if (q) {
       const n = q.toLowerCase();
       out = out.filter(
@@ -290,7 +293,7 @@ export default function Pipeline() {
       );
     }
     return out;
-  }, [data, stage, q]);
+  }, [data, q]);
 
   useEffect(() => {
     if (view !== 'list') return;
@@ -305,6 +308,21 @@ export default function Pipeline() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [rows, cursor, nav, view]);
+
+  // ── The (N) shortcut the + New button promises.
+  // Works in either view; never fires while typing or when the composer is
+  // already open.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'n' || e.metaKey || e.ctrlKey || e.altKey || composing) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      setComposing(true);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [composing]);
 
   // ── The ledger's writes ──
   // Optimistic, and they RE-FETCH on failure rather than leaving the
@@ -384,7 +402,7 @@ export default function Pipeline() {
 
   return (
     <div className="flex flex-col h-full">
-      {composing && <Composer onCreate={onCreate} onClose={() => setComposing(false)} />}
+      {composing && <Composer onCreate={onCreate} onClose={() => setComposing(false)} entryLabel={entryLabel} />}
 
       {/* The undo. Sits until he dismisses it rather than timing out — a 5-second
           toast is a delete he can't take back if he looks away, which makes the
@@ -421,15 +439,6 @@ export default function Pipeline() {
           value={q}
           onChange={(e) => { setQ(e.target.value); setCursor(0); }}
         />
-        {stage && (
-          <button
-            onClick={() => setParams({})}
-            className="px-2 h-6 rounded text-mini font-medium bg-ground-4 text-ink capitalize"
-            title="Clear the filter from Home"
-          >
-            {stage} <span className="text-ink-4 ml-1">×</span>
-          </button>
-        )}
         <div className="flex-1" />
 
         {/* The track filter is gone. Tracks were an Airtable concept — this board
@@ -485,7 +494,7 @@ export default function Pipeline() {
         <div className="flex-1 overflow-auto p-3">
           <KanbanBoard
             founders={rows}
-            // The five stages come from the server (server/lib/ledgerStages.js).
+            // The stages come from the server (server/lib/ledgerStages.js).
             // The client keeps no copy — that is how the old board drifted.
             stages={(data.stages || []).map((s) => s.key)}
             stageField="ledger_stage"
@@ -545,6 +554,7 @@ export default function Pipeline() {
           <div className="flex items-center gap-3 px-3 h-6 border-t border-line-2 bg-ground text-micro text-ink-4 flex-shrink-0">
             <span><kbd className="text-ink-3">j</kbd>/<kbd className="text-ink-3">k</kbd> move</span>
             <span><kbd className="text-ink-3">↵</kbd> open the card</span>
+            <span><kbd className="text-ink-3">n</kbd> new company</span>
           </div>
         </>
       )}

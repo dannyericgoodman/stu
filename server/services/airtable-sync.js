@@ -14,9 +14,11 @@ const https = require('https');
 const db = require('../db');
 const { stuAdmissionsToAirtable, stuDealToAirtable } = require('./stage-mapping');
 
-// This is the only module in Stu that WRITES to Airtable, so it is the one that
-// most needs its target to be unambiguous. Base id, table ids and key come from
-// lib/airtableBase; recordUrl refuses to address a table that isn't in scope.
+// This was once the only module in Stu that WROTE to Airtable; every writer
+// is now a stub that returns { skipped: 'writes_disabled' } before touching
+// the network. The machinery below (recordUrl/table ids, the HTTPS helpers,
+// the gate) is dead code kept so the stubs stay structurally intact and the
+// no-write tests keep covering them.
 const { TABLE, recordUrl, recordsUrl, API_KEY: AIRTABLE_API_KEY } = require('../lib/airtableBase');
 
 const FOUNDER_TABLE = TABLE.FOUNDERS;
@@ -87,22 +89,13 @@ function postAirtableRecord(tableId, fields) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// CREATE A PIPELINE ROW (2026-09-16)
+// CREATE A PIPELINE ROW — DISABLED 2026-09-17 (historical note)
 //
-// Danny's "Add to Pipeline" button in the sourcing inbox means "I'm interested":
-// the founder lands in Stu's pipeline as Watching AND a row is created in the
-// team's Airtable Pipeline table with Investment Status = Watching (Pipeline
-// Stage formula then reads "4 · Watching").
-//
-// GATED like every other writer: only Danny's explicit click reaches this with
-// { explicit: true }. This is deliberately NOT a stage push — it creates a row
-// in the team's hand-maintained base, which the old "stage updates only" rule
-// did not cover. The button IS the publish-to-team decision.
-//
-// `opts.post` exists for the same reason as `opts.patch` on pushStage: the live
-// round-trip is Danny's to make by clicking the button. What is testable offline
-// is the payload — that we send field names Airtable accepts and a status value
-// from its own vocabulary.
+// Used to create a row in the team's Airtable Pipeline table when Danny hit
+// "Add to Pipeline" in the sourcing inbox. Stu never writes to Airtable now:
+// the stub below returns { skipped: 'writes_disabled' } before any of the
+// payload-building code below can run. The function and its shape stay so the
+// no-write tests keep asserting the refusal.
 // ══════════════════════════════════════════════════════════════════════════
 async function createPipelineRecord(founder, opts = {}) {
   // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
@@ -110,10 +103,11 @@ async function createPipelineRecord(founder, opts = {}) {
   const blockedCreate = gatedOut(opts, founder, 'create');
   if (blockedCreate) return { skipped: blockedCreate };
   const post = opts.post || postAirtableRecord;
-  // The status this record is born with. The inbox "Add to Pipeline" flow used
-  // to publish as Watching; the personal ledger's Stage 4a ("Add to Investment
-  // Pipeline") publishes as Under Consideration — the honest Airtable spelling
-  // of entering the investment pipeline.
+  // Dead-code note: the status this record used to be born with. The inbox
+  // "Add to Pipeline" flow used to publish as Watching; the personal ledger's
+  // Stage 4a ("Add to Investment Pipeline") would have published as Under
+  // Consideration — the honest Airtable spelling of entering the investment
+  // pipeline. None of it runs anymore.
   const investmentStatus = opts.investmentStatus || 'Watching';
 
   // Descriptive fields go by NAME (the import service reads by name too); the
@@ -153,22 +147,10 @@ function logSync(founderId, tableName, fieldName, oldValue, newValue, recordId, 
   }
 }
 
-// GATE: Airtable is the TEAM's shared base. Nothing writes to it except a deliberate
-// "publish to team" action. Both writers refuse unless opts.explicit === true, so an
-// accidental auto-push (the old fire-and-forget behavior) can never leak in-progress
-// founder data to the team. SQLite stays canonical; Airtable self-heals on next publish.
-/**
- * The central choke point for every Airtable write. Returns null when the write
- * may proceed, or a skip-reason string when it must not.
- *
- * Two independent locks, both required:
- *  1. explicit — the call must pass { explicit: true } (Danny's own drag /
- *     publish-to-team action). No agent, cron, or background job may write.
- *  2. owner — the call must name the owner's userId. The team base is the
- *     owner's CRM; a paying outside seat must never write to it. Route-level
- *     checks exist, but this is the layer that cannot be forgotten by a future
- *     caller — forgetting userId fails closed.
- */
+// GATE (dead code, kept for structure) — the old rule that nothing reached
+// Airtable except a deliberate publish-to-team action. Every writer now
+// refuses before this gate is even consulted, and it can never fire again.
+// gatedOut stays so the dead branches below it still read as dead branches.
 function gatedOut(opts, founder, kind) {
   if (!opts || opts.explicit !== true) {
     console.warn(`[AirtableSync] BLOCKED non-explicit ${kind} push for "${founder && founder.name}" — Airtable writes require an explicit publish-to-team action.`);
@@ -183,40 +165,21 @@ function gatedOut(opts, founder, kind) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// THE MERGED BOARD'S WRITE PATH (2026-07-16)
+// THE MERGED BOARD'S WRITE PATH (2026-07-16) — DISABLED 2026-09-17 (historical)
 //
-// EXACTLY ONE THING PUBLISHES: the stage. Danny drew the line himself —
-//
-//   "I'm comfortable with you publishing stage updates to Airtable. But that's it.
-//    I'm going to primarily work in Stu, and then choose to enter my own context to
-//    the team view in Airtable depending on what I want them to see."
-//
-// So Stu is where he works and Airtable is what his team sees, and he decides what
-// crosses. The stage crosses because the team's view of where a deal stands must
-// not silently disagree with his. Everything else — the Resident/Investment badge,
-// his notes, Stu's read — stays in Stu until he says otherwise. There was a
-// pushTracks() here; it is deleted rather than left unused, because an unused
-// writer to a shared base is one call site away from being a used one.
-//
-// This does NOT loosen the standing rule. No AGENT writes to the team's base —
-// nothing scheduled, nothing inferred, nothing fired off in the background. Every
-// writer below still refuses without { explicit: true }, and the only caller that
-// passes it is the endpoint behind Danny's own drag. A cron can never reach it.
-//
-// Unlike the legacy pushers below, this sends Airtable's OWN vocabulary straight
-// through (lib/airtableVocab) — no stuAdmissionsToAirtable() translation, because
-// the board now speaks Airtable's words natively. Nothing to mistranslate. Field
-// IDs, not names, so a rename in Airtable's UI can't silently 422 us.
+// The old deal: stage changes (Danny's drags) were the one thing allowed to
+// cross into the team's Airtable base, in Airtable's own vocabulary. That rule
+// ended 2026-09-17: Stu never writes to Airtable, full stop. The stubs below
+// return { skipped: 'writes_disabled' } before touching the network; the rest
+// of this file is dead code kept for structure and for the no-write tests.
 // ══════════════════════════════════════════════════════════════════════════
 
 const vocab = require('../lib/airtableVocab');
 
-// `opts.patch` exists so the PAYLOAD can be tested without writing to the team's
-// shared base. The rule is that agents don't touch Airtable, and that includes the
-// agent writing this file: the live round-trip is Danny's to make by dragging a
-// card. What is testable offline is the thing most likely to be wrong — that we
-// send the right field id and a value Airtable will actually accept.
-/** Push the merged board's stage. `stage` must already be a valid Airtable option. */
+// Dead-code note: the opts.patch/opt.post injection points below existed so the
+// payload could be tested without writing to the team's shared base. No live
+// round-trip happens anymore — every writer returns before them.
+/** DISABLED stub — pushStage always returns { skipped: 'writes_disabled' }. */
 async function pushStage(founder, stage, opts = {}) {
   // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
   return { skipped: 'writes_disabled' };
@@ -260,8 +223,7 @@ async function pushStage(founder, stage, opts = {}) {
 }
 
 /**
- * Push admissions_status change to Airtable Founder Ecosystem table.
- * GATED: only runs when called with { explicit: true } (publish-to-team).
+ * DISABLED stub — pushAdmissionsChange always returns { skipped: 'writes_disabled' }.
  */
 async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
   // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
@@ -297,8 +259,7 @@ async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
 }
 
 /**
- * Push deal_status change to Airtable Investment Pipeline table.
- * GATED: only runs when called with { explicit: true } (publish-to-team).
+ * DISABLED stub — pushDealChange always returns { skipped: 'writes_disabled' }.
  */
 async function pushDealChange(founder, oldStatus, opts = {}) {
   // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.

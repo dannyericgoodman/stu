@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const ledgerStages = require('../lib/ledgerStages');
 
 const RELATIONSHIP_STATUSES = ['Sourced', 'Outreach', 'Interviewing', 'Active', 'Hold', 'Passed', 'Not Admitted', 'Inactive'];
 const ADMISSIONS_STATUSES = ['Sourced', 'Outreach', 'First Call Scheduled', 'First Call Complete', 'Second Call Scheduled', 'Second Call Complete', 'Admitted', 'Active Resident', 'Density Resident', 'Alumni', 'Hold/Nurture', 'Not Admitted'];
@@ -84,9 +85,15 @@ router.post('/', (req, res) => {
   const { name, company, role, email, linkedin_url, twitter, github_url, website_url, location_city, location_state, stage, domain, tags, status, source, bio, chicago_connection, previous_companies, notable_background, pipeline_tracks, resident_status, admissions_status, deal_status, company_one_liner, next_action, deal_lead, valuation, round_size, investment_amount, arr, monthly_burn, runway_months, security_type, memo_status, diligence_status, desks_needed } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
 
+  // New founders join the personal ledger at the user's ENTRY stage
+  // (default: Stage 1: Identified) so /founders/new cards show up on the board.
+  // ledger_stage NULL = not in the ledger at all; without this the card was
+  // created invisible.
+  const entryStage = ledgerStages.getEntryStage(req.user.id);
+
   const result = db.prepare(`
-    INSERT INTO founders (name, company, role, email, linkedin_url, twitter, github_url, website_url, location_city, location_state, stage, domain, tags, status, source, bio, chicago_connection, previous_companies, notable_background, pipeline_tracks, resident_status, admissions_status, deal_status, company_one_liner, next_action, deal_lead, valuation, round_size, investment_amount, arr, monthly_burn, runway_months, security_type, memo_status, diligence_status, desks_needed, deal_entered_at, admitted_at, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO founders (name, company, role, email, linkedin_url, twitter, github_url, website_url, location_city, location_state, stage, domain, tags, status, source, bio, chicago_connection, previous_companies, notable_background, pipeline_tracks, resident_status, admissions_status, deal_status, company_one_liner, next_action, deal_lead, valuation, round_size, investment_amount, arr, monthly_burn, runway_months, security_type, memo_status, diligence_status, desks_needed, deal_entered_at, admitted_at, ledger_stage, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name, company || null, role || null, email || null, linkedin_url || null, twitter || null, github_url || null, website_url || null,
     location_city || null, location_state || null, stage || 'Pre-seed', domain || null, tags || null, status || 'Sourced',
@@ -96,6 +103,7 @@ router.post('/', (req, res) => {
     runway_months || null, security_type || null, memo_status || null, diligence_status || null, desks_needed || null,
     deal_status ? new Date().toISOString() : null,
     admissions_status === 'Admitted' || admissions_status === 'Active Resident' || resident_status === 'Admitted' || resident_status === 'Active' ? new Date().toISOString() : null,
+    entryStage,
     req.user.id
   );
 
@@ -161,8 +169,9 @@ router.put('/:id', (req, res) => {
   const updated = db.prepare('SELECT * FROM founders WHERE id = ?').get(req.params.id);
 
   // Airtable (team's shared base) is intentionally NOT written here. Stage changes stay
-  // in SQLite (canonical). Pushing to the team happens only via the explicit
-  // POST /:id/publish-to-team action below — never as a silent side effect of an edit.
+  // in SQLite (canonical). Stu never writes to Airtable — pushing a founder to the
+  // team base is not a Stu action at all; the team base is hand-maintained
+  // (Danny, 2026-09-17: "I don't want you writing to Airtable").
 
   // Fire-and-forget Notion (Strider OS) sync — fires whenever an investment-track
   // founder is touched. Idempotent (upserts by SS Record ID).
@@ -213,13 +222,6 @@ router.post('/sync-airtable', async (req, res) => {
   }
 });
 
-// POST /api/founders/:id/publish-to-team — the ONLY path that writes to the team's
-// shared Airtable. Deliberate, awaited, and surfaced (not fire-and-forget). SQLite
-// stays canonical; if this fails, the founder simply isn't published — never the reverse.
-//
-// OWNER-ONLY: the whole point of this endpoint is writing to the team's base, so
-// unlike watch/stage (which degrade to a Stu-local change) there is nothing to
-// fall back to. Non-owners get a 403, not a silent no-op.
 // POST /api/founders/:id/publish-to-team — RETIRED 2026-09-17.
 // Danny: "I don't want you writing to Airtable." Stu is read-only against the
 // team base; this endpoint now refuses instead of publishing. Kept as a 410
