@@ -4,62 +4,28 @@ import { api } from '../utils/api';
 import KanbanBoard from '../components/KanbanBoard';
 
 // ══════════════════════════════════════════════════════════════════════════
-// Pipeline — managing companies you're already tracking.
+// ══════════════════════════════════════════════════════════════════
+// Pipeline — Danny's personal ledger.
 //
-// Danny, 2026-07-15: "we're conflating two actions here: 1) I need an inbox to
-// study and triage new founders (true sourcing) and 2) the ability to manage a
-// pipeline (like a kanban)... right now, this screen is a jumble."
+// 2026-09-17 — Danny: "keep Airtable as my always on team record and Pipeline
+// as a ledger of founders I've seen in inbox that I like that goes from
+// Stage 1: Identified to Stage 2: Outreach Sent to Stage 3: Meeting Set
+// Stage 4a: Add to Investment Pipeline or Stage 4b: Pass"
 //
-// He was right. The insight that Stu has ONE object moving through stages is
-// about the DATA, not the SCREENS — Affinity and Attio both have one substrate
-// AND separate surfaces. So sourcing moved to its own screen and this one does
-// one job: move companies you know through your deal stages.
+// So this page is ONE thing now: his personal ledger, over HIS five stages.
+// It is not the Airtable mirror anymore — the team's record lives in Airtable
+// itself. A row is in the ledger iff founders.ledger_stage IS NOT NULL.
 //
-// ── ONE BOARD (2026-07-16) ──
-// Danny: "Let's merge Investment and Admissions pipelines, consolidating.
-// Investment and/or Admissions Pipeline should be a badge I can edit on each card,
-// similar to what I have in Airtable."
+// The axis is Stu-local by construction. Dragging between 1→2→3→4b writes
+// nothing but the ledger column. Dragging to 4a is the publish-to-team moment:
+// it creates (or updates) the founder's row in the team's Airtable base as
+// Under Consideration, and the drag asks first. Nothing else on this page
+// touches Airtable — that is the whole point of the split.
 //
-// There were two boards over two different stage axes, and a toggle between them.
-// Now there is one board over `stage_status` — Airtable's Admission Status,
-// verbatim — and the Resident/Investment track is a chip on the card. That is how
-// Airtable itself models it: one stage field, one Pipeline multi-select. The
-// Investment/Resident buttons in the header are a FILTER over the one board, not
-// a mode that swaps it.
-//
-// ── WHY THE KANBAN GROUPS BY stage_status, NOT THE DERIVED FUNNEL ──
-// There are two different "stage" ideas in this product and they must not be
-// confused:
-//
-//   stage_status   — WHERE THEY STAND, in Airtable's words. Editable: this is what
-//                    a card DRAGS between, and the drag writes through to the
-//                    team's Airtable base so the two can't disagree.
-//   funnel_stage   — DERIVED from evidence (found/met/assessed/decided/invested).
-//                    Read-only by construction: you cannot drag a card to make a
-//                    company "assessed" — either an assessment exists or it
-//                    doesn't. Dragging into it would be a lie.
-//
-// So the kanban is the workflow, and the derived read lives in the table view and
-// on Home. A board you can drag has to write something real.
-//
-// `deal_status` is no longer an axis here. It survives on the card as history and
-// as what backfill-stage-status derived the 26 Investment-Pipeline orphans from.
-// ══════════════════════════════════════════════════════════════════════════
-
-// ══════════════════════════════════════════════════════════════════════════
-// THE STAGE LIST USED TO LIVE HERE. It doesn't anymore — the server sends it
-// (routes/pipeline.js → `vocab`), read from Airtable's own schema via
-// lib/airtableVocab. Danny: "Use Airtable right now as the source of truth for the
-// correct stage." A copy of the list in the client is a copy that drifts, and
-// drift in exactly this list is what put 22 declined founders back on the board.
-//
-// Worth recording what the deleted constants claimed, because it is the lesson:
-// the comment above DEAL_STAGES asserted "First Meeting, Partner Call, Memo Draft,
-// IC Review and Committed had ZERO rows each" and "Family office 3". Measured
-// against production the day it was deleted: Committed 8, IC Review 4, First
-// Meeting 3 — and Family office ZERO. Every number was wrong, and inverted. A
-// hand-maintained list of what the data looks like starts rotting the moment it's
-// written; the data is right there and can simply be asked.
+// What the old board taught: a kanban whose axis is someone else's vocabulary
+// drifts (22 declined founders resurrected as live prospects). This axis has
+// five values, defined once in server/lib/ledgerStages.js, sent with the
+// payload — the client keeps no copy.
 // ══════════════════════════════════════════════════════════════════════════
 
 const BAND_LABEL = { anchor: 'Anchor', memo: 'Memo', monitor: 'Monitor', pass: 'Pass', indeterminate: 'Held' };
@@ -252,8 +218,8 @@ function Composer({ onCreate, onClose }) {
         <div className="px-3 h-9 flex items-center gap-2 border-t border-line bg-ground-2">
           {/* Says where it goes and who sees it. The second half is the load-bearing
               part: Airtable is the team's, and he should know a card he adds here is
-              his alone until he drags it. */}
-          <span className="text-micro text-ink-4 flex-1 truncate" title="A card you add here stays in Stu. Only dragging it to a new stage writes to Airtable.">
+              his alone until the 4a drag. */}
+          <span className="text-micro text-ink-4 flex-1 truncate" title="A card you add here stays in Stu. Only the Stage 4a drag publishes to the team's Airtable.">
             Stage 1: Identified · stays in Stu
           </span>
           <button onClick={onClose} className="text-mini text-ink-3 hover:text-ink px-2">Cancel</button>
@@ -275,18 +241,13 @@ export default function Pipeline() {
   const [params, setParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  // Default to the flat bank, not the Airtable-shaped board. Danny tracks deal
-  // progress in Airtable; what he wants HERE is the list of founders he picked out of
-  // Source, in one place, so he can keep track of them. A kanban mirroring someone
-  // else's stage vocabulary is a second copy of a system that already exists — and a
-  // second copy is a thing to drift. An existing saved preference still wins.
-  const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'list');
+  // The ledger IS a kanban — five stages, left to right, is the whole point.
+  // An existing saved preference still wins.
+  const [view, setView] = useState(() => localStorage.getItem('stu_pipeline_view') || 'kanban');
   // Null until asked for. The panel is opt-in because the honest answer early on is
   // "not enough calls yet", and a dashboard that says that on every load is furniture.
   const [learning, setLearning] = useState(null);
   const [showLearning, setShowLearning] = useState(false);
-  // '' = the whole board. There is one board now; Investment/Resident narrow it.
-  const [track, setTrack] = useState('');
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
   const [composing, setComposing] = useState(false);
@@ -295,21 +256,22 @@ export default function Pipeline() {
 
   useEffect(() => { localStorage.setItem('stu_pipeline_view', view); }, [view]);
 
-  // ── One fetch, not one per track ──
-  // This used to refetch whenever the track flipped, because the two tracks were
-  // two different boards over two different stage axes. They're one board now, so
-  // the track is a filter over rows already in memory: zero requests, zero flicker,
-  // and no stale-while-revalidate dance to get wrong.
+  // ── One fetch: the personal ledger ──
   useEffect(() => {
     let dead = false;
-    api.getPipeline({}).then((d) => !dead && setData(d)).catch((e) => !dead && setErr(e.message));
+    api.getLedger().then((d) => !dead && setData(d)).catch((e) => !dead && setErr(e.message));
     return () => { dead = true; };
   }, []);
+
+  const stageLabel = useMemo(() => {
+    const m = {};
+    for (const s of data?.stages || []) m[s.key] = s.label;
+    return m;
+  }, [data]);
 
   const rows = useMemo(() => {
     if (!data) return [];
     let out = data.rows;
-    if (track) out = out.filter((r) => (r.tracks || []).includes(track));
     if (stage) out = out.filter((r) => r.funnel_stage === stage);
     if (q) {
       const n = q.toLowerCase();
@@ -320,7 +282,7 @@ export default function Pipeline() {
       );
     }
     return out;
-  }, [data, stage, q, track]);
+  }, [data, stage, q]);
 
   useEffect(() => {
     if (view !== 'list') return;
@@ -336,38 +298,33 @@ export default function Pipeline() {
     return () => window.removeEventListener('keydown', onKey);
   }, [rows, cursor, nav, view]);
 
-  // ── The two writes on this board ──
+  // ── The ledger's writes ──
   // Both are optimistic, and both RE-FETCH on failure rather than leaving the
-  // optimistic state on screen. Danny drags a card, Stu writes it, and Stu pushes
-  // it to Airtable (his call: "Drag in Stu, and it writes to Airtable"). If the
-  // push fails, the card must snap back — showing a move that didn't happen is the
-  // exact bug that let this board lie for four months.
-  async function onStageChange(founderId, newStage) {
-    const prev = data;
-    setData((d) => ({
-      ...d,
-      rows: d.rows.map((r) => (r.id === founderId ? { ...r, stage_status: newStage } : r)),
-    }));
-    try {
-      const r = await api.setPipelineStage(founderId, newStage);
-      // The write landed in Stu but Airtable refused it. Say so — a silent
-      // divergence between the board and the team's base is how this rots.
-      if (r?.airtable?.error) setErr(`Saved in Stu, but Airtable rejected it: ${r.airtable.error}`);
-    } catch (e) {
-      setErr(e.message);
-      setData(prev);
+  // optimistic state on screen. A silent divergence between the board and the
+  // truth is how the old board rotted for four months.
+  //
+  // The 4a drag is the publish-to-team moment: it writes to the team's Airtable
+  // base, so it asks first. Every other drag is Stu-local and just moves.
+  async function onLedgerStageChange(founderId, newStage) {
+    const row = data?.rows?.find((r) => r.id === founderId);
+    if (newStage === 'invest_pipeline') {
+      const label = row?.company || row?.person || 'this founder';
+      if (!confirm(`Add ${label} to the Investment Pipeline?\n\nThis publishes them to the team's Airtable as Under Consideration.`)) return;
     }
-  }
-
-  async function onTracksChange(founderId, nextTracks) {
     const prev = data;
     setData((d) => ({
       ...d,
-      rows: d.rows.map((r) => (r.id === founderId ? { ...r, tracks: nextTracks } : r)),
+      rows: d.rows.map((r) => (r.id === founderId ? { ...r, ledger_stage: newStage } : r)),
     }));
     try {
-      const r = await api.setPipelineTracks(founderId, nextTracks);
-      if (r?.airtable?.error) setErr(`Saved in Stu, but Airtable rejected it: ${r.airtable.error}`);
+      const r = await api.setLedgerStage(founderId, newStage);
+      // The ledger moved but Airtable refused the publish. The card is honestly
+      // in 4a in Stu — but the team can't see it yet, and that gap has to be
+      // said out loud, not discovered in Monday's pipeline review.
+      if (r?.airtable?.error) setErr(`Saved in your ledger, but Airtable refused it: ${r.airtable.error}`);
+      else if (newStage === 'invest_pipeline' && r?.airtable?.skipped && r.airtable.skipped !== 'unchanged') {
+        setErr(`Saved in your ledger, but the Airtable publish was skipped (${r.airtable.skipped}).`);
+      }
     } catch (e) {
       setErr(e.message);
       setData(prev);
@@ -455,6 +412,7 @@ export default function Pipeline() {
       )}
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
         <span className="text-small font-semibold text-ink">Pipeline</span>
+        <span className="text-mini text-ink-4">your ledger — nothing here touches the team's Airtable until you drag to 4a</span>
         <button
           onClick={() => setComposing(true)}
           className="px-2 h-6 rounded text-mini font-medium bg-ground-4 text-ink hover:bg-line"
@@ -479,28 +437,9 @@ export default function Pipeline() {
         )}
         <div className="flex-1" />
 
-        {/* ── The track toggle is gone, on purpose ──
-            It used to switch between two boards over two different stage axes.
-            Danny: "Let's merge Investment and Admissions pipelines, consolidating."
-            The track is now a badge on the card, so this is a FILTER, not a mode:
-            "All" is the real board and these narrow it. Same rows either way. */}
-        <div className="flex items-center gap-px">
-          {[
-            { k: '', label: 'All' },
-            { k: 'Investment', label: 'Investment' },
-            { k: 'Resident', label: 'Resident' },
-          ].map((t) => (
-            <button
-              key={t.k || 'all'}
-              onClick={() => setTrack(t.k)}
-              className={`px-2 h-6 rounded text-mini font-medium transition ${
-                track === t.k ? 'bg-ground-4 text-ink' : 'text-ink-3 hover:text-ink hover:bg-ground-3'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {/* The track filter is gone. Tracks were an Airtable concept — this board
+            is Danny's own five stages now, and nothing here is sliced by team
+            track. */}
         <div className="flex items-center gap-px ml-2 border-l border-line-2 pl-2">
           {[
             { k: 'kanban', label: 'Board' },
@@ -551,12 +490,14 @@ export default function Pipeline() {
         <div className="flex-1 overflow-auto p-3">
           <KanbanBoard
             founders={rows}
-            // The stage list comes from the server, which reads it from Airtable's
-            // own schema. The client keeping its own copy is how the two drift.
-            stages={data.vocab?.stages || []}
-            tracks={data.vocab?.tracks || []}
-            onStageChange={onStageChange}
-            onTracksChange={onTracksChange}
+            // The five stages come from the server (server/lib/ledgerStages.js).
+            // The client keeps no copy — that is how the old board drifted.
+            stages={(data.stages || []).map((s) => s.key)}
+            stageField="ledger_stage"
+            stageLabels={stageLabel}
+            showAllStages
+            tracks={[]}
+            onStageChange={onLedgerStageChange}
             onDelete={onDelete}
           />
         </div>
@@ -593,7 +534,7 @@ export default function Pipeline() {
                   <span className="flex-[2] min-w-0 text-ink-2 truncate">
                     {r.person || <span className="text-ink-4">—</span>}
                   </span>
-                  <span className="w-20 text-ink-3 text-mini capitalize">{r.funnel_stage}</span>
+                  <span className="w-20 text-ink-3 text-mini">{stageLabel[r.ledger_stage] || r.ledger_stage || '—'}</span>
                   <span className="w-24"><Band band={r.stu_band} score={r.stu_score} muted /></span>
                   <span className="w-24"><Band band={r.my_band} /></span>
                   <span className="w-14 text-right num text-mini">

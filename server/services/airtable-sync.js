@@ -103,6 +103,11 @@ async function createPipelineRecord(founder, opts = {}) {
   const blockedCreate = gatedOut(opts, founder, 'create');
   if (blockedCreate) return { skipped: blockedCreate };
   const post = opts.post || postAirtableRecord;
+  // The status this record is born with. The inbox "Add to Pipeline" flow used
+  // to publish as Watching; the personal ledger's Stage 4a ("Add to Investment
+  // Pipeline") publishes as Under Consideration — the honest Airtable spelling
+  // of entering the investment pipeline.
+  const investmentStatus = opts.investmentStatus || 'Watching';
 
   // Descriptive fields go by NAME (the import service reads by name too); the
   // status goes by FIELD ID with a value from Airtable's own vocabulary, so a
@@ -110,7 +115,7 @@ async function createPipelineRecord(founder, opts = {}) {
   const fields = {
     'Company / Founder': founder.company || founder.name,
     'Founder': founder.name,
-    [vocab.FIELD.INVESTMENT_STATUS]: 'Watching',
+    [vocab.FIELD.INVESTMENT_STATUS]: investmentStatus,
     // No 'Stu' option exists on Source Channel; Outbound is the closest true value.
     'Source Channel': 'Outbound',
   };
@@ -121,10 +126,10 @@ async function createPipelineRecord(founder, opts = {}) {
 
   try {
     const rec = await post(TABLE.PIPELINE, fields);
-    logSync(founder.id, 'pipeline', 'Investment Status', null, 'Watching', rec.id, 'success', null);
+    logSync(founder.id, 'pipeline', 'Investment Status', null, investmentStatus, rec.id, 'success', null);
     return { created: true, recordId: rec.id };
   } catch (err) {
-    logSync(founder.id, 'pipeline', 'Investment Status', null, 'Watching', null, 'failed', err.message);
+    logSync(founder.id, 'pipeline', 'Investment Status', null, investmentStatus, null, 'failed', err.message);
     console.error(`[AirtableSync] ✗ create pipeline record failed for "${founder.name}":`, err.message);
     return { error: err.message };
   }

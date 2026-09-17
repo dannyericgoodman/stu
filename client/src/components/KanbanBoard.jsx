@@ -53,7 +53,13 @@ const NO_STAGE = '(no stage)';
 // An empty lane he might legitimately drag into (Stage 2, Stage 4) still shows.
 const isDeadEnd = (s) => /^Stage 0:/.test(s) || /^Stage 5:/.test(s);
 
-export default function KanbanBoard({ founders, stages, tracks, onStageChange, onTracksChange, onDelete }) {
+export default function KanbanBoard({ founders, stages, tracks, onStageChange, onTracksChange, onDelete,
+  // The ledger (2026-09-17) reuses this board over its own axis: pass
+  // stageField="ledger_stage" plus stageLabels for the column headers, and
+  // showAllStages so all five ledger stages render even when empty. Passing
+  // tracks={[]} hides the track badges — tracks are an Airtable concept and the
+  // ledger is Danny's personal workflow.
+  stageField = 'stage_status', stageLabels = null, showAllStages = false }) {
   const [activeId, setActiveId] = useState(null);
   const nav = useNavigate();
 
@@ -61,8 +67,6 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } })
   );
-
-  const stageField = 'stage_status';
 
   const { columns, order } = useMemo(() => {
     const grouped = { [NO_STAGE]: [] };
@@ -77,11 +81,12 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
     // Danny's book has never used (Stage 0, the two Resident-Only Stage 3s). Show a
     // lane if it holds anything; otherwise show it only if it's a live stage he
     // could plausibly drag into. Terminal stages with nothing in them are noise.
+    // (The ledger opts out: its five stages are all live, always.)
     const keys = Object.keys(grouped)
       .filter((k) => k !== NO_STAGE)
-      .filter((k) => grouped[k].length > 0 || !isDeadEnd(k));
+      .filter((k) => grouped[k].length > 0 || showAllStages || !isDeadEnd(k));
     return { columns: grouped, order: grouped[NO_STAGE].length ? [NO_STAGE, ...keys] : keys };
-  }, [founders, stages, stageField]);
+  }, [founders, stages, stageField, showAllStages]);
 
   const active = activeId ? founders.find((f) => String(f.id) === String(activeId)) : null;
 
@@ -107,6 +112,7 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
           <Column
             key={stage}
             id={stage}
+            label={(stageLabels && stageLabels[stage]) || stage}
             rows={columns[stage]}
             unstaged={stage === NO_STAGE}
             allTracks={tracks}
@@ -122,7 +128,7 @@ export default function KanbanBoard({ founders, stages, tracks, onStageChange, o
   );
 }
 
-function Column({ id, rows, unstaged, onOpen, allTracks, onTracksChange, onDelete }) {
+function Column({ id, label, rows, unstaged, onOpen, allTracks, onTracksChange, onDelete }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div
@@ -134,7 +140,7 @@ function Column({ id, rows, unstaged, onOpen, allTracks, onTracksChange, onDelet
       <div className="flex items-center gap-2 h-6 px-2 border-b border-line flex-shrink-0">
         {/* The stage name is the label. No dot, no hue — the column IS the state. */}
         <span className={`text-micro font-semibold uppercase truncate ${unstaged ? 'text-ink-4' : 'text-ink-2'}`}>
-          {id}
+          {label}
         </span>
         <div className="flex-1" />
         <span className="num text-micro text-ink-4">{rows.length}</span>
@@ -175,6 +181,9 @@ const BAND_LABEL = { anchor: 'Anchor', memo: 'Memo', monitor: 'Monitor', pass: '
 // drag sensor claims the pointer at 8px of travel, so without this a click that
 // wobbles becomes a drag and the badge silently never toggles.
 function TrackBadge({ row, allTracks, onTracksChange }) {
+  // An explicitly empty track list means "no track axis here" (the personal
+  // ledger, 2026-09-17) — render nothing rather than the default badges.
+  if (Array.isArray(allTracks) && allTracks.length === 0) return null;
   const on = new Set(row.tracks || []);
   const opts = allTracks && allTracks.length ? allTracks : ['Resident', 'Investment'];
 

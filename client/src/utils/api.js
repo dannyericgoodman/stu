@@ -262,8 +262,8 @@ export const api = {
   // Triage mutates BOTH the inbox and the board — approving creates the company
   // card. A stale cache here would show a founder you just added as still
   // waiting, or worse, not on the pipeline. Invalidate both, always.
-  approveSourced: (id) => after(request(`/sourcing/approve/${id}`, { method: 'POST' }), '/pipeline'),
-  watchSourced: (id) => after(request(`/sourcing/watch/${id}`, { method: 'POST' }), '/pipeline'),
+  approveSourced: (id) => after(request(`/sourcing/approve/${id}`, { method: 'POST' }), '/pipeline', '/pipeline/ledger'),
+  watchSourced: (id) => after(request(`/sourcing/watch/${id}`, { method: 'POST' }), '/pipeline', '/pipeline/ledger'),
   dismissSourced: (id) => after(request(`/sourcing/dismiss/${id}`, { method: 'POST' }), '/pipeline/inbox'),
   hideForeverSourced: (id) => after(request(`/sourcing/hide-forever/${id}`, { method: 'POST' }), '/pipeline/inbox'),
   starSourced: (id) => request(`/sourcing/star/${id}`, { method: 'POST' }),
@@ -377,10 +377,26 @@ export const api = {
   // an edit that appears to have not saved.
   updatePipelineCompany: (id, body) =>
     after(request(`/pipeline/${id}`, { method: 'PATCH', body: JSON.stringify(body) }), '/pipeline'),
+  // ── The personal ledger (2026-09-17) ──
+  // Danny's own stages: Identified → Outreach Sent → Meeting Set → 4a Investment
+  // Pipeline | 4b Pass. Stu-local; only the 4a drag publishes to Airtable.
+  // The ledger is its own cache key — it must not serve (or be served by) the
+  // old merged-board cache.
+  getLedger: (opts) => cachedGet('/pipeline/ledger', opts),
+  // Moving to 4a publishes to the team's Airtable; the response carries
+  // `.airtable` so the caller can say what happened. Invalidates the ledger AND
+  // the card (the card shows the Airtable link once published).
+  setLedgerStage: (id, stage) =>
+    after(
+      request(`/pipeline/${id}/ledger-stage`, { method: 'PATCH', body: JSON.stringify({ stage }) }),
+      '/pipeline/ledger',
+      `/pipeline/${id}`
+    ),
+
   // Create / delete the cards themselves, from the board where the work happens.
-  createPipelineCompany: (body) => after(request('/pipeline', { method: 'POST', body: JSON.stringify(body) }), '/pipeline'),
-  deletePipelineCompany: (id) => after(request(`/pipeline/${id}`, { method: 'DELETE' }), '/pipeline'),
-  restorePipelineCompany: (id) => after(request(`/pipeline/${id}/restore`, { method: 'POST' }), '/pipeline'),
+  createPipelineCompany: (body) => after(request('/pipeline', { method: 'POST', body: JSON.stringify(body) }), '/pipeline', '/pipeline/ledger'),
+  deletePipelineCompany: (id) => after(request(`/pipeline/${id}`, { method: 'DELETE' }), '/pipeline', '/pipeline/ledger'),
+  restorePipelineCompany: (id) => after(request(`/pipeline/${id}/restore`, { method: 'POST' }), '/pipeline', '/pipeline/ledger'),
 
   enrichPipelineCompany: (id) => after(request(`/pipeline/${id}/enrich`, { method: 'POST' }), `/pipeline/${id}`),
   // The free read — Form D + open roles. Separate call from enrich because it

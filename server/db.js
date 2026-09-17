@@ -431,6 +431,36 @@ addColumn('founders', 'airtable_synced_at', 'DATETIME');
 addColumn('founders', 'stage_status', 'TEXT');
 DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_stage_status ON founders(stage_status);`);
 
+// ── THE PERSONAL LEDGER STAGE (2026-09-17) ──
+// Danny: "keep Airtable as my always on team record and Pipeline as a ledger of
+// founders I've seen in inbox that I like" — Stage 1: Identified → Stage 2:
+// Outreach Sent → Stage 3: Meeting Set → Stage 4a: Investment Pipeline | Stage 4b: Pass.
+//
+// This is deliberately NOT stage_status. stage_status is Airtable's vocabulary
+// (the team's record, mirrored by the 6am sync); ledger_stage is Danny's own
+// workflow, Stu-only, and never syncs anywhere. Membership in the ledger is the
+// column itself: ledger_stage IS NOT NULL means "in my ledger".
+//
+// Only Stage 4a touches Airtable — dragging there publishes the founder to the
+// team's base (routes/pipeline.js PATCH /:id/ledger-stage). Everything else is
+// Stu-local by construction.
+addColumn('founders', 'ledger_stage', 'TEXT');
+DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_founders_ledger_stage ON founders(ledger_stage);`);
+
+// Ledger backfill (one time, idempotent): every founder Danny already picked
+// out of the inbox starts at Stage 1: Identified. Two signals, both meaning
+// "he liked them in Source": (a) sourced_from_id IS NOT NULL — the row was born
+// from an inbox approve or watch; (b) stage_status = '4 · Watching' — the old
+// "Add to Pipeline" flow wrote that stage. Rows that came from the team base
+// via the Airtable mirror (no sourced_from_id, never watched) are deliberately
+// NOT included — the ledger is his picks, not the team's book. WHERE
+// ledger_stage IS NULL keeps this a no-op on every boot after the first.
+DEFERRED_BACKFILLS.push(`
+  UPDATE founders SET ledger_stage = 'identified'
+  WHERE ledger_stage IS NULL AND COALESCE(is_deleted, 0) = 0
+    AND (sourced_from_id IS NOT NULL OR stage_status = '4 · Watching');
+`);
+
 // ── ONCE DANNY TOUCHES A BADGE, STU OWNS IT ──
 // Danny: "I'm comfortable with you publishing stage updates to Airtable. But
 // that's it. I'm going to primarily work in Stu, and then choose to enter my own

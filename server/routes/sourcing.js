@@ -1,8 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const airtableSync = require('../services/airtable-sync');
-const { isOwner } = require('../lib/providerKeys');
 const { VALID_TIE_TYPES } = require('../pipeline/sourcing-engine');
 
 // Hard rule: the Pipeline only ever shows founders with a VERIFIED Chicago/IL tie.
@@ -144,7 +142,9 @@ router.get('/runs', (req, res) => {
   res.json(runs);
 });
 
-// POST /api/sourcing/approve/:id — promote to admissions pipeline.
+// POST /api/sourcing/approve/:id — add to Danny's personal ledger at Stage 1: Identified.
+// (2026-09-17: the old investment/admissions track split is gone; approve and
+// watch both land in the personal ledger. Airtable is never written here.)
 // Atomic: the INSERT (founders) and the UPDATE (sourced_founders) happen in ONE
 // transaction, with a status re-check inside the tx, so a crash or a double-click can
 // never create a duplicate or an orphan. Carries the FULL sourcing evidence forward.
@@ -159,11 +159,11 @@ router.post('/approve/:id', (req, res) => {
       name, company, role, email, linkedin_url, github_url, website_url,
       source, fit_score, fit_score_rationale, chicago_connection,
       location_city, stage, domain, tags,
-      status, pipeline_tracks, admissions_status,
+      status, pipeline_tracks, admissions_status, ledger_stage,
       company_one_liner, notable_background, previous_companies,
       caliber_tier, caliber_score, caliber_signals, evidence_map, red_flags, sourced_from_id,
       created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let founder;
@@ -183,7 +183,7 @@ router.post('/approve/:id', (req, res) => {
         sourced.source || 'sourcing-engine', sourced.confidence_score, sourced.confidence_rationale,
         sourced.chicago_connection || null, sourced.location_city || null, 'Pre-seed',
         tags.find(t => ['AI/ML', 'Fintech', 'Healthtech', 'SaaS', 'Defense', 'Climate', 'DevTools', 'Biotech', 'Proptech', 'Edtech', 'Cybersecurity'].includes(t)) || null,
-        JSON.stringify(tags), 'Sourced', 'admissions', 'Sourced',
+        JSON.stringify(tags), 'Sourced', 'admissions', 'Sourced', 'identified',
         sourced.company_one_liner || null,
         pedigreeSignals.length ? pedigreeSignals.join(', ') : null,
         builderSignals.length ? builderSignals.join(', ') : null,
@@ -212,18 +212,12 @@ router.post('/approve/:id', (req, res) => {
 });
 
 // POST /api/sourcing/watch/:id — "Add to Pipeline": Danny is interested.
-// Creates the pipeline card with stage_status '4 · Watching' (investment track)
-// AND creates the row in the team's Airtable Pipeline table with
-// Investment Status = Watching. This is the publish-to-team action: the click
-// itself is the explicit decision, so it passes { explicit: true } — the only
-// caller allowed to. Atomic like approve: the INSERT (founders) and the UPDATE
-// (sourced_founders) happen in ONE transaction with a status re-check inside,
-// so a double-click can never create a duplicate or an orphan.
-//
-// The Airtable create is AWAITED and its outcome returned (the PATCH /:id/stage
-// pattern): if Airtable refuses, the response says so and names the reason,
-// and the Stu row still stands — SQLite is canonical, Airtable self-heals on
-// the next publish.
+// Creates the card in his PERSONAL ledger at Stage 1: Identified. Stu-only —
+// no Airtable write (2026-09-17: Airtable is the team's record; the ledger is
+// his). The publish-to-team moment is the drag to Stage 4a, not this click.
+// Atomic like approve: the INSERT (founders) and the UPDATE (sourced_founders)
+// happen in ONE transaction with a status re-check inside, so a double-click
+// can never create a duplicate or an orphan.
 router.post('/watch/:id', async (req, res) => {
   let tags = [], pedigreeSignals = [], builderSignals = [];
   const parse = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
@@ -235,11 +229,11 @@ router.post('/watch/:id', async (req, res) => {
       name, company, role, email, linkedin_url, github_url, website_url,
       source, fit_score, fit_score_rationale, chicago_connection,
       location_city, stage, domain, tags,
-      status, stage_status, pipeline_tracks,
+      status, stage_status, pipeline_tracks, ledger_stage,
       company_one_liner, notable_background, previous_companies,
       caliber_tier, caliber_score, caliber_signals, evidence_map, red_flags, sourced_from_id,
       created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let founder;
@@ -259,7 +253,7 @@ router.post('/watch/:id', async (req, res) => {
         sourced.source || 'sourcing-engine', sourced.confidence_score, sourced.confidence_rationale,
         sourced.chicago_connection || null, sourced.location_city || null, 'Pre-seed',
         tags.find(t => ['AI/ML', 'Fintech', 'Healthtech', 'SaaS', 'Defense', 'Climate', 'DevTools', 'Biotech', 'Proptech', 'Edtech', 'Cybersecurity'].includes(t)) || null,
-        JSON.stringify(tags), 'Watching', '4 · Watching', 'investment',
+        JSON.stringify(tags), 'Watching', null, 'investment', 'identified',
         sourced.company_one_liner || null,
         pedigreeSignals.length ? pedigreeSignals.join(', ') : null,
         builderSignals.length ? builderSignals.join(', ') : null,
@@ -283,25 +277,18 @@ router.post('/watch/:id', async (req, res) => {
     return res.status(500).json({ error: 'Add to pipeline failed: ' + err.message });
   }
 
-  // Publish to the team's base: create the Pipeline row as Watching.
-  // OWNER-ONLY. The Airtable base is the team's shared CRM on the owner's key —
-  // a paying outside seat must never write to it. Non-owners still get their Stu
-  // Watching card above; the team-base publish is simply skipped, not failed.
-  let airtable = { skipped: 'not_attempted' };
-  try {
-    if (!isOwner(userId)) {
-      airtable = { skipped: 'not_owner' };
-    } else {
-      airtable = await airtableSync.createPipelineRecord(founder, { explicit: true, userId });
-    }
-    if (airtable && airtable.created) {
-      db.prepare('UPDATE founders SET airtable_founder_record_id = ?, airtable_admission_status = ?, airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(airtable.recordId, '4 · Watching', founder.id);
-      founder = db.prepare('SELECT * FROM founders WHERE id = ?').get(founder.id);
-    }
-  } catch (e) {
-    airtable = { error: e.message };
-  }
+  // No Airtable publish here (2026-09-17). Danny: "keep Airtable as my always on
+  // team record and Pipeline as a ledger of founders I've seen in inbox that I
+  // like." "Add to Pipeline" is a PERSONAL ledger action now — the card lands at
+  // Stage 1: Identified, Stu-only. The publish-to-team moment moved downstream:
+  // dragging a card to Stage 4a (Investment Pipeline) is what writes to the
+  // team's base (routes/pipeline.js PATCH /:id/ledger-stage). Nothing reaches
+  // Airtable except that deliberate drag.
+  //
+  // stage_status stays NULL: it is the mirror column ("what Airtable says"), and
+  // writing an Airtable stage for a row Airtable has never heard of would be the
+  // exact lie the column's own comment forbids.
+  const airtable = { skipped: 'ledger_is_personal' };
 
   res.json({ ...founder, airtable });
 });

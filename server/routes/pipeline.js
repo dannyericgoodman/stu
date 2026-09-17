@@ -42,6 +42,7 @@ const { pickShortlist } = require('../lib/morningList');
 const router = express.Router();
 const db = require('../db');
 const vocab = require('../lib/airtableVocab');
+const ledgerStages = require('../lib/ledgerStages');
 const airtableSync = require('../services/airtable-sync');
 const { isOwner } = require('../lib/providerKeys');
 
@@ -56,6 +57,9 @@ const PIPELINE_SQL = `
     f.deal_status, f.admissions_status, f.pipeline_tracks, f.source,
     -- The merged board's axis and badge, plus the Airtable link the card offers.
     f.stage_status, f.airtable_next_step, f.airtable_founder_record_id,
+    -- Danny's personal ledger stage (2026-09-17): his own workflow, Stu-only,
+    -- never synced. Ledger membership = this column IS NOT NULL.
+    f.ledger_stage,
     -- Load-bearing, and this file's third casualty of the same omission. The board
     -- filters folded co-founders on represented_by_founder_id; leaving the column
     -- out of this list made that test read undefined -- truthy-negated for every
@@ -70,7 +74,7 @@ const PIPELINE_SQL = `
     -- silently kept only the Airtable-staged rows it was written to widen.
     f.sourced_from_id,
     f.chicago_connection, f.caliber_tier, f.next_action, f.arr,
-    f.deal_entered_at, f.created_at,
+    f.deal_entered_at, f.created_at, f.updated_at,
     -- Load-bearing: stageOf() derives the invested stage from this. Omitting it
     -- made every portfolio company silently render as "met", because undefined > 0
     -- is false — the board showed "Invested 0" while the attention engine, which
@@ -277,6 +281,112 @@ router.get('/', (req, res) => {
     },
     total: out.length,
   });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE PERSONAL LEDGER (2026-09-17)
+// Danny: "keep Airtable as my always on team record and Pipeline as a ledger of
+// founders I've seen in inbox that I like" — Stage 1: Identified → Stage 2:
+// Outreach Sent → Stage 3: Meeting Set → Stage 4a: Investment Pipeline | Stage 4b: Pass.
+//
+// GET /api/pipeline/ledger — the ledger rows. Membership is the column:
+// ledger_stage IS NOT NULL. Airtable-mirror rows (team record) are NOT here;
+// they live in Airtable itself.
+// ══════════════════════════════════════════════════════════════════════════
+router.get('/ledger', (req, res) => {
+  const rows = db.prepare(PIPELINE_SQL).all(req.user.id, req.user.id, req.user.id);
+
+  const out = rows
+    .filter((r) => !!r.ledger_stage && !r.represented_by_founder_id)
+    .map((r) => ({
+      ...r,
+      stage_status: vocab.fromLegacyStage(r.stage_status) || r.stage_status,
+      funnel_stage: stageOf(r),
+      person: personName(r),
+      tracks: vocab.tracksFromStu(r.pipeline_tracks),
+    }));
+
+  // Ledger order: working stages first (identified → outreach → meeting), then
+  // the two terminal outcomes. Within a stage, most recently touched first.
+  const rank = { identified: 0, outreach: 1, meeting: 2, invest_pipeline: 3, pass: 4 };
+  out.sort(
+    (a, b) =>
+      (rank[a.ledger_stage] ?? 9) - (rank[b.ledger_stage] ?? 9) ||
+      String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''))
+  );
+
+  res.json({ rows: out, stages: ledgerStages.LEDGER_STAGES, total: out.length });
+});
+
+// PATCH /api/pipeline/:id/ledger-stage  { stage: 'identified' | 'outreach' | 'meeting' | 'invest_pipeline' | 'pass' }
+//
+// The ledger's write path. Stu-local for every stage EXCEPT 4a: dragging to
+// "Stage 4a: Investment Pipeline" publishes the founder to the team's Airtable
+// base — that drag IS the publish-to-team decision, so it passes
+// { explicit: true } (the only caller allowed to) and returns what Airtable
+// said, the same contract as the old stage drag.
+//
+// 4a with an existing Airtable record pushes Investment Status →
+// 'Under Consideration' on that record; without one it creates the Pipeline
+// record born as 'Under Consideration'. Either way the team's base is never
+// written except by this deliberate action.
+router.patch('/:id/ledger-stage', async (req, res) => {
+  const founder = db.prepare('SELECT * FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0')
+    .get(req.params.id, req.user.id);
+  if (!founder) return res.status(404).json({ error: 'not found' });
+
+  const stage = req.body?.stage;
+  if (!ledgerStages.isLedgerStage(stage)) {
+    return res.status(400).json({
+      error: 'Not one of your ledger stages.',
+      allowed: ledgerStages.LEDGER_STAGE_KEYS,
+    });
+  }
+
+  const before = founder.ledger_stage;
+  if (before === stage) return res.json({ ...cardRow(req.user.id, founder.id), airtable: { skipped: 'unchanged' } });
+
+  db.prepare('UPDATE founders SET ledger_stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(stage, founder.id);
+
+  let airtable = { skipped: 'not_a_publish_stage' };
+  try {
+    if (stage === 'invest_pipeline') {
+      if (!isOwner(req.user.id)) {
+        airtable = { skipped: 'not_owner' };
+      } else if (founder.airtable_founder_record_id) {
+        airtable = await airtableSync.pushStage(founder, '3 · Under Consideration', {
+          explicit: true,
+          userId: req.user.id,
+        });
+      } else {
+        airtable = await airtableSync.createPipelineRecord(founder, {
+          explicit: true,
+          userId: req.user.id,
+          investmentStatus: 'Under Consideration',
+        });
+      }
+      if (airtable && (airtable.created || airtable.pushed)) {
+        const recordId = airtable.recordId || founder.airtable_founder_record_id;
+        db.prepare(
+          'UPDATE founders SET airtable_founder_record_id = COALESCE(airtable_founder_record_id, ?), airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?'
+        ).run(recordId, founder.id);
+      }
+    } else if (stage === 'pass') {
+      // A pass is a verdict, not just a position — record it so the learning
+      // loop and the "what you advance" panel see the same call he made here.
+      db.prepare(`
+        INSERT INTO founder_triage (founder_id, user_id, verdict, triaged_at)
+        VALUES (?, ?, 'pass', CURRENT_TIMESTAMP)
+        ON CONFLICT(founder_id, user_id) DO UPDATE SET verdict = 'pass', triaged_at = CURRENT_TIMESTAMP
+      `).run(founder.id, req.user.id);
+    }
+  } catch (e) {
+    airtable = { error: e.message };
+  }
+
+  const updated = cardRow(req.user.id, founder.id);
+  res.json({ ...updated, airtable });
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1421,10 +1531,15 @@ router.post('/', (req, res) => {
     });
   }
 
+  // A manually added card lands in the PERSONAL ledger at Stage 1: Identified
+  // (2026-09-17). stage_status stays NULL: it is the mirror column ("what
+  // Airtable says") and this row has no Airtable record — writing an Airtable
+  // stage here would be the mirror-column lie. pipeline_tracks is kept for
+  // continuity but no longer drives any board.
   const r = db.prepare(`
-    INSERT INTO founders (name, company, website_url, stage, status, pipeline_tracks, stage_status, created_by)
-    VALUES (?, ?, ?, 'Pre-seed', 'Sourced', ?, ?, ?)
-  `).run(name, company, website || null, req.body?.pipeline_tracks || 'investment', vocab.STAGES[1], req.user.id);
+    INSERT INTO founders (name, company, website_url, stage, status, pipeline_tracks, stage_status, ledger_stage, created_by)
+    VALUES (?, ?, ?, 'Pre-seed', 'Sourced', ?, NULL, 'identified', ?)
+  `).run(name, company, website || null, req.body?.pipeline_tracks || 'investment', req.user.id);
 
   // A card that reads itself, the moment it exists. See readWebsiteSoon.
   if (website) readWebsiteSoon(r.lastInsertRowid, website, req.user.id);

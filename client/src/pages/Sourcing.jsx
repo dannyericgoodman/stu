@@ -322,14 +322,11 @@ export default function Sourcing() {
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 6000);
       } else if (action === 'watch') {
         const founder = await api.watchSourced(row.id);
-        // "Add to Pipeline" = Danny is interested: the card lands in the pipeline
-        // as Watching and a Watching row is published to the team's Airtable.
-        // Surface the Airtable outcome — a silent publish is a lie by omission.
-        const at = founder?.airtable;
-        const atNote = at?.created ? ' · in Airtable as Watching'
-          : at?.error ? ` · Airtable publish failed: ${at.error}`
-          : at?.skipped ? ` · Airtable skipped (${at.skipped})` : '';
-        setJustTracked({ name: row.name, company: row.company, id: founder?.id, note: atNote });
+        // "Add to Pipeline" = Danny is interested: the card lands in his PERSONAL
+        // ledger at Stage 1: Identified. Stu-only — no Airtable publish (2026-09-17:
+        // Airtable is the team's record; the ledger is his). The publish-to-team
+        // moment is the Stage 4a drag, not this click.
+        setJustTracked({ name: row.name, company: row.company, id: founder?.id, note: ' · your ledger, Stage 1' });
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 8000);
       } else if (action === 'dismiss') await api.dismissSourced(row.id);
       else if (action === 'hide') await api.hideForeverSourced(row.id);
