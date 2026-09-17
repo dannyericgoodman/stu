@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { api } from '../utils/api';
 import { PageHeader, ConvictionBadge } from '../components/ui';
+import FrameworksPanel from '../components/FrameworksPanel';
 
 export default function Assess() {
   const navigate = useNavigate();
@@ -47,6 +48,10 @@ export default function Assess() {
   const [rubrics, setRubrics] = useState([]);
   const [rubricId, setRubricId] = useState('');
 
+  // The Frameworks editor opens in-window (a modal) so editing how you assess
+  // never navigates away from the Assess product.
+  const [showFrameworks, setShowFrameworks] = useState(false);
+
   useEffect(() => {
     loadData();
     if (rerunId) loadRerunContext();
@@ -57,13 +62,20 @@ export default function Assess() {
     if ((isAssessmentTask || isMemoTask) && !rerunId) setTranscripts([{ label: 'Call transcript / notes', content: '' }]);
   }, []);
 
+  async function loadRubrics() {
+    try {
+      const { rubrics } = await api.getRubrics();
+      setRubrics(rubrics || []);
+    } catch (e) { console.error(e); }
+  }
+
   async function loadData() {
     setLoading(true);
     try {
-      const [a, f, r] = await Promise.all([api.getAssessments(), api.getFounders(), api.getRubrics().catch(() => ({ rubrics: [] }))]);
+      const [a, f] = await Promise.all([api.getAssessments(), api.getFounders()]);
       setAssessments(a);
       setFounders(f);
-      setRubrics(r.rubrics || []);
+      await loadRubrics();
     } catch (err) {
       console.error(err);
     }
@@ -249,11 +261,33 @@ export default function Assess() {
           : 'Multi-agent evaluations of your pipeline founders'
         }
         actions={
-          <button onClick={() => { setShowNew(!showNew); if (showNew) { setRerunMode(false); setRerunPreviousInputs([]); } }} className="btn-primary text-sm">
-            {showNew ? 'View history' : 'New assessment'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowFrameworks(true)} className="btn-secondary text-sm">
+              Frameworks
+            </button>
+            <button onClick={() => { setShowNew(!showNew); if (showNew) { setRerunMode(false); setRerunPreviousInputs([]); } }} className="btn-primary text-sm">
+              {showNew ? 'View history' : 'New assessment'}
+            </button>
+          </div>
         }
       />
+
+      {/* The Frameworks editor, in-window. Saves land through the panel's own
+          Save buttons; closing refreshes the picker so new frameworks appear. */}
+      {showFrameworks && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 md:p-8" onClick={() => { setShowFrameworks(false); loadRubrics(); }}>
+          <div className="relative w-full max-w-6xl bg-white rounded-xl shadow-2xl p-6 md:p-8 my-8" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-ink">Frameworks</h2>
+                <p className="text-sm text-gray-500 mt-1">The yardsticks your assessments are scored against. Describe what matters — the architect drafts the questions, you keep the pen.</p>
+              </div>
+              <button onClick={() => { setShowFrameworks(false); loadRubrics(); }} className="text-gray-400 hover:text-gray-600 text-2xl leading-none px-2" aria-label="Close">×</button>
+            </div>
+            <FrameworksPanel />
+          </div>
+        </div>
+      )}
 
       {showNew ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -310,7 +344,7 @@ export default function Assess() {
               <div className="card p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-700">Framework</h3>
-                  <Link to="/frameworks" className="text-xs text-blue-600 hover:underline">Build your own →</Link>
+                  <button onClick={() => setShowFrameworks(true)} className="text-xs text-blue-600 hover:underline">Build your own →</button>
                 </div>
                 <select
                   value={rubricId}
