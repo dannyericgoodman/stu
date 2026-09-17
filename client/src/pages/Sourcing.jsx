@@ -613,10 +613,11 @@ export default function Sourcing() {
               </span>
 
               <span className="w-[172px] flex-none flex items-center justify-end gap-1">
-                {/* LinkedIn is always visible, never hover-gated. Danny: "jump off
-                    to see their LinkedIn" — it's the single most-used action on a
-                    stranger, and hiding it behind hover taxes every row. */}
-                {r.linkedin_url && (
+                {/* LinkedIn slot is ALWAYS rendered, even with no URL — a faded
+                    placeholder keeps Add/Pass aligned identically on every row.
+                    A missing button shifts the whole action group left, which is
+                    the row-by-row inconsistency to avoid. */}
+                {r.linkedin_url ? (
                   <a
                     href={r.linkedin_url}
                     target="_blank"
@@ -627,6 +628,13 @@ export default function Sourcing() {
                   >
                     in ↗
                   </a>
+                ) : (
+                  <span
+                    className="px-1.5 h-5 rounded text-mini font-medium text-ink-4 border border-line-2 opacity-30 cursor-default select-none flex-none flex items-center whitespace-nowrap"
+                    title="No LinkedIn on file"
+                  >
+                    in ↗
+                  </span>
                 )}
                 {/* "Add" is the money action — Danny is interested, the founder
                     lands in the pipeline as Watching and a Watching row is
