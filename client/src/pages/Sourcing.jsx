@@ -323,9 +323,9 @@ export default function Sourcing() {
       } else if (action === 'watch') {
         const founder = await api.watchSourced(row.id);
         // "Add to Pipeline" = Danny is interested: the card lands in his PERSONAL
-        // ledger at Stage 1: Identified. Stu-only — no Airtable publish (2026-09-17:
-        // Airtable is the team's record; the ledger is his). The publish-to-team
-        // moment is the Stage 4a drag, not this click.
+        // ledger at Stage 1: Identified. Stu-only — Stu never writes to Airtable
+        // (2026-09-17). If a founder belongs in the team's base, he adds them
+        // by hand.
         setJustTracked({ name: row.name, company: row.company, id: founder?.id, note: ' · your ledger, Stage 1' });
         setTimeout(() => setJustTracked((j) => (j && j.id === founder?.id ? null : j)), 8000);
       } else if (action === 'dismiss') await api.dismissSourced(row.id);

@@ -220,30 +220,14 @@ router.post('/sync-airtable', async (req, res) => {
 // OWNER-ONLY: the whole point of this endpoint is writing to the team's base, so
 // unlike watch/stage (which degrade to a Stu-local change) there is nothing to
 // fall back to. Non-owners get a 403, not a silent no-op.
+// POST /api/founders/:id/publish-to-team — RETIRED 2026-09-17.
+// Danny: "I don't want you writing to Airtable." Stu is read-only against the
+// team base; this endpoint now refuses instead of publishing. Kept as a 410
+// (rather than deleted) so any stale caller learns the policy, not a 404.
 router.post('/:id/publish-to-team', async (req, res) => {
-  const { isOwner } = require('../lib/providerKeys');
-  if (!isOwner(req.user.id)) {
-    return res.status(403).json({ error: 'Publishing to the team base is only available on the owner account.' });
-  }
-  const founder = db.prepare('SELECT * FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0').get(req.params.id, req.user.id);
-  if (!founder) return res.status(404).json({ error: 'Founder not found' });
-
-  try {
-    const airtableSync = require('../services/airtable-sync');
-    const results = {};
-    results.admissions = await airtableSync.pushAdmissionsChange(founder, null, { explicit: true, userId: req.user.id });
-    if (founder.deal_status) {
-      results.deal = await airtableSync.pushDealChange(founder, null, { explicit: true, userId: req.user.id });
-    }
-    // Surface a real status — the caller learns if the team base actually received it.
-    const ok = !(results.admissions && results.admissions.error) && !(results.deal && results.deal.error);
-    require('../services/health').recordJobRun('publish_to_team', ok ? 'ok' : 'error', `${founder.name}`, req.user.id);
-    res.json({ ok, published: ok, results });
-  } catch (err) {
-    require('../services/health').recordJobRun('publish_to_team', 'error', err.message, req.user.id);
-    console.error('[PublishToTeam] failed:', err.message);
-    res.status(502).json({ ok: false, error: `Publish to team failed: ${err.message}` });
-  }
+  return res.status(410).json({
+    error: 'Publishing to the team base is disabled. Stu never writes to Airtable — add the founder to Airtable by hand.',
+  });
 });
 
 module.exports = router;

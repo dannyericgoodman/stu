@@ -7,12 +7,11 @@
 // Identified to Stage 2: Outreach Sent to Stage 3: Meeting Set
 // Stage 4a: Add to Investment Pipeline or Stage 4b: Pass"
 //
-// The contract under test:
+// The contract under test (2026-09-17 — Danny: "I don't want you writing to
+// Airtable"):
 //   1. Exactly five stages, defined once, and the server rejects anything else.
-//   2. Stages 1–3 and 4b are Stu-local: no Airtable write, ever.
-//   3. Stage 4a is the ONLY publish-to-team action: it writes the founder to
-//      the team's Airtable base as Under Consideration, and it asks nothing
-//      else to do it. Non-owners are gated out.
+//   2. Every stage is Stu-local: no Airtable write, ever — including 4a.
+//   3. The push service itself refuses all writes ({ skipped: 'writes_disabled' }).
 //   4. "Add to Pipeline" from Source lands at Stage 1, privately.
 //   5. The backfill seeds only his inbox picks — never the team's book.
 //
@@ -35,6 +34,7 @@ const ledgerStages = require('../lib/ledgerStages');
 const airtableSync = require('../services/airtable-sync');
 const pipelineRouter = require('../routes/pipeline');
 const sourcingRouter = require('../routes/sourcing');
+const foundersRouter = require('../routes/founders');
 
 // ── Airtable spy ──
 // Any call is recorded. Tests assert the call count to prove "no write".
@@ -60,6 +60,7 @@ before(async () => {
   app.use((req, res, next) => { req.user = currentUser; next(); });
   app.use('/api/pipeline', pipelineRouter);
   app.use('/api/sourcing', sourcingRouter);
+  app.use('/api/founders', foundersRouter);
   server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -206,8 +207,11 @@ test('4b Pass records the triage verdict and never publishes', async () => {
   assert.strictEqual(triage?.verdict, 'pass');
 });
 
-// ── 6. Stage 4a: the publish-to-team action ─────────────────────────────
-test('4a as a non-owner moves the ledger but is gated out of Airtable', async () => {
+// ── 6. Stage 4a: Stu-internal only — never writes to Airtable ───────────
+// 2026-09-17 — Danny: "I don't want you writing to Airtable." 4a is a ledger
+// position, not a publish action. No owner gate, no write, no `airtable` key
+// on the response.
+test('4a as a non-owner moves the ledger and touches nothing else', async () => {
   asUser('seat@test.dev');
   const id = mkFounder({ ledger_stage: 'meeting', created_by: currentUser.id });
   airtableCalls.length = 0;
@@ -215,27 +219,24 @@ test('4a as a non-owner moves the ledger but is gated out of Airtable', async ()
   const { status, json } = await api('PATCH', `/api/pipeline/${id}/ledger-stage`, { stage: 'invest_pipeline' });
   assert.strictEqual(status, 200);
   assert.strictEqual(json.ledger_stage, 'invest_pipeline');
-  assert.strictEqual(json.airtable.skipped, 'not_owner');
-  assert.strictEqual(airtableCalls.length, 0, 'a paying seat never writes the team base');
+  assert.strictEqual(json.airtable, undefined, 'no Airtable report on any move');
+  assert.strictEqual(airtableCalls.length, 0, 'no Airtable call, ever');
 });
 
-test('4a as the owner publishes to Airtable as Under Consideration', async () => {
+test('4a as the owner also never writes to Airtable', async () => {
   asUser('owner@test.dev');
-  const id = mkFounder({ name: 'Publish Me', company: 'PM', ledger_stage: 'meeting', created_by: currentUser.id });
+  const id = mkFounder({ name: 'Stays Home', company: 'SH', ledger_stage: 'meeting', created_by: currentUser.id });
   airtableCalls.length = 0;
 
   const { status, json } = await api('PATCH', `/api/pipeline/${id}/ledger-stage`, { stage: 'invest_pipeline' });
   assert.strictEqual(status, 200);
   assert.strictEqual(json.ledger_stage, 'invest_pipeline');
-  assert.strictEqual(airtableCalls.length, 1, 'exactly one Airtable write');
-  assert.strictEqual(airtableCalls[0].op, 'create');
-  assert.strictEqual(airtableCalls[0].opts.investmentStatus, 'Under Consideration');
-  assert.strictEqual(airtableCalls[0].opts.explicit, true);
+  assert.strictEqual(airtableCalls.length, 0, 'the owner drag does not publish');
   const row = db.prepare('SELECT airtable_founder_record_id FROM founders WHERE id = ?').get(id);
-  assert.strictEqual(row.airtable_founder_record_id, 'recTEST123', 'the link back is recorded');
+  assert.strictEqual(row.airtable_founder_record_id, null, 'no link is created');
 });
 
-test('4a on a founder the team already has pushes the stage instead of duplicating', async () => {
+test('4a on a founder the team already tracks leaves the Airtable link alone', async () => {
   asUser('owner@test.dev');
   const id = mkFounder({ name: 'Known', company: 'K', ledger_stage: 'outreach', created_by: currentUser.id });
   db.prepare('UPDATE founders SET airtable_founder_record_id = ? WHERE id = ?').run('recKNOWN', id);
@@ -243,11 +244,24 @@ test('4a on a founder the team already has pushes the stage instead of duplicati
 
   const { status, json } = await api('PATCH', `/api/pipeline/${id}/ledger-stage`, { stage: 'invest_pipeline' });
   assert.strictEqual(status, 200);
-  assert.strictEqual(airtableCalls.length, 1);
-  assert.strictEqual(airtableCalls[0].op, 'push');
-  assert.strictEqual(airtableCalls[0].stage, '3 · Under Consideration');
+  assert.strictEqual(airtableCalls.length, 0);
   const row = db.prepare('SELECT airtable_founder_record_id FROM founders WHERE id = ?').get(id);
-  assert.strictEqual(row.airtable_founder_record_id, 'recKNOWN', 'no second record created');
+  assert.strictEqual(row.airtable_founder_record_id, 'recKNOWN', 'the existing link is untouched');
+});
+
+test('the Airtable push service itself refuses every write', async () => {
+  const f = { id: 1, name: 'X', airtable_founder_record_id: 'recX' };
+  // realCreate/realPush are the genuine (now-disabled) service functions —
+  // the spy above replaced the module properties, so reach past it.
+  for (const [name, fn, args] of [
+    ['createPipelineRecord', realCreate, [f, { explicit: true }]],
+    ['pushStage', realPush, [f, '3 · Under Consideration', { explicit: true }]],
+    ['pushAdmissionsChange', airtableSync.pushAdmissionsChange, [f, null, { explicit: true }]],
+    ['pushDealChange', airtableSync.pushDealChange, [f, null, { explicit: true }]],
+  ]) {
+    const r = await fn(...args);
+    assert.deepStrictEqual(r, { skipped: 'writes_disabled' }, `${name} refuses`);
+  }
 });
 
 // ── 7. Source "Add to Pipeline" ─────────────────────────────────────────
@@ -263,7 +277,7 @@ test('watch from Source lands at Stage 1, privately — no Airtable publish', as
   assert.strictEqual(status, 200);
   assert.strictEqual(json.ledger_stage, 'identified');
   assert.strictEqual(json.stage_status, null, 'no Airtable-stage lie on a private row');
-  assert.strictEqual(json.airtable.skipped, 'ledger_is_personal');
+  assert.strictEqual(json.airtable, undefined, 'no Airtable report on an inbox add');
   assert.strictEqual(airtableCalls.length, 0, 'the inbox click no longer publishes');
   const st = db.prepare('SELECT status FROM sourced_founders WHERE id = ?').get(s.lastInsertRowid).status;
   assert.strictEqual(st, 'watching', 'the inbox pointer still advances');
@@ -279,4 +293,29 @@ test('approve from Source also lands at Stage 1', async () => {
   const { status, json } = await api('POST', `/api/sourcing/approve/${s.lastInsertRowid}`);
   assert.strictEqual(status, 200);
   assert.strictEqual(json.ledger_stage, 'identified');
+});
+
+// ── 8. Static guard: no route may ever call an Airtable writer ──────────
+// Danny (2026-09-17): "I don't want you writing to Airtable." The writers are
+// dead-bolted in the service, but the call sites must not exist either —
+// a future route that re-adds one trips this test, not a production incident.
+test('no server route calls an Airtable writer', () => {
+  const routesDir = path.join(__dirname, '..', 'routes');
+  const writerRe = /\b(pushStage|createPipelineRecord|pushAdmissionsChange|pushDealChange)\s*\(/;
+  const offenders = [];
+  for (const f of fs.readdirSync(routesDir)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(routesDir, f), 'utf8');
+    const hits = [...src.matchAll(new RegExp(writerRe, 'g'))];
+    if (hits.length) offenders.push(`${f}: ${hits.length} call(s)`);
+  }
+  assert.deepStrictEqual(offenders, [], 'routes must never call an Airtable writer');
+});
+
+test('POST /founders/:id/publish-to-team is retired, not publishing', async () => {
+  asUser('owner@test.dev');
+  const id = mkFounder({ name: 'Retired', company: 'R', created_by: currentUser.id });
+  const { status, json } = await api('POST', `/api/founders/${id}/publish-to-team`);
+  assert.strictEqual(status, 410);
+  assert.ok(/never writes to Airtable/i.test(json.error));
 });

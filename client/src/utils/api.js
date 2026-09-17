@@ -358,9 +358,8 @@ export const api = {
   getPipeline: (params, opts) => cachedGet('/pipeline?' + new URLSearchParams(params || {}), opts),
 
   // ── The merged board's two writes ──
-  // Separate from updateFounder because these are not field edits: each one also
-  // pushes to the team's Airtable base and returns what Airtable said. The caller
-  // has to be able to read `.airtable` and tell Danny if the push was refused.
+  // Separate from updateFounder because these are not field edits. Stu-local
+  // only — Stu never writes to Airtable (2026-09-17).
   setPipelineStage: (id, stage) =>
     after(request(`/pipeline/${id}/stage`, { method: 'PATCH', body: JSON.stringify({ stage }) }), '/pipeline'),
   setPipelineTracks: (id, tracks) =>
@@ -379,13 +378,11 @@ export const api = {
     after(request(`/pipeline/${id}`, { method: 'PATCH', body: JSON.stringify(body) }), '/pipeline'),
   // ── The personal ledger (2026-09-17) ──
   // Danny's own stages: Identified → Outreach Sent → Meeting Set → 4a Investment
-  // Pipeline | 4b Pass. Stu-local; only the 4a drag publishes to Airtable.
+  // Pipeline | 4b Pass. Entirely Stu-local — Stu never writes to Airtable.
   // The ledger is its own cache key — it must not serve (or be served by) the
   // old merged-board cache.
   getLedger: (opts) => cachedGet('/pipeline/ledger', opts),
-  // Moving to 4a publishes to the team's Airtable; the response carries
-  // `.airtable` so the caller can say what happened. Invalidates the ledger AND
-  // the card (the card shows the Airtable link once published).
+  // A ledger move. Invalidates the ledger AND the card.
   setLedgerStage: (id, stage) =>
     after(
       request(`/pipeline/${id}/ledger-stage`, { method: 'PATCH', body: JSON.stringify({ stage }) }),

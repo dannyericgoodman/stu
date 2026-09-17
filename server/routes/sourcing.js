@@ -277,20 +277,14 @@ router.post('/watch/:id', async (req, res) => {
     return res.status(500).json({ error: 'Add to pipeline failed: ' + err.message });
   }
 
-  // No Airtable publish here (2026-09-17). Danny: "keep Airtable as my always on
-  // team record and Pipeline as a ledger of founders I've seen in inbox that I
-  // like." "Add to Pipeline" is a PERSONAL ledger action now — the card lands at
-  // Stage 1: Identified, Stu-only. The publish-to-team moment moved downstream:
-  // dragging a card to Stage 4a (Investment Pipeline) is what writes to the
-  // team's base (routes/pipeline.js PATCH /:id/ledger-stage). Nothing reaches
-  // Airtable except that deliberate drag.
+  // No Airtable anywhere (2026-09-17). Danny: "I don't want you writing to
+  // Airtable." "Add to Pipeline" is a PERSONAL ledger action — the card lands
+  // at Stage 1: Identified, Stu-only, and nothing ever crosses to the team's
+  // base from here. If a founder belongs in Airtable, he adds them by hand.
   //
-  // stage_status stays NULL: it is the mirror column ("what Airtable says"), and
-  // writing an Airtable stage for a row Airtable has never heard of would be the
-  // exact lie the column's own comment forbids.
-  const airtable = { skipped: 'ledger_is_personal' };
-
-  res.json({ ...founder, airtable });
+  // stage_status stays NULL: it is the mirror column ("what Airtable says"),
+  // and it may only ever reflect what a read from Airtable actually returned.
+  res.json({ ...founder });
 });
 
 // POST /api/sourcing/dismiss/:id

@@ -16,11 +16,10 @@ import KanbanBoard from '../components/KanbanBoard';
 // It is not the Airtable mirror anymore — the team's record lives in Airtable
 // itself. A row is in the ledger iff founders.ledger_stage IS NOT NULL.
 //
-// The axis is Stu-local by construction. Dragging between 1→2→3→4b writes
-// nothing but the ledger column. Dragging to 4a is the publish-to-team moment:
-// it creates (or updates) the founder's row in the team's Airtable base as
-// Under Consideration, and the drag asks first. Nothing else on this page
-// touches Airtable — that is the whole point of the split.
+// The axis is Stu-local by construction. Every drag — 1→2→3→4a→4b — writes
+// nothing but the ledger column. Stu never writes to Airtable, full stop
+// (Danny, 2026-09-17: "I don't want you writing to Airtable"). The team base
+// is hand-maintained; if a founder belongs in Airtable, he adds them himself.
 //
 // What the old board taught: a kanban whose axis is someone else's vocabulary
 // drifts (22 declined founders resurrected as live prospects). This axis has
@@ -217,9 +216,9 @@ function Composer({ onCreate, onClose }) {
         </div>
         <div className="px-3 h-9 flex items-center gap-2 border-t border-line bg-ground-2">
           {/* Says where it goes and who sees it. The second half is the load-bearing
-              part: Airtable is the team's, and he should know a card he adds here is
-              his alone until the 4a drag. */}
-          <span className="text-micro text-ink-4 flex-1 truncate" title="A card you add here stays in Stu. Only the Stage 4a drag publishes to the team's Airtable.">
+              part: a card he adds here is his alone, and it stays that way —
+              Stu never writes to the team's Airtable. */}
+          <span className="text-micro text-ink-4 flex-1 truncate" title="A card you add here stays in Stu. Stu never writes to the team's Airtable.">
             Stage 1: Identified · stays in Stu
           </span>
           <button onClick={onClose} className="text-mini text-ink-3 hover:text-ink px-2">Cancel</button>
@@ -299,32 +298,19 @@ export default function Pipeline() {
   }, [rows, cursor, nav, view]);
 
   // ── The ledger's writes ──
-  // Both are optimistic, and both RE-FETCH on failure rather than leaving the
+  // Optimistic, and they RE-FETCH on failure rather than leaving the
   // optimistic state on screen. A silent divergence between the board and the
   // truth is how the old board rotted for four months.
   //
-  // The 4a drag is the publish-to-team moment: it writes to the team's Airtable
-  // base, so it asks first. Every other drag is Stu-local and just moves.
+  // Every drag is Stu-local — including 4a. Nothing here writes to Airtable.
   async function onLedgerStageChange(founderId, newStage) {
-    const row = data?.rows?.find((r) => r.id === founderId);
-    if (newStage === 'invest_pipeline') {
-      const label = row?.company || row?.person || 'this founder';
-      if (!confirm(`Add ${label} to the Investment Pipeline?\n\nThis publishes them to the team's Airtable as Under Consideration.`)) return;
-    }
     const prev = data;
     setData((d) => ({
       ...d,
       rows: d.rows.map((r) => (r.id === founderId ? { ...r, ledger_stage: newStage } : r)),
     }));
     try {
-      const r = await api.setLedgerStage(founderId, newStage);
-      // The ledger moved but Airtable refused the publish. The card is honestly
-      // in 4a in Stu — but the team can't see it yet, and that gap has to be
-      // said out loud, not discovered in Monday's pipeline review.
-      if (r?.airtable?.error) setErr(`Saved in your ledger, but Airtable refused it: ${r.airtable.error}`);
-      else if (newStage === 'invest_pipeline' && r?.airtable?.skipped && r.airtable.skipped !== 'unchanged') {
-        setErr(`Saved in your ledger, but the Airtable publish was skipped (${r.airtable.skipped}).`);
-      }
+      await api.setLedgerStage(founderId, newStage);
     } catch (e) {
       setErr(e.message);
       setData(prev);
@@ -412,7 +398,7 @@ export default function Pipeline() {
       )}
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
         <span className="text-small font-semibold text-ink">Pipeline</span>
-        <span className="text-mini text-ink-4">your ledger — nothing here touches the team's Airtable until you drag to 4a</span>
+        <span className="text-mini text-ink-4">your ledger — Stu never touches the team's Airtable</span>
         <button
           onClick={() => setComposing(true)}
           className="px-2 h-6 rounded text-mini font-medium bg-ground-4 text-ink hover:bg-line"

@@ -43,8 +43,6 @@ const router = express.Router();
 const db = require('../db');
 const vocab = require('../lib/airtableVocab');
 const ledgerStages = require('../lib/ledgerStages');
-const airtableSync = require('../services/airtable-sync');
-const { isOwner } = require('../lib/providerKeys');
 
 // One query. Every stage of the funnel joined to the spine.
 //
@@ -327,9 +325,12 @@ router.get('/ledger', (req, res) => {
 // said, the same contract as the old stage drag.
 //
 // 4a with an existing Airtable record pushes Investment Status →
-// 'Under Consideration' on that record; without one it creates the Pipeline
-// record born as 'Under Consideration'. Either way the team's base is never
-// written except by this deliberate action.
+// ══════════════════════════════════════════════════════════════════════════
+// PATCH /api/pipeline/:id/ledger-stage — move a card between the five ledger
+// stages. 2026-09-17: the ledger is Danny's private record. Stage 4a
+// ("Investment Pipeline") is a Stu-internal label only — it does NOT write to
+// Airtable. Stu never writes to Airtable, full stop; the team base is
+// hand-maintained. (Danny: "I don't want you writing to Airtable.")
 router.patch('/:id/ledger-stage', async (req, res) => {
   const founder = db.prepare('SELECT * FROM founders WHERE id = ? AND created_by = ? AND is_deleted = 0')
     .get(req.params.id, req.user.id);
@@ -344,49 +345,22 @@ router.patch('/:id/ledger-stage', async (req, res) => {
   }
 
   const before = founder.ledger_stage;
-  if (before === stage) return res.json({ ...cardRow(req.user.id, founder.id), airtable: { skipped: 'unchanged' } });
+  if (before === stage) return res.json(cardRow(req.user.id, founder.id));
 
   db.prepare('UPDATE founders SET ledger_stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(stage, founder.id);
 
-  let airtable = { skipped: 'not_a_publish_stage' };
-  try {
-    if (stage === 'invest_pipeline') {
-      if (!isOwner(req.user.id)) {
-        airtable = { skipped: 'not_owner' };
-      } else if (founder.airtable_founder_record_id) {
-        airtable = await airtableSync.pushStage(founder, '3 · Under Consideration', {
-          explicit: true,
-          userId: req.user.id,
-        });
-      } else {
-        airtable = await airtableSync.createPipelineRecord(founder, {
-          explicit: true,
-          userId: req.user.id,
-          investmentStatus: 'Under Consideration',
-        });
-      }
-      if (airtable && (airtable.created || airtable.pushed)) {
-        const recordId = airtable.recordId || founder.airtable_founder_record_id;
-        db.prepare(
-          'UPDATE founders SET airtable_founder_record_id = COALESCE(airtable_founder_record_id, ?), airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?'
-        ).run(recordId, founder.id);
-      }
-    } else if (stage === 'pass') {
-      // A pass is a verdict, not just a position — record it so the learning
-      // loop and the "what you advance" panel see the same call he made here.
-      db.prepare(`
-        INSERT INTO founder_triage (founder_id, user_id, verdict, triaged_at)
-        VALUES (?, ?, 'pass', CURRENT_TIMESTAMP)
-        ON CONFLICT(founder_id, user_id) DO UPDATE SET verdict = 'pass', triaged_at = CURRENT_TIMESTAMP
-      `).run(founder.id, req.user.id);
-    }
-  } catch (e) {
-    airtable = { error: e.message };
+  if (stage === 'pass') {
+    // A pass is a verdict, not just a position — record it so the learning
+    // loop and the "what you advance" panel see the same call he made here.
+    db.prepare(`
+      INSERT INTO founder_triage (founder_id, user_id, verdict, triaged_at)
+      VALUES (?, ?, 'pass', CURRENT_TIMESTAMP)
+      ON CONFLICT(founder_id, user_id) DO UPDATE SET verdict = 'pass', triaged_at = CURRENT_TIMESTAMP
+    `).run(founder.id, req.user.id);
   }
 
-  const updated = cardRow(req.user.id, founder.id);
-  res.json({ ...updated, airtable });
+  res.json(cardRow(req.user.id, founder.id));
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1097,22 +1071,12 @@ function readWebsiteSoon(founderId, rawUrl, userId) {
 // THE STAGE PUBLISHES. THE BADGE DOES NOT. Danny drew that line himself:
 //
 //   "I'm comfortable with you publishing stage updates to Airtable. But that's it.
-//    I'm going to primarily work in Stu, and then choose to enter my own context to
-//    the team view in Airtable depending on what I want them to see."
+// ══════════════════════════════════════════════════════════════════════════
+// PATCH /api/pipeline/:id/stage — legacy team-vocabulary stage drag.
 //
-// Stu is where he works; Airtable is what the team sees; he decides what crosses.
-// The stage crosses because the team's view of where a deal stands must not
-// silently disagree with his, and because the 5:45am sync would otherwise revert
-// his drag by morning. The badge stays home.
-//
-// The stage drag is the ONLY caller in this file that passes { explicit: true }.
-// Every scheduled job is still refused by the gate in services/airtable-sync.js.
-// A human pressing a card is not an agent; that distinction is the whole rule.
-//
-// The push is AWAITED and its outcome is returned. Fire-and-forget would let Stu
-// report a move that Airtable rejected — which is this codebase's oldest bug, a
-// status message decoupled from the thing it describes. If Airtable refuses, the
-// response says so and names the reason.
+// 2026-09-17: Stu never writes to Airtable (Danny's call). The drag updates
+// Stu's local column only; the team's base is hand-maintained in Airtable.
+// The old push-through-airtable-sync block was removed the same day.
 // ══════════════════════════════════════════════════════════════════════════
 
 // PATCH /api/pipeline/:id/stage  { stage: "Stage 2: Interviewed" }
@@ -1131,29 +1095,13 @@ router.patch('/:id/stage', async (req, res) => {
   }
 
   const before = founder.stage_status;
-  if (before === stage) return res.json({ ...cardRow(req.user.id, founder.id), airtable: { skipped: 'unchanged' } });
+  if (before === stage) return res.json(cardRow(req.user.id, founder.id));
 
   db.prepare('UPDATE founders SET stage_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(stage, founder.id);
 
-  // Keep the mirror column honest: it means "what Airtable says", so it may only
-  // move once Airtable has actually accepted the write.
-  // OWNER-ONLY (same rule as the watch flow): the base is the team's shared CRM.
-  let airtable = { skipped: 'no_airtable_record' };
-  try {
-    airtable = isOwner(req.user.id)
-      ? await airtableSync.pushStage(founder, stage, { explicit: true, userId: req.user.id })
-      : { skipped: 'not_owner' };
-    if (airtable && airtable.pushed) {
-      db.prepare('UPDATE founders SET airtable_admission_status = ?, airtable_synced_at = CURRENT_TIMESTAMP WHERE id = ?')
-        .run(stage, founder.id);
-    }
-  } catch (e) {
-    airtable = { error: e.message };
-  }
-
   const updated = cardRow(req.user.id, founder.id);
-  res.json({ ...updated, funnel_stage: stageOf(updated), airtable });
+  res.json({ ...updated, funnel_stage: stageOf(updated) });
 });
 
 // PATCH /api/pipeline/:id/tracks  { tracks: ["Resident","Investment"] }

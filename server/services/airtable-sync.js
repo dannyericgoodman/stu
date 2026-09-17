@@ -1,8 +1,13 @@
 /**
- * One-way Stu → Airtable push service
+ * Stu → Airtable push service — DISABLED 2026-09-17
  *
- * Fires async after stage changes in Stu. Non-blocking — errors are logged
- * but never break the Stu update flow.
+ * Danny: "I don't want you writing to Airtable." Every writer in this module
+ * now returns { skipped: 'writes_disabled' } before touching the network.
+ * Airtable is read-only from Stu (airtable-import.js still pulls); the team
+ * base is hand-maintained and Stu never mutates it.
+ *
+ * This module stays as the single choke point: if writes are ever re-enabled,
+ * re-enabling them here restores the old explicit-gate behavior in one place.
  */
 
 const https = require('https');
@@ -100,6 +105,8 @@ function postAirtableRecord(tableId, fields) {
 // from its own vocabulary.
 // ══════════════════════════════════════════════════════════════════════════
 async function createPipelineRecord(founder, opts = {}) {
+  // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
+  return { skipped: 'writes_disabled' };
   const blockedCreate = gatedOut(opts, founder, 'create');
   if (blockedCreate) return { skipped: blockedCreate };
   const post = opts.post || postAirtableRecord;
@@ -211,6 +218,8 @@ const vocab = require('../lib/airtableVocab');
 // send the right field id and a value Airtable will actually accept.
 /** Push the merged board's stage. `stage` must already be a valid Airtable option. */
 async function pushStage(founder, stage, opts = {}) {
+  // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
+  return { skipped: 'writes_disabled' };
   const blockedStage = gatedOut(opts, founder, 'stage');
   if (blockedStage) return { skipped: blockedStage };
   const recordId = founder.airtable_founder_record_id;
@@ -255,6 +264,8 @@ async function pushStage(founder, stage, opts = {}) {
  * GATED: only runs when called with { explicit: true } (publish-to-team).
  */
 async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
+  // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
+  return { skipped: 'writes_disabled' };
   const blockedAdm = gatedOut(opts, founder, 'admissions');
   if (blockedAdm) return { skipped: blockedAdm };
   const recordId = founder.airtable_founder_record_id;
@@ -290,6 +301,8 @@ async function pushAdmissionsChange(founder, oldStatus, opts = {}) {
  * GATED: only runs when called with { explicit: true } (publish-to-team).
  */
 async function pushDealChange(founder, oldStatus, opts = {}) {
+  // DISABLED 2026-09-17 — Danny: Stu never writes to Airtable.
+  return { skipped: 'writes_disabled' };
   const blockedDeal = gatedOut(opts, founder, 'deal');
   if (blockedDeal) return { skipped: blockedDeal };
   const recordId = founder.airtable_deal_record_id;

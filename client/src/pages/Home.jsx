@@ -114,11 +114,7 @@ export default function Home() {
     try {
       if (action === 'watch') {
         const founder = await api.watchSourced(f.id);
-        const at = founder?.airtable;
-        const atNote = at?.created ? ' · in Airtable as Watching'
-          : at?.error ? ` · Airtable publish failed: ${at.error}`
-          : at?.skipped ? ` · Airtable skipped (${at.skipped})` : '';
-        setTriaged({ text: `${f.company || f.name} is on the pipeline as Watching${atNote}.` });
+        setTriaged({ text: `${f.company || f.name} is in your ledger, Stage 1.` });
       } else {
         await api.dismissSourced(f.id);
         setTriaged({ text: `${f.company || f.name} passed.` });
