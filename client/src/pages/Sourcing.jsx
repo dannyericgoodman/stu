@@ -394,8 +394,8 @@ export default function Sourcing() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-3 h-8 border-b border-line-2 bg-ground flex-shrink-0">
-        <span className="text-small font-semibold text-ink">Source</span>
-        <span className="text-mini text-ink-4">
+        <span className="text-small font-semibold text-ink flex-none">Source</span>
+        <span className="text-mini text-ink-4 whitespace-nowrap">
           {scope === 'pipeline' ? 'verified Illinois tie' : 'no Illinois tie — national frontier'}
         </span>
         <ScoutState data={data} running={running} onRun={runScout} />
@@ -507,7 +507,7 @@ export default function Sourcing() {
         <span className="w-36">Illinois tie</span>
         <span className="w-28">Found via</span>
         <span className="w-16">Added</span>
-        <span className="w-36 text-right pr-1">Triage</span>
+        <span className="w-[172px] flex-none text-right pr-1">Triage</span>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -519,7 +519,7 @@ export default function Sourcing() {
               <span className="w-36"><span className="block h-2 w-20 bg-ground-3 rounded-sm" /></span>
               <span className="w-28"><span className="block h-2 w-14 bg-ground-3 rounded-sm" /></span>
               <span className="w-16"><span className="block h-2 w-8 bg-ground-3 rounded-sm" /></span>
-              <span className="w-36" />
+              <span className="w-[172px] flex-none" />
             </div>
           ))
         ) : rows.length === 0 ? (
@@ -612,7 +612,7 @@ export default function Sourcing() {
                 {addedLabel(r.created_at)}
               </span>
 
-              <span className="w-36 flex items-center justify-end gap-1">
+              <span className="w-[172px] flex-none flex items-center justify-end gap-1">
                 {/* LinkedIn is always visible, never hover-gated. Danny: "jump off
                     to see their LinkedIn" — it's the single most-used action on a
                     stranger, and hiding it behind hover taxes every row. */}
@@ -622,7 +622,7 @@ export default function Sourcing() {
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    className="px-1.5 h-5 rounded text-mini font-medium text-ink-3 border border-line-2 hover:border-accent hover:text-accent transition flex items-center"
+                    className="px-1.5 h-5 rounded text-mini font-medium text-ink-3 border border-line-2 hover:border-accent hover:text-accent transition flex-none flex items-center whitespace-nowrap"
                     title="Open LinkedIn"
                   >
                     in ↗
@@ -632,23 +632,15 @@ export default function Sourcing() {
                     founder lands in the pipeline as Watching and a Watching row
                     is published to the team's Airtable. Always visible, never
                     hover-gated: hiding the primary decision behind hover taxes
-                    every row. */}
+                    every row. Pass stays on the keyboard (x) and in the detail
+                    panel — a third button here is what kept clipping the row. */}
                 <button
                   onClick={(e) => { e.stopPropagation(); triage(r, 'watch'); }}
-                  className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition"
+                  className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition flex-none whitespace-nowrap"
                   title="Add to pipeline as Watching — also publishes to the team's Airtable (t)"
                 >
                   Add to Pipeline
                 </button>
-                <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); triage(r, 'dismiss'); }}
-                    className="px-2 h-5 rounded text-mini text-ink-3 border border-line-2 hover:bg-ground-4 hover:text-ink transition"
-                    title="Pass for now (x)"
-                  >
-                    Pass
-                  </button>
-                </span>
               </span>
             </div>
           ))
@@ -865,7 +857,7 @@ function ScoutState({ data, running, onRun }) {
       <button onClick={onRun} disabled={running} className="btn-secondary h-6 text-mini flex-none whitespace-nowrap">
         {running ? 'Sweeping…' : 'Run scout'}
       </button>
-      <span className="text-mini text-ink-4 truncate min-w-0" title={last?.detail || ''}>
+      <span className="text-mini text-ink-4 whitespace-nowrap flex-none" title={last?.detail || ''}>
         {running ? (
           <span className="text-ink-2">Sweeping — this takes a few minutes…</span>
         ) : !last ? (
@@ -879,9 +871,11 @@ function ScoutState({ data, running, onRun }) {
             </span>
             {/* The number that answers "is it worth opening this morning". It counts
                 arrivals since the last scout run — not since midnight — so a run
-                that finishes at 4:30am still reads as one night's work. */}
+                that finishes at 4:30am still reads as one night's work. Kept to
+                "N new": the full phrase kept truncating mid-sentence in the
+                toolbar, which is a fact you cannot read and therefore not a fact. */}
             {data.new_count > 0 && (
-              <span className="text-ink-2"> · <span className="text-accent font-medium">{data.new_count} new</span> since the last run</span>
+              <span className="text-ink-2"> · <span className="text-accent font-medium">{data.new_count} new</span></span>
             )}
             {data.new_count === 0 && last.status !== 'error' && <span className="text-ink-4"> · nobody new</span>}
             {last.status === 'error' && <span className="text-ink-2"> · failed</span>}

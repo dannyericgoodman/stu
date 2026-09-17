@@ -203,34 +203,31 @@ router.get('/', (req, res) => {
   }));
 
   // ── WHO IS ON THE MERGED BOARD ──
-  // A card is an opportunity if it has a stage. Airtable gives 161 of them one;
-  // backfill-stage-status derives one for the 26 that came from Airtable's separate
-  // Investment Pipeline table. Everything else is not pipeline.
+  // 2026-09-16 — Danny: "I want it to mirror the pipeline tab in Airtable,
+  // while also having the people I added to pipeline in Stu in the first box
+  // of the kanban." So the board is two populations, and only two:
   //
-  // That "everything else" is 109 rows, and they are worth naming: all created
-  // 2026-03-17/18 by the March bulk import, all source='exa', and NOT ONE has a
-  // sourced_from_id — meaning not one was ever approved through the Sourcing inbox.
-  // Their company names are scraper wreckage ("Kairos\n\nCo", "Chicago Inno 25
-  // Under 25\n\nCo", "Full"). They sat in an admissions column called "Sourced",
-  // inflating the board with 109 things Danny had never looked at.
+  //   1. Airtable-linked rows (airtable_founder_record_id) — the mirror. Their
+  //      stage is Airtable's, synced by the 6am job.
+  //   2. Stu-added rows (sourced_from_id, no Airtable link yet) — the bank. They
+  //      carry no stage, so the kanban's no-stage column (rendered first) is
+  //      where they land, until Danny drags them somewhere or they get
+  //      published to Airtable (watch publishes + links, graduating them to 1).
   //
-  // The fix is NOT to hand them a stage. "Stage 1: Identified" would be a lie —
-  // nobody identified them — and it is exactly the pipeline inflation Danny refuses
-  // to let this product do. Untriaged sourcing output belongs in Sourcing.
-  // `?all=1` still returns them, so nothing is hidden, only un-promoted.
+  // The 26 Investment-Pipeline orphans (derived stages, pipeline_tracks set, no
+  // Founder Ecosystem record) are real deals from the team's OTHER Airtable
+  // table, so they stay explicitly rather than by accident of having a stage.
+  // isStage() guards the clause: a legacy/raw stage string like "Sourced" that
+  // matches no Airtable stage is residue, not a deal.
   //
-  // 2026-08-31 — THE BANK. Danny: "instead of the kanban to mimic my Airtable, it
-  // should be its own bank of the founders I like (and hit add) for in Source. So I
-  // can keep track of them. And then move candidates I speak to into Airtable on my
-  // own." A founder he APPROVED out of the sourcing inbox is a founder he chose, and
-  // choosing is the act this board should record — whether or not Airtable has caught
-  // up and given the row a stage yet. Requiring stage_status meant every Add he made
-  // in Source vanished until Airtable was updated, which is exactly backwards: Stu is
-  // where the choosing happens, Airtable is where the deal-making is tracked.
-  //
-  // sourced_from_id is the durable mark of that approval — untriaged scout output has
-  // none, so this still cannot inflate the board with rows nobody looked at.
-  if (req.query.all !== '1') out = out.filter((r) => !!r.stage_status || !!r.sourced_from_id);
+  // A row with a stage but no Airtable link, no sourced_from_id, and no track
+  // is none of the above — derived/legacy stage residue — and is off the board.
+  // ?all=1 still returns everything; nothing is deleted, only un-promoted.
+  if (req.query.all !== '1') out = out.filter((r) =>
+    !!r.airtable_founder_record_id ||
+    !!r.sourced_from_id ||
+    (!!r.pipeline_tracks && vocab.isStage(r.stage_status))
+  );
 
   // ── ONE CARD PER COMPANY ──
   // Danny: "Eric Mills and Scott Nelson are both showing for Permute, and Kyle
