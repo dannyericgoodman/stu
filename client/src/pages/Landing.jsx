@@ -97,7 +97,7 @@ const faqs = [
   },
   {
     q: 'What happens after the 10 founding seats are claimed?',
-    a: 'Founding pricing closes permanently. Founding members keep full access at the founding terms — a single $349 payment, never a subscription.',
+    a: 'Founding pricing closes permanently. Founding members keep full access at the founding terms — a single one-time payment, never a subscription.',
   },
   {
     q: 'Is my data separate from other investors?',
@@ -491,7 +491,7 @@ export default function Landing() {
         <div className="landing-fade landing-fade-d1">
           <span className="lp-eyebrow">
             <span className="dot" />
-            Founding seats open — 10 available at $349
+            Founding seats open — 10 available
           </span>
         </div>
         <h1 className="lp-h1 landing-fade landing-fade-d2">
@@ -573,9 +573,9 @@ export default function Landing() {
           </div>
           <div className="lp-price-card landing-fade landing-fade-d2">
             <div className="lp-price-flag">Founding seat</div>
-            <div className="lp-price">$349</div>
+            <div className="lp-price">Pay once</div>
             <div className="lp-price-once">
-              <b>One-time.</b> Not a subscription — you pay once, you keep access.
+              <b>One-time.</b> Not a subscription — pay once, keep access. Price shown at checkout.
             </div>
             <ul className="lp-price-list">
               {pricingIncludes.map(item => (
@@ -625,7 +625,7 @@ export default function Landing() {
       <section className="lp-final">
         <div className="landing-fade">
           <h2>Your inbox could be full by tomorrow.</h2>
-          <p>10 founding seats. One-time $349. When they&rsquo;re gone, they&rsquo;re gone.</p>
+          <p>10 founding seats. One-time payment. When they&rsquo;re gone, they&rsquo;re gone.</p>
           <Link to="/signup" className="lp-cta">
             Claim a founding seat
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

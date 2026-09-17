@@ -149,6 +149,7 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
       },
       // The reservation lapses after 30 minutes; the Stripe session lapses with
       // it, so nobody can pay for a seat that has already gone back in the pool.
+      allow_promotion_codes: true,
       expires_at: Math.floor(Date.now() / 1000) + RESERVATION_TTL_MIN * 60,
       success_url: `${APP_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${APP_URL}/payment`,
