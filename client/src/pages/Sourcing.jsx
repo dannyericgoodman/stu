@@ -628,18 +628,25 @@ export default function Sourcing() {
                     in ↗
                   </a>
                 )}
-                {/* "Add to Pipeline" is the money action — Danny is interested, the
-                    founder lands in the pipeline as Watching and a Watching row
-                    is published to the team's Airtable. Always visible, never
-                    hover-gated: hiding the primary decision behind hover taxes
-                    every row. Pass stays on the keyboard (x) and in the detail
-                    panel — a third button here is what kept clipping the row. */}
+                {/* "Add" is the money action — Danny is interested, the founder
+                    lands in the pipeline as Watching and a Watching row is
+                    published to the team's Airtable. "Pass" is its quiet
+                    sibling: same row, same height, secondary styling so the
+                    primary decision keeps the visual weight. Short labels so
+                    both fit without clipping the column. */}
                 <button
                   onClick={(e) => { e.stopPropagation(); triage(r, 'watch'); }}
                   className="px-2 h-5 rounded text-mini font-medium bg-ink text-white hover:bg-ink-2 transition flex-none whitespace-nowrap"
                   title="Add to pipeline as Watching — also publishes to the team's Airtable (t)"
                 >
-                  Add to Pipeline
+                  Add
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); triage(r, 'dismiss'); }}
+                  className="px-2 h-5 rounded text-mini text-ink-3 border border-line-2 hover:bg-ground-4 hover:text-ink transition flex-none whitespace-nowrap"
+                  title="Pass for now (x)"
+                >
+                  Pass
                 </button>
               </span>
             </div>
