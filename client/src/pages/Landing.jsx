@@ -493,7 +493,7 @@ export default function Landing() {
           Wake up to a ranked inbox<br />of founders.
         </h1>
         <p className="lp-sub landing-fade landing-fade-d3">
-          Stu works the founder sources you&rsquo;d never have time to cover — YC, a16z Speedrun,
+          Stu watches the founder sources every night — YC, a16z Speedrun,
           Z&nbsp;Fellows, Thiel Fellows, GitHub builders and the open web. Every profile scored,
           tiered, and memo&rsquo;d before your first coffee.
         </p>
@@ -542,9 +542,9 @@ export default function Landing() {
             <div className="lp-kicker">How it works</div>
             <h2 className="lp-h2">Sourcing is a daily practice.<br />Stu does the daily part.</h2>
             <p className="lp-lede">
-              The best investors meet more founders. Stu sweeps the sources you&rsquo;d never
-              have time to cover — every night — and ranks what it finds against your thesis.
-              You just meet people.
+              The best investors meet more founders. Stu sweeps YC, a16z Speedrun, Z Fellows,
+              Thiel Fellows, GitHub builders and the open web every night, and ranks what it finds
+              against your thesis. You just meet people.
             </p>
           </div>
           <div className="lp-steps">
