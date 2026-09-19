@@ -700,6 +700,13 @@ app.use('/api/talent', requireAuth, mcpScopeFor('talent'), require('./routes/tal
 app.use('/api/hiring', requireAuth, mcpScopeFor('talent'), require('./routes/hiring'));
 app.use('/api/network', requireAuth, denyMcpRest, require('./routes/network'));
 app.use('/api/newsletter', requireAuth, denyMcpRest, require('./routes/newsletter'));
+// Public connector listing: anonymous readers get the info doc (for directories
+// and prospective users); requests carrying credentials fall through to the
+// authed mount below so the Settings UI's BYOK nudge keeps working.
+app.get('/api/mcp/info', (req, res, next) => {
+  if (req.headers.authorization) return next();
+  require('./routes/mcp').infoHandler(req, res, next);
+});
 app.use('/api/mcp', requireAuth, denyMcpRest, require('./routes/mcp'));
 app.use('/api/monitors', requireAuth, mcpScopeFor('monitors'), require('./routes/monitors'));
 app.use('/api/sources', requireAuth, denyMcpRest, require('./routes/sources'));

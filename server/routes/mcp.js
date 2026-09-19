@@ -32,7 +32,9 @@ const TOOL_CATALOG = [
 ];
 
 // GET /api/mcp/info — everything a new user needs to connect their agent.
-router.get('/info', (req, res) => {
+// Also served WITHOUT auth (see index.js) so connector directories and
+// prospective users can read the listing; only the BYOK block is user-specific.
+function mcpInfo(req, res) {
   const url = `${baseUrl(req)}/mcp`;
   res.json({
     name: 'Stu for Muse',
@@ -60,13 +62,15 @@ router.get('/info', (req, res) => {
     builderSignals: listSignals(),
     monitorTypes: listMonitorTypes(),
     // Surface BYOK readiness so the UI can nudge the user to add keys first.
+    // Anonymous (public listing) readers get false — nothing user-specific leaks.
     byok: {
-      anthropic_configured: !!resolveKey(req.user.id, 'anthropic'),
-      exa_configured: !!resolveKey(req.user.id, 'exa'),
+      anthropic_configured: !!(req.user && resolveKey(req.user.id, 'anthropic')),
+      exa_configured: !!(req.user && resolveKey(req.user.id, 'exa')),
       note: 'Talent/Sourcing search via MCP is deterministic and needs no key. Keys are only needed for sourcing runs and AI features — and are billed to you.',
     },
   });
-});
+}
+router.get('/info', mcpInfo);
 
 // GET /api/mcp/tokens — list (never returns the token value)
 router.get('/tokens', denyMcpToken, (req, res) => {
@@ -93,3 +97,4 @@ router.delete('/tokens/:id', denyMcpToken, (req, res) => {
 });
 
 module.exports = router;
+module.exports.infoHandler = mcpInfo;
