@@ -2,12 +2,14 @@
  * talentData.js — scoped, read-mostly data access for the MCP tools.
  *
  * Every function takes a userId and filters strictly to that user's own rows. The MCP
- * server NEVER reaches founders / assessments / notes / memos — only the Talent and
- * (the user's own) Sourcing surfaces, plus the builder-signal taxonomy. Filtering by
- * builder signals is deterministic (no LLM), so search is cheap and needs no API key.
+ * surface reaches the caller's OWN Talent and Sourcing data only — never the pipeline
+ * founders, assessments, notes, or memos. Filtering by builder signals is deterministic
+ * (no LLM), so search is cheap and needs no API key.
  */
 const db = require('./../db');
 const { filterBySignals, detectSignals, VALID_SIGNAL_KEYS } = require('../lib/builderSignals');
+const { tierAndTieFilters } = require('./sourcingData');
+const { vcTextFilters } = require('../lib/vcFilters');
 
 const CANDIDATE_FIELDS = `id, name, headline, linkedin_url, github_url, current_company, current_role,
   tenure_months, years_experience, location_city, location_state, tech_stack, pedigree_signals,
@@ -16,7 +18,7 @@ const CANDIDATE_FIELDS = `id, name, headline, linkedin_url, github_url, current_
 
 const SOURCED_FIELDS = `id, name, company, role, headline, linkedin_url, github_url, location_city,
   caliber_tier, caliber_score, unicorn_score, enrichment, confidence_score, pedigree_signals, builder_signals,
-  departure_recency_months, github_activity_score, chicago_connection, status`;
+  departure_recency_months, github_activity_score, chicago_connection, status, tags`;
 
 function clampLimit(n, def = 25, max = 100) {
   const x = parseInt(n);
@@ -95,22 +97,32 @@ function getRoleMatches(userId, roleId) {
 // only in the owner's web Sourcing queue (routes/sourcing.js TIE_CLAUSE), which keeps the
 // owner's instance IL-locked. External users source on their own criteria (any geography),
 // so their MCP/discovery queue is tie-exempt by design. Always user_id-scoped either way.
-function searchSourcedFounders(userId, { query = '', signals = null, mode = 'any', status = null, minConfidence = 0, limit = 25 } = {}) {
+function searchSourcedFounders(userId, { query = '', signals = null, mode = 'any', status = null, minConfidence = 0, limit = 25, tier = null, illinois_tie = false, stage = null, region = null, sector = null } = {}, dbOverride) {
+  const d = dbOverride || db;
   const types = validTypes(signals);
+  const textFilter = vcTextFilters({ stage, region, sector });
   const params = [userId];
   let sql = `SELECT ${SOURCED_FIELDS} FROM sourced_founders WHERE user_id = ?`;
   if (status) { sql += ' AND status = ?'; params.push(status); }
+  // VC filters: minimum caliber tier ('A' means S+A) and verified-Illinois-tie scope.
+  // Same definitions as the REST queue (lib/sourcingScope) — no drift.
+  const { clause, params: extra } = tierAndTieFilters({ tier, illinois_tie });
+  sql += clause; params.push(...extra);
   if (query && query.trim()) {
     sql += ' AND (LOWER(name) LIKE ? OR LOWER(headline) LIKE ? OR LOWER(company) LIKE ?)';
     const q = `%${query.trim().toLowerCase()}%`; params.push(q, q, q);
   }
   sql += ' ORDER BY caliber_score DESC, confidence_score DESC LIMIT ?';
-  params.push(types ? 400 : clampLimit(limit));
-  const rows = db.prepare(sql).all(...params);
+  params.push((types || textFilter) ? 400 : clampLimit(limit));
+  const rows = d.prepare(sql).all(...params);
 
-  if (!types) return rows.slice(0, clampLimit(limit)).map(r => ({ ...r, matched_signals: [] }));
-  const filtered = filterBySignals(rows, { types, source: 'sourcing', mode, minConfidence });
-  return filtered.slice(0, clampLimit(limit)).map(({ row, signals: sig }) => ({ ...row, matched_signals: sig }));
+  let filtered = rows;
+  if (types) filtered = filterBySignals(filtered, { types, source: 'sourcing', mode, minConfidence }).map(({ row, signals: sig }) => ({ ...row, matched_signals: sig }));
+  else filtered = filtered.map((r) => ({ ...r, matched_signals: [] }));
+  // stage/region/sector are best-effort text matchers (lib/vcFilters): rows with
+  // no detectable signal are skipped when the filter is set.
+  if (textFilter) filtered = filtered.filter(textFilter);
+  return filtered.slice(0, clampLimit(limit));
 }
 
 // Load a saved person (talent candidate or sourced founder), scoped to the user, with

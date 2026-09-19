@@ -35,7 +35,7 @@ async function handlePost(req, res) {
     const db = require('../db');
     const u = db.prepare('SELECT has_paid FROM users WHERE id = ?').get(auth.userId);
     if (!u || !u.has_paid) {
-      return res.status(402).json({ jsonrpc: '2.0', error: { code: -32002, message: 'A founding seat is required to use Stu.' }, id: null });
+      return res.status(402).json({ jsonrpc: '2.0', error: { code: -32002, message: 'Stu for Muse requires an active Stu account. Get access at https://www.stu.vc.' }, id: null });
     }
   } catch (err) {
     console.error('[MCP] Paywall check failed:', err.message);

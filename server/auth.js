@@ -105,7 +105,7 @@ function requirePaid(req, res, next) {
   }
   if (paid) return next();
   return res.status(402).json({
-    error: 'A founding seat is required to use Stu.',
+    error: 'An active Stu account is required.',
     code: 'payment_required',
   });
 }

@@ -5,8 +5,13 @@
  * only if the caller's token carries the required scope — so a `talent:read` token's
  * tools/list never even shows the monitor tools. Each call is audited to job_runs.
  *
- * The Talent/Sourcing data here is the CALLER'S OWN. The MCP surface has no code path to
- * founders / assessments / notes / memos — those stay private to Stu's owner.
+ * This is the VC-sourcing surface: the CALLER'S OWN sourced founders (search, ranked
+ * outreach list, detail, discovery, enrichment, outreach drafting) plus their talent
+ * data. It's built for any VC — stealth→growth, any sector, any region, with
+ * best-effort stage/region/sector filters — not just Danny's Chicago pre-seed lens
+ * (which survives as the 'illinois-preseed' preset on get_outreach_list). The MCP
+ * surface has no code path to the pipeline founders, assessments,
+ * notes, or memos — those stay private to Stu's owner.
  */
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
@@ -14,6 +19,7 @@ const db = require('./../db');
 
 const { listSignals, VALID_SIGNAL_KEYS } = require('../lib/builderSignals');
 const talent = require('./talentData');
+const sourcing = require('./sourcingData');
 const monitors = require('./monitorData');
 const { listMonitorTypes, runUserMonitors } = require('../pipeline/monitor-engine');
 const { discover } = require('../pipeline/discovery-engine');
@@ -163,16 +169,60 @@ function buildMcpServer({ userId, scopes = [] }) {
   });
 
   // ── Sourcing (sourcing:read) ──
+  const stageRegionSector = {
+    stage: z.union([z.string(), z.array(z.string())]).optional(),
+    region: z.union([z.string(), z.array(z.string())]).optional(),
+    sector: z.union([z.string(), z.array(z.string())]).optional(),
+  };
+  const STAGE_REGION_SECTOR_DESC = ' Best-effort text inference (profile text, location_city, tags): stage ∈ stealth|pre-seed|seed|series-a|growth, region ∈ sf-bay|nyc|la|austin|boston|chicago|seattle|remote (or any keyword), sector ∈ ai|fintech|devtools|saas|health|consumer|crypto|climate|defense|edtech|robotics|hardware (or any keyword). Rows with no detectable signal are skipped when the filter is set — we never invent stage/location/sector data.';
+
+  tool('get_outreach_list', 'sourcing:read', {
+    title: 'Get my founder outreach list',
+    description: 'YOUR ranked founder outreach list — the flagship VC-sourcing call, built for ANY VC. Defaults to unfiltered national scope (stealth→growth, any sector, any region) at S/A minimum caliber, ranked caliber → affinity → fit → recency, each row with the honest "why they\'re here" fit evaluation. Narrow it with tier, stage, sector, region, illinois_tie, scope, or preset "illinois-preseed" (the Chicago pre-seed lens: verified Illinois ties + earliest-stage S/A founders).' + STAGE_REGION_SECTOR_DESC,
+    inputSchema: {
+      limit: z.number().min(1).max(25).optional(),
+      tier: z.enum(['S', 'A', 'B', 'C']).optional(),
+      scope: z.enum(['all', 'pipeline', 'watchlist']).optional(),
+      illinois_tie: z.boolean().optional(),
+      preset: z.enum(['illinois-preseed']).optional(),
+      excludeLate: z.boolean().optional(),
+      ...stageRegionSector,
+    },
+  }, async (a) => sourcing.getOutreachList(userId, {
+    limit: a.limit ?? 10,
+    tier: a.tier ?? 'A',
+    scope: a.scope ?? 'all',
+    illinois_tie: a.illinois_tie ?? false,
+    preset: a.preset ?? null,
+    excludeLate: a.excludeLate ?? false,
+    stage: a.stage ?? null,
+    region: a.region ?? null,
+    sector: a.sector ?? null,
+  }));
+
+  tool('get_sourced_founder', 'sourcing:read', {
+    title: 'Get a sourced founder',
+    description: 'Full detail on one of YOUR sourced founders by id: every stored field, enrichment, builder/caliber signals, and the fit evaluation (meet-worthy, stage, why).',
+    inputSchema: { id: z.number() },
+  }, async ({ id }) => {
+    const f = sourcing.getSourcedFounder(userId, id);
+    if (!f) throw new Error('Founder not found');
+    return f;
+  });
+
   tool('search_sourced_founders', 'sourcing:read', {
     title: 'Search sourced founders',
-    description: 'Search YOUR sourced-founder queue. Filter by builder signals — e.g. signals ["just_departed"] with the yc tier, or ["stealth_building"], to find unicorn-builder founder profiles.',
+    description: 'Search YOUR sourced-founder queue. Filter by builder signals (e.g. ["just_departed"]), minimum caliber tier (tier "A" means S+A), illinois_tie=true for the verified-Illinois-tie pipeline scope, plus stage / region / sector.' + STAGE_REGION_SECTOR_DESC,
     inputSchema: {
       query: z.string().optional(),
       signals: z.array(signalEnum).optional(),
       mode: z.enum(['any', 'all']).optional(),
       status: z.enum(['pending', 'starred', 'approved', 'watching', 'dismissed']).optional(),
+      tier: z.enum(['S', 'A', 'B', 'C']).optional(),
+      illinois_tie: z.boolean().optional(),
       minConfidence: z.number().min(0).max(1).optional(),
       limit: z.number().min(1).max(100).optional(),
+      ...stageRegionSector,
     },
   }, async (a) => {
     const results = talent.searchSourcedFounders(userId, a);

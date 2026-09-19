@@ -17,13 +17,17 @@ function baseUrl(req) {
 }
 
 const TOOL_CATALOG = [
+  { name: 'get_outreach_list', desc: 'YOUR ranked founder outreach list — the flagship. Defaults to unfiltered national scope (stealth→growth, any sector/region) at S/A caliber; filter by stage, sector, region, tier, or use the illinois-preseed preset for the Chicago pre-seed lens.' },
+  { name: 'search_sourced_founders', desc: 'Search your sourced-founder queue; filter by builder signals, minimum caliber tier ("A" means S+A), illinois_tie for verified Illinois ties, and best-effort stage / region / sector.' },
+  { name: 'get_sourced_founder', desc: 'Full detail on one of your sourced founders: every field, enrichment, signals, and the fit evaluation.' },
   { name: 'discover_builders', desc: 'Go FIND new unicorn-builders from the live web by signal (e.g. YC founders who just left). Best first call — fills your account.' },
   { name: 'list_builder_signals', desc: 'The filterable unicorn-builder signal types.' },
+  { name: 'enrich_profile', desc: 'Run the analyst pass on one saved founder: trajectory summary, one-line "why", 0-100 unicorn score.' },
+  { name: 'draft_outreach', desc: 'Write a warm, short, personalized investor outreach message to a founder.' },
   { name: 'search_talent_candidates', desc: 'Search your talent candidates; filter by builder signals.' },
   { name: 'get_talent_candidate', desc: 'Full detail on one candidate + matched signals.' },
   { name: 'list_talent_roles', desc: 'Your open portfolio-company roles.' },
   { name: 'get_role_matches', desc: 'Ranked candidate matches for a role.' },
-  { name: 'search_sourced_founders', desc: 'Search your sourced-founder queue; filter by builder signals.' },
   { name: 'list_monitor_types / create_monitor / list_monitors / list_monitor_hits / run_monitors_now', desc: 'Set up and read "X just happened" alerts (e.g. YC founder just left).' },
 ];
 
@@ -31,20 +35,25 @@ const TOOL_CATALOG = [
 router.get('/info', (req, res) => {
   const url = `${baseUrl(req)}/mcp`;
   res.json({
+    name: 'Stu for Muse',
+    tagline: 'Sourcing for every VC — filter stealth→growth founders by stage, sector, region, and builder signals.',
     mcpUrl: url,
     transport: 'streamable-http (stateless)',
     auth: 'Send your Stu MCP token as a Bearer credential: `Authorization: Bearer stu_mcp_…`',
     howToConnect: [
-      'Stu is free with an account — no payment, just bring your own API keys.',
-      '1. In Settings, add your Exa key (powers web discovery) and Anthropic key — your usage bills your key, never the platform.',
-      '2. Create an MCP token below (POST /api/mcp/tokens). Copy it now — it is shown once.',
-      `3. Point your MCP client (Claude Desktop, Cursor, etc.) at ${url} with that token as a Bearer header.`,
-      '4. Even with an empty account, ask: "find me YC founders who just left" → your agent calls discover_builders and pulls fresh people from the web in seconds.',
+      'Stu for Muse requires an active Stu account — get access at https://www.stu.vc — then bring your own API keys.',
+      '1. Claim your seat and create an MCP token below (POST /api/mcp/tokens). Copy it now — it is shown once.',
+      '2. In Settings, add your Exa key (powers web discovery) and Anthropic key — your usage bills your key, never the platform.',
+      `3. Point your MCP client (Claude Desktop, Cursor, Muse, etc.) at ${url} with that token as a Bearer header.`,
+      '4. Ask: "give me my morning founder outreach list" → your agent calls get_outreach_list and returns your ranked founders. Try "seed-stage AI founders in the Bay Area" or the illinois-preseed preset for a Chicago pre-seed lens.',
     ],
     quickStart: [
-      'Find me YC founders who just left their company.',
-      'Find founding engineers who recently left OpenAI or Stripe.',
-      'Set up a daily alert for YC founders who just left, and make it actively discover new ones.',
+      'Give me my morning founder outreach list.',
+      'Find me seed-stage AI founders in the Bay Area.',
+      'Show me fintech founders raising Series A.',
+      'Who should I meet this week?',
+      'Find YC founders who just left their company.',
+      'Draft an investor outreach message to this founder.',
     ],
     scopes: { available: VALID_SCOPES, default: DEFAULT_SCOPES },
     tools: TOOL_CATALOG,
