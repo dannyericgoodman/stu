@@ -2,15 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const ledgerStages = require('../lib/ledgerStages');
-const { VALID_TIE_TYPES } = require('../pipeline/sourcing-engine');
-
-// Hard rule: the Pipeline only ever shows founders with a VERIFIED Chicago/IL tie.
-// Two conditions, BOTH required: (1) a canonical tie type, AND (2) actual connection
-// evidence text — a founder with a tie type but no substantiating connection (the false
-// "Chicago · current" failure mode) is treated as unverified and hidden. Single source of
-// truth is the engine's VALID_TIE_TYPES so the display filter can't drift from intake.
-const TIE_IN = VALID_TIE_TYPES.map(() => '?').join(',');
-const TIE_CLAUSE = `location_type IN (${TIE_IN}) AND chicago_connection IS NOT NULL AND TRIM(chicago_connection) != '' AND LOWER(chicago_connection) NOT LIKE '%no verified tie%' AND LOWER(chicago_connection) != 'any'`;
+const { VALID_TIE_TYPES, TIE_CLAUSE } = require('../lib/sourcingScope');
+// (TIE_CLAUSE + VALID_TIE_TYPES live in lib/sourcingScope.js, shared with the MCP
+// VC-sourcing tools so REST and MCP filter on identical definitions.)
 
 // School filter: a key from the UI → the substrings that identify that school in the tie text
 // (verified tie stores the matched school name) or the headline. Multiple spellings per school.
