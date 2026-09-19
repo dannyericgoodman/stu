@@ -41,7 +41,7 @@ router.get('/info', (req, res) => {
     transport: 'streamable-http (stateless)',
     auth: 'Send your Stu MCP token as a Bearer credential: `Authorization: Bearer stu_mcp_…`',
     howToConnect: [
-      'Stu for Muse requires a founding seat, then bring your own API keys.',
+      'Stu for Muse requires an active Stu account — get access at https://www.stu.vc — then bring your own API keys.',
       '1. Claim your seat and create an MCP token below (POST /api/mcp/tokens). Copy it now — it is shown once.',
       '2. In Settings, add your Exa key (powers web discovery) and Anthropic key — your usage bills your key, never the platform.',
       `3. Point your MCP client (Claude Desktop, Cursor, Muse, etc.) at ${url} with that token as a Bearer header.`,

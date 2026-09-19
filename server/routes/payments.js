@@ -119,7 +119,7 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
   // charged. Without this, two buyers racing for the last seat could both pay.
   const seat = reserveSeat(user.id);
   if (!seat) {
-    return res.status(403).json({ error: 'All 10 founding seats are claimed.', code: 'sold_out' });
+    return res.status(403).json({ error: 'All 10 seats are claimed.', code: 'sold_out' });
   }
   if (seat.status === 'claimed') return res.json({ already_paid: true });
 
@@ -133,7 +133,7 @@ router.post('/create-checkout-session', requireAuth, async (req, res) => {
             currency: 'usd',
             product_data: {
               name: PRODUCT_NAME,
-              description: `Founding seat — pay once, use Stu forever. Bring your own API keys.`,
+              description: `Stu access — pay once, use Stu forever. Bring your own API keys.`,
             },
             unit_amount: PRICE_CENTS,
           },

@@ -40,7 +40,7 @@ test('unpaid authenticated user gets 402', async () => {
   const r = await run(requirePaid, { user: { id: unpaidId, has_paid: 1 } });
   assert.equal(r.next, false);
   assert.equal(r.res.statusCode, 402);
-  assert.match(r.res.body.error, /founding seat/i);
+  assert.match(r.res.body.error, /active Stu account/i);
 });
 
 test('paid authenticated user passes through', async () => {
