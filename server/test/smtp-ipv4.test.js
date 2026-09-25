@@ -59,7 +59,7 @@ test('credentials are passed through', async () => {
 
 test('neither digest reintroduces the family:4 no-op', () => {
   const fs = require('fs');
-  for (const f of ['../services/email-digest.js', '../services/founder-digest.js']) {
+  for (const f of ['../services/founder-digest.js']) {
     // Strip comments first — the fix is *documented* in both files, and the docs
     // naturally quote the thing they're warning about.
     const src = fs.readFileSync(require.resolve(f), 'utf8')

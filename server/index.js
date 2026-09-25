@@ -375,11 +375,7 @@ try {
     }
 
     // One-time: replace the Elad whole-book brief row with individual chapters.
-    const eladFlag = db.prepare("SELECT * FROM migration_flags WHERE key = 'fix_elad_chapters_v1'").get();
-    if (!eladFlag) {
-      db.prepare("INSERT INTO migration_flags (key) VALUES ('fix_elad_chapters_v1')").run();
-      require('./migrations/fix-elad-chapters')().catch(err => console.error('[fix-elad-chapters] error:', err.message));
-    }
+    // Removed 2026-09-25 with the Daily Brief feature itself (one-time, long applied).
 
     // One-time: sweep inbox to bar — dismiss investors/VCs + founders without a verified tie.
     const pqFlag = db.prepare("SELECT * FROM migration_flags WHERE key = 'cleanup_pipeline_quality_v1'").get();
@@ -699,7 +695,7 @@ if (process.env.RESTORE_TOKEN) {
 app.use('/api/talent', requireAuth, mcpScopeFor('talent'), require('./routes/talent'));
 app.use('/api/hiring', requireAuth, mcpScopeFor('talent'), require('./routes/hiring'));
 app.use('/api/network', requireAuth, denyMcpRest, require('./routes/network'));
-app.use('/api/newsletter', requireAuth, denyMcpRest, require('./routes/newsletter'));
+// /api/newsletter removed 2026-09-25 (Daily Brief was dead — 0 rows since June).
 // Public connector listing: anonymous readers get the info doc (for directories
 // and prospective users); requests carrying credentials fall through to the
 // authed mount below so the Settings UI's BYOK nudge keeps working.
@@ -789,40 +785,9 @@ app.listen(PORT, () => {
     }, { timezone: 'America/Chicago' });
     console.log('Daily Airtable sync scheduled (5:45 AM CT)');
 
-    cron.schedule('0 6 * * *', async () => {
-      console.log('[Cron] Starting daily newsletter brief...');
-      const { recordJobRun } = require('./services/health');
-      try {
-        const dbi = require('./db');
-        const { fetchAndProcess, fetchAllSources } = require('./services/newsletter');
-        // Users with either a managed source (RSS/email) or a legacy Gmail label setup.
-        const users = dbi.prepare(`
-          SELECT DISTINCT user_id FROM (
-            SELECT user_id FROM newsletter_sources WHERE enabled = 1 AND is_deleted = 0
-            UNION
-            SELECT user_id FROM user_settings WHERE setting_key = 'newsletter_gmail_app_password'
-              AND setting_value IS NOT NULL AND setting_value != '' AND setting_value != '""'
-          )
-        `).all();
-        const { backfillAll } = require('./services/brief-archive');
-        const { sendDigest } = require('./services/email-digest');
-        for (const { user_id } of users) {
-          try {
-            // 1. Pull the latest newsletter issues.
-            const hasSources = dbi.prepare("SELECT COUNT(*) c FROM newsletter_sources WHERE user_id = ? AND enabled = 1 AND is_deleted = 0 AND kind != 'archive'").get(user_id).c > 0;
-            const r = hasSources ? await fetchAllSources(user_id) : await fetchAndProcess(user_id, { limit: 40 });
-            console.log(`[Cron][Newsletter] user ${user_id}:`, r.ok ? `${r.added} added` : r.error);
-            // 2. Keep archive catalogues fresh (idempotent; cheap).
-            const hasArchives = dbi.prepare("SELECT COUNT(*) c FROM newsletter_sources WHERE user_id=? AND kind='archive' AND enabled=1 AND is_deleted=0").get(user_id).c > 0;
-            if (hasArchives) { try { await backfillAll(user_id); } catch (e) { console.error(`[Cron][Brief] backfill ${user_id}:`, e.message); } }
-            // 3. Build + email the digest.
-            const sent = await sendDigest(user_id);
-            console.log(`[Cron][Brief] user ${user_id}:`, sent.ok ? (sent.skipped ? `skipped (${sent.reason})` : `sent → ${sent.recipient} (${sent.archive} classics, ${sent.newsletters} newsletters)`) : sent.error);
-          } catch (e) { console.error(`[Cron][Newsletter] user ${user_id} failed:`, e.message); }
-        }
-      } catch (e) { console.error('[Cron][Newsletter] run failed:', e.message); }
-    }, { timezone: 'America/Chicago' });
-    console.log('Daily newsletter brief scheduled (6:00 AM CT)');
+    // Newsletter / Daily Brief removed 2026-09-25 — dead feature (0 rows since
+    // June, already cut from nav). The 6am brief cron, /api/newsletter, and its
+    // services are gone; the tables stay dormant in sqlite.
   }
 
   // Daily signal monitors — runs for any user with an enabled monitor. Local detection is

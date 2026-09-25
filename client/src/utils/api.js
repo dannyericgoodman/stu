@@ -517,22 +517,6 @@ export const api = {
   getHealthFull: () => request('/health/full'),
   checkNotionDrift: (repair) => request('/health/drift' + (repair ? '?repair=1' : '')),
 
-  // Newsletter / Daily Brief
-  getNewsletterBrief: (days) => request('/newsletter/brief' + (days ? `?days=${days}` : '')),
-  getNewsletterStatus: () => request('/newsletter/status'),
-  syncNewsletter: () => request('/newsletter/sync', { method: 'POST' }),
-  dismissNewsletterItem: (id) => request(`/newsletter/${id}`, { method: 'DELETE' }),
-  getNewsletterSources: () => request('/newsletter/sources'),
-  addNewsletterSource: (data) => request('/newsletter/sources', { method: 'POST', body: JSON.stringify(data) }),
-  updateNewsletterSource: (id, data) => request(`/newsletter/sources/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  deleteNewsletterSource: (id) => request(`/newsletter/sources/${id}`, { method: 'DELETE' }),
-  getBriefToday: () => request('/newsletter/today'),
-  rebuildBrief: () => request('/newsletter/rebuild', { method: 'POST' }),
-  seedBriefDefaults: () => request('/newsletter/seed-defaults', { method: 'POST' }),
-  sendBriefNow: () => request('/newsletter/send-now', { method: 'POST' }),
-  getBriefDigestPreview: () => request('/newsletter/digest-preview'),
-  getBriefArchive: () => request('/newsletter/archive'),
-
   // Talent — Portfolio companies
   getTalentPortfolio: () => request('/talent/portfolio'),
   getTalentCompany: (id) => request(`/talent/portfolio/${id}`),

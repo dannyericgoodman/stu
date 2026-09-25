@@ -55,7 +55,6 @@ const Network = lazy(() => import('./pages/Network'));
 // until Danny confirms nothing in it is worth salvaging.
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const Settings = lazy(() => import('./pages/Settings'));
-const Brief = lazy(() => import('./pages/Brief'));
 const Releases = lazy(() => import('./pages/Releases'));
 const Health = lazy(() => import('./pages/Health'));
 const Admin = lazy(() => import('./pages/Admin'));
@@ -157,7 +156,6 @@ function AppRoutes() {
       <Route path="/network" element={<ProtectedRoute><Network /></ProtectedRoute>} />
       <Route path="/portfolio" element={<ProtectedRoute><Placeholder title="Portfolio" /></ProtectedRoute>} />
       <Route path="/fund" element={<ProtectedRoute><Placeholder title="Fund Analytics" /></ProtectedRoute>} />
-      <Route path="/brief" element={<ProtectedRoute><Brief /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
       <Route path="/releases" element={<ProtectedRoute><Releases /></ProtectedRoute>} />
       <Route path="/health" element={<ProtectedRoute><Health /></ProtectedRoute>} />

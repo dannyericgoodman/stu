@@ -1,18 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { canonUrl, normTitle } = require('../services/newsletter');
 const { heuristicMatch } = require('../pipeline/match-engine');
-
-// Newsletter cross-source dedup helpers (the same story across newsletters should collapse).
-test('canonUrl strips query/fragment/trailing slash', () => {
-  assert.strictEqual(canonUrl('https://Stratechery.com/2026/post/?utm=x#a'), 'https://stratechery.com/2026/post');
-  assert.strictEqual(canonUrl('https://x.com/a/'), 'https://x.com/a');
-});
-test('normTitle normalizes headlines so near-identical ones match', () => {
-  assert.strictEqual(normTitle('OpenAI’s New Model — Explained!'), 'openais new model explained');
-  assert.strictEqual(normTitle('OpenAIs new model explained'), 'openais new model explained');
-});
 
 // Talent must-haves now affect the score (previously ignored).
 test('heuristicMatch penalizes a candidate missing all must-haves', () => {
