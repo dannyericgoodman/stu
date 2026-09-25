@@ -917,7 +917,7 @@ app.listen(PORT, () => {
     // worked last night — and the roster half, on a monthly clock, could not
     // possibly be the reason to open the app in the morning.
     //
-    // Rosters now run inside the nightly scout on MONDAYS (see above), one arm of
+    // Rosters now run inside the scout on MONDAYS (see above), one arm of
     // one job with one ledger line. Same cadence order of magnitude, same cost
     // profile, one place to look. Nothing schedules `early_signal_sources` any
     // more; the inbox reads `nightly_scout`.
@@ -1058,7 +1058,7 @@ app.listen(PORT, () => {
     const { runSourcingEngine } = require('./pipeline/sourcing-engine');
 
     // ══════════════════════════════════════════════════════════════════
-    // THE NIGHTLY SCOUT — one job, so the inbox is full before he opens it.
+    // THE TWICE-WEEKLY SCOUT — one job, so the inbox is full before he opens it.
     //
     // Danny: "Set this up so sourcing runs daily (I want to log in in the morning
     // and see new folks!)."
@@ -1074,9 +1074,10 @@ app.listen(PORT, () => {
     // Now it is one job with one ledger line, and the two arms run on the cadence
     // their SOURCE actually changes:
     //
-    //   Exa sweep      NIGHTLY  — the open web changes daily. This is the arm that
-    //                             finds the founders nobody has labelled yet, and
-    //                             it is the reason to open the app in the morning.
+    //   Exa sweep      MON & FRI NIGHTS — was nightly until 2026-09-25, when the
+    //                             nightly Claude calls blew through the $50/mo
+    //                             API cap. Twice weekly keeps fresh founders
+    //                             flowing without tripping the cap.
     //   Roster pull    MONDAYS  — YC ships two batches a year and Speedrun runs in
     //                             waves. Polling a twice-yearly answer nightly is
     //                             what made this cost $36/mo to learn nothing. The
@@ -1090,11 +1091,11 @@ app.listen(PORT, () => {
     // readable. It self-limits — `linkedin_enriched_at IS NULL` means a drained
     // queue does no work and costs nothing.
     //
-    // 4:30 AM CT: late enough that the previous day's edits are in, early enough
-    // that everything (sweep ~4min, rosters ~8min, enrichment ~3min) is finished
-    // and scored well before he logs in.
+    // 10:00 PM CT Monday and Friday: late enough that the day's edits are in,
+    // everything (sweep ~4min, rosters ~8min, enrichment ~3min) finishes overnight
+    // and is scored and waiting in the morning inbox.
     // ══════════════════════════════════════════════════════════════════
-    cron.schedule('30 4 * * *', async () => {
+    cron.schedule('0 22 * * 1,5', async () => {
       const { recordJobRun } = require('./services/health');
       // One scout run PER PAID USER with exa+anthropic keys (their own saved keys;
       // the owner falls back to env). A user missing keys is skipped here — the
@@ -1102,13 +1103,13 @@ app.listen(PORT, () => {
       for (const { id: userId } of usersWithKeys('exa', 'anthropic')) {
       const startedAt = Date.now();
       const isMonday = new Date().getDay() === 1;
-      console.log(`[Scout] Starting nightly scout for user ${userId} (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
+      console.log(`[Scout] Starting scout for user ${userId} (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
 
       const parts = [];
       const errors = [];
       let added = 0;
 
-      // ── Arm 1: the open-web sweep. Runs every night. ──
+      // ── Arm 1: the open-web sweep. Runs Monday and Friday nights. ──
       try {
         const r = await runSourcingEngine({ userId });
         added += r.totalAdded || 0;
@@ -1151,7 +1152,7 @@ app.listen(PORT, () => {
       }
 
       const mins = Math.round((Date.now() - startedAt) / 6000) / 10;
-      // ONE row, and it always writes — including on a night that found nobody.
+      // ONE row, and it always writes — including on a run that found nobody.
       // "+0 added" is a real answer; silence is the thing that made him stop
       // believing the automation existed.
       recordJobRun(
@@ -1165,7 +1166,7 @@ app.listen(PORT, () => {
       } // end per-user loop
     }, { timezone: 'America/Chicago' });
 
-    console.log('Nightly scout scheduled (4:30 AM CT — sweep nightly, rosters Mondays, then enrich + score)');
+    console.log('Scout scheduled (10:00 PM CT Mon & Fri — sweep twice weekly, rosters Mondays, then enrich + score)');
 
     // Daily talent sourcing — source EACH open role against its own function + JD, so
     // marketing/product/CS roles get fresh candidates automatically (not just engineering).
