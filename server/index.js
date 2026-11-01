@@ -1067,7 +1067,13 @@ app.listen(PORT, () => {
       // engines would refuse anyway — rather than failing the whole night.
       for (const { id: userId } of usersWithKeys('exa', 'anthropic')) {
       const startedAt = Date.now();
-      const isMonday = new Date().getDay() === 1;
+      // The weekday in CHICAGO, not the container's zone. The container runs UTC
+      // (no TZ in the Dockerfile), and this cron fires at 10 PM CT — which is already
+      // 03:00/04:00 UTC TUESDAY. `new Date().getDay() === 1` was therefore never true
+      // when the Monday cron fired, so the roster arm (YC, Speedrun, Thiel/Z/Neo,
+      // Residency, Emergent, IL schools, pre-program) never ran on schedule at all.
+      const isMonday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short' })
+        .format(new Date()) === 'Mon';
       console.log(`[Scout] Starting scout for user ${userId} (rosters: ${isMonday ? 'yes — Monday' : 'no'})...`);
 
       const parts = [];
@@ -1079,7 +1085,11 @@ app.listen(PORT, () => {
         const r = await runSourcingEngine({ userId });
         added += r.totalAdded || 0;
         parts.push(`sweep +${r.totalAdded || 0} of ${r.totalFiltered || 0} filtered`);
-        if (r.errors?.length) errors.push(...r.errors.map((e) => `sweep: ${String(e).slice(0, 60)}`));
+        // errors are objects ({source, query?, error}); String(e) rendered them as
+        // "[object Object]" in the one ledger line Danny reads.
+        if (r.errors?.length) errors.push(...r.errors.map((e) => `sweep: ${(typeof e === 'string' ? e : `${e.source || ''}${e.query ? `/${e.query}` : ''}: ${e.error || ''}`).slice(0, 90)}`));
+        if (r.scorerDown) parts.push(`SCORING STOPPED (${String(r.scorerDown).slice(0, 60)})`);
+        if (r.deferred) parts.push(`${r.deferred} deferred`);
       } catch (e) {
         errors.push(`sweep: ${e.message}`);
         parts.push('sweep FAILED');
@@ -1196,13 +1206,27 @@ app.listen(PORT, () => {
       // EDGAR is a free public feed) — the pull is geo-filtered to each user's
       // own criteria inside the engine, so no provider key is required.
       const { paidUserIds } = require('./lib/schedulerUsers');
+      // recordJobRun was referenced here without being required — every successful
+      // pull threw a ReferenceError into the catch below and logged "failed", and no
+      // sec_filings ledger row was ever written.
+      const { recordJobRun } = require('./services/health');
       for (const userId of paidUserIds()) {
       try {
         const result = await runFilingsSource({ userId, days: 30 });
-        console.log(`[Cron] Filings pull complete (user ${userId}):`, result);
-        recordJobRun('sec_filings', 'ok', JSON.stringify(result).slice(0, 200), userId);
+        // New Illinois raises → founder LEADS, not just bumps on rows already held.
+        // Free (EDGAR) and run without the LLM enrichment pass, so it costs nothing;
+        // the rubric scores what lands (sources/index.js → fitIndex).
+        let leads = null;
+        try {
+          leads = await require('./pipeline/sources').ingest('sec_form_d', { userId, enrich: false, limit: 40 });
+        } catch (e) { leads = { error: e.message }; }
+        console.log(`[Cron] Filings pull complete (user ${userId}):`, result, leads && { persisted: leads.persisted, fetched: leads.fetched });
+        recordJobRun('sec_filings', leads && leads.error ? 'partial' : 'ok',
+          `${JSON.stringify(result).slice(0, 140)} · Form D leads +${(leads && leads.persisted) || 0} of ${(leads && leads.fetched) || 0}${leads && leads.error ? ` (${leads.error.slice(0, 60)})` : ''}`,
+          userId);
       } catch (err) {
         console.error(`[Cron] Filings pull failed (user ${userId}):`, err.message);
+        recordJobRun('sec_filings', 'error', err.message, userId);
       }
       } // end per-user loop
     }, { timezone: 'America/Chicago' });

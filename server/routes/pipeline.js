@@ -459,6 +459,9 @@ router.get('/shortlist', (req, res) => {
       why: v.tierReason,
       priority: v.priority,
       stage: v.stage,
+      il_tie_rank: v.tie,
+      patterns: v.patterns,
+      pattern_labels: require('../lib/founderPatterns').patternLabels(v.patterns),
       is_new: isNew(r.id),
       signals,
       // The honest split, precomputed so the UI cannot accidentally merge them.
@@ -583,7 +586,8 @@ router.get('/inbox', (req, res) => {
            evidence_map, caliber_signals, builder_signals, pedigree_signals, tags,
            github_slope_score,
            fit_meet, fit_tier, fit_reason, fit_priority, fit_stage, fit_stage_late,
-           fit_lifestyle, fit_why, fit_marker_count, fit_scored_at
+           fit_lifestyle, fit_why, fit_marker_count, fit_scored_at,
+           fit_patterns, fit_tie_type, fit_tie_strength
     ${base}${filterSql}
     ORDER BY ${order}
     LIMIT ? OFFSET ?
@@ -594,8 +598,11 @@ router.get('/inbox', (req, res) => {
     try { const v = JSON.parse(r.fit_why || '[]'); if (Array.isArray(v)) why = v; } catch { /* leave empty */ }
     const {
       fit_meet, fit_tier, fit_reason, fit_priority, fit_stage, fit_stage_late,
-      fit_lifestyle, fit_why, fit_marker_count, fit_scored_at, ...rest
+      fit_lifestyle, fit_why, fit_marker_count, fit_scored_at,
+      fit_patterns, fit_tie_type, fit_tie_strength, ...rest
     } = r;
+    let patterns = null;
+    try { patterns = fit_patterns ? JSON.parse(fit_patterns) : null; } catch { /* leave null */ }
     return {
       ...rest,
       // is_new is a FACT about the row against the run boundary, computed in one
@@ -611,6 +618,9 @@ router.get('/inbox', (req, res) => {
         lifestyle: !!fit_lifestyle,
         why,
         markers: new Array(fit_marker_count || 0),
+        // Judgment patterns (recorded, not weighted) and the tie the ranking used.
+        patterns,
+        tie: { type: fit_tie_type || null, strength: fit_tie_strength },
         // Null means the rubric has not run on this row yet — a brand-new arrival
         // between the scout and the next boot. Say so rather than rendering it as
         // "didn't qualify", which is a different and untrue statement.

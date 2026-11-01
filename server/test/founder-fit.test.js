@@ -14,9 +14,21 @@ test('a Series A on the current company fails the stage gate', () => {
   assert.equal(v.meetWorthy, false, 'past-earliest can never be meet-worthy');
 });
 
-test('the Cargado case: a closed seed WITH traction on the current co is too late', () => {
-  const v = ff.evaluate({ raw_data: JSON.stringify({ bio: 'Founder of Cargado. We raised a seed round and now have 40 paying customers.' }) });
-  assert.equal(v.stageTooLate, true, 'seed + traction on the current company is past earliest');
+// 2026-11 sourcing inspection: the target definition is pre-seed, SEED, or stealth,
+// and all 7 Invested rows in the Pipeline base are at Seed. Seed-with-traction is no
+// longer excluded — it is its own stage and ranks below an equal earliest founder.
+test('the Cargado case: a closed seed WITH traction stays eligible but ranks below earliest-stage', () => {
+  const seed = ff.evaluate({ raw_data: JSON.stringify({ bio: 'Founder of Cargado. YC W24. We raised a seed round and now have 40 paying customers.' }) });
+  const early = ff.evaluate({ raw_data: JSON.stringify({ bio: 'Founder of Cargado. YC W24. In stealth, building something new.' }) });
+  assert.equal(seed.stageTooLate, false, 'seed is in the target definition');
+  assert.equal(seed.stage, 'seed');
+  assert.equal(seed.meetWorthy, true);
+  assert.ok(seed.priority < early.priority, 'seed ranks below an otherwise-identical earliest-stage founder');
+});
+
+test('a Series A on the current company is still past the target stage', () => {
+  const v = ff.evaluate({ raw_data: JSON.stringify({ bio: 'Founder of Cargado. We raised our Series A and have 40 paying customers.' }) });
+  assert.equal(v.stageTooLate, true);
 });
 
 test('a PRE-seed raise is exactly what he wants — never disqualified', () => {

@@ -580,6 +580,14 @@ addColumn('sourced_founders', 'fit_scored_at', 'DATETIME');
 // Which rubric produced the stored verdict. A rubric edit must invalidate the cache;
 // without this it never did. See lib/founderFit RUBRIC_VERSION.
 addColumn('sourced_founders', 'fit_rubric_version', 'TEXT');
+// 2026-11 sourcing inspection. The five judgment patterns (lib/founderPatterns) —
+// quote-backed, null when the record is silent, recorded but not weighted — and
+// the Illinois tie the RANKING used (type + strength, lib/ilTie TIE_STRENGTH), so
+// "why is this person above that one" can be answered from the row.
+addColumn('sourced_founders', 'fit_patterns', 'TEXT');          // JSON {persistence:{quote}|null,…}
+addColumn('sourced_founders', 'fit_pattern_count', 'INTEGER');
+addColumn('sourced_founders', 'fit_tie_type', 'TEXT');
+addColumn('sourced_founders', 'fit_tie_strength', 'INTEGER');   // 4 lives here … 0 mention
 // The inbox's exact access path: one user's live queue, best first. Without this the
 // LIMIT would still make SQLite walk every pending row to sort it.
 DEFERRED_INDEXES.push(`CREATE INDEX IF NOT EXISTS idx_sf_inbox

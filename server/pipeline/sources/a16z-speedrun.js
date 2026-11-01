@@ -16,7 +16,17 @@ const https = require('https');
 
 const API = process.env.SPEEDRUN_API || 'https://speedrun-be.a16z.com/api/companies/companies/';
 // Recent cohorts by default (SR006 is newest). Set SPEEDRUN_COHORTS='' to ingest all.
-const COHORTS = (process.env.SPEEDRUN_COHORTS ?? 'SR004,SR005,SR006').split(',').map(s => s.trim()).filter(Boolean);
+// Default: the LATEST three cohorts the API itself reports. This was hard-coded to
+// SR004–006, so every cohort a16z ran after the line was written was silently skipped
+// (2026-11 sourcing inspection). An explicit SPEEDRUN_COHORTS still wins.
+const COHORTS = process.env.SPEEDRUN_COHORTS
+  ? process.env.SPEEDRUN_COHORTS.split(',').map(s => s.trim()).filter(Boolean)
+  : 'auto';
+const AUTO_LATEST = 3;
+function latestCohorts(codes, n = AUTO_LATEST) {
+  const num = (c) => { const m = /(\d+)/.exec(String(c || '')); return m ? parseInt(m[1], 10) : -1; };
+  return [...new Set(codes.filter(Boolean))].sort((a, b) => num(b) - num(a)).slice(0, n);
+}
 
 function httpGetJson(url, headers = {}) {
   return new Promise((resolve) => {
@@ -59,17 +69,20 @@ function normalizeFounder(company, f) {
 // Page through the API, collecting founder records from the requested cohorts.
 async function fetchAll({ deps = {}, cohorts = COHORTS } = {}) {
   const getJson = deps.getJson || httpGetJson;
-  const out = [];
+  const companies = [];
   let url = `${API}?limit=100&offset=0&ordering=name`;
   let guard = 0;
   while (url && guard++ < 25) {
     const { status, data } = await getJson(url);
     if (status !== 200 || !data) break;
-    for (const c of (data.results || [])) {
-      if (cohorts.length && !cohorts.includes(c.cohort)) continue;
-      for (const f of (c.founder_set || [])) { const r = normalizeFounder(c, f); if (r) out.push(r); }
-    }
+    companies.push(...(data.results || []));
     url = data.next || null;
+  }
+  const wanted = cohorts === 'auto' ? latestCohorts(companies.map((c) => c.cohort)) : cohorts;
+  const out = [];
+  for (const c of companies) {
+    if (wanted.length && !wanted.includes(c.cohort)) continue;
+    for (const f of (c.founder_set || [])) { const r = normalizeFounder(c, f); if (r) out.push(r); }
   }
   return out;
 }
@@ -110,4 +123,5 @@ module.exports = {
   // exported for tests
   normalizeFounder,
   fetchAll,
+  latestCohorts,
 };

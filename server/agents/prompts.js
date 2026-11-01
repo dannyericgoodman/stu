@@ -237,8 +237,20 @@ Return JSON (no markdown wrapping):
     "grievance_grandiosity": true/false,
     "flag_evidence": "If either is true, the specific evidence. If both false, empty string."
   },
+  "founder_patterns": {
+    "persistence": "VERBATIM quote showing a failure, firing or collapse they kept building through — or empty string",
+    "lived_problem": "VERBATIM quote showing they personally lived this problem, usually from years inside the industry — or empty string",
+    "self_taught": "VERBATIM quote showing the core skill was learned outside formal schooling — or empty string",
+    "frontline": "VERBATIM quote showing they personally did support, deliveries, installs or customer interviews — or empty string",
+    "trusted_complement": "VERBATIM quote showing a co-founder from a long-trusted circle, or one mentor who opened a decisive door — or empty string"
+  },
   "what_would_change_this": ["2-4 specific, askable questions that would move a null to a score or a 6 to an 8. These become the call agenda — make them worth asking."]
-}`,
+}
+
+FOUNDER PATTERNS — a RECORD, not a score. Fill a field ONLY with words copied exactly from the
+materials, about THIS founder. If the materials are silent, the field is "" — never infer a
+pattern from a plausible story. These do not change any movement score; code verifies every
+quote and discards any that is not verbatim.`,
   user: (context) => `Score this founder against the Founder Rubric. Abstain (null) wherever the materials do not support a judgment — that is the honest answer and it is more useful than a guess.\n\n${context}`,
 };
 

@@ -1159,6 +1159,31 @@ async function runAssessmentAgents(assessmentId, founderId) {
       console.warn('[Assessment] quote verification skipped:', e.message);
     }
 
+    // ── The five judgment patterns (lib/founderPatterns) — recorded, never scored ──
+    // The rubric agent may quote them; code keeps a quote only if it is verbatim in
+    // the context. Where the agent is silent, the deterministic extractor gets one
+    // look at the same context. Silent materials → null fields, never a guess.
+    try {
+      const { extractPatterns, PATTERN_KEYS } = require('../lib/founderPatterns');
+      const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const ctxNorm = norm(cappedContext);
+      const llm = (rubricOut && !rubricOut.error && rubricOut.founder_patterns) || {};
+      const det = extractPatterns(cappedContext);
+      const merged = {};
+      let count = 0;
+      for (const k of PATTERN_KEYS) {
+        const q = typeof llm[k] === 'string' ? llm[k].trim() : (llm[k] && llm[k].quote) || '';
+        if (q && norm(q).length >= 12 && ctxNorm.includes(norm(q))) merged[k] = { quote: q.slice(0, 240), by: 'rubric' };
+        else if (det[k]) merged[k] = { quote: det[k].quote, by: 'extractor' };
+        else merged[k] = null;
+        if (merged[k]) count++;
+      }
+      merged.count = count;
+      if (rubricOut && !rubricOut.error) rubricOut.founder_patterns = merged;
+    } catch (e) {
+      console.warn('[Assessment] founder pattern extraction skipped:', e.message);
+    }
+
     // Save the depth surface. panel_output is the new home for the room; bear/rubric
     // keep their columns (bear feeds the score, rubric IS the score). The three
     // mis-named legacy columns (founder_/market_/economics_agent_output = Team/Product/

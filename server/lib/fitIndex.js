@@ -36,7 +36,7 @@ const RUBRIC_VERSION = ff.RUBRIC_VERSION;
 const SCORING_COLS = `
   id, name, company, company_one_liner, role, source, headline, fit_rubric_version,
   chicago_connection, location_type, previous_company_norm,
-  caliber_signals, builder_signals, pedigree_signals, tags, red_flags,
+  caliber_signals, builder_signals, pedigree_signals, tags, red_flags, evidence_map,
   raw_data, enriched_data, linkedin_data,
   github_slope_score, github_slope_data, github_resolve_reason
 `;
@@ -46,7 +46,8 @@ const WRITE = `
     fit_meet = ?, fit_tier = ?, fit_reason = ?, fit_priority = ?,
     fit_stage = ?, fit_stage_late = ?, fit_lifestyle = ?,
     fit_why = ?, fit_marker_count = ?, fit_scored_at = CURRENT_TIMESTAMP,
-    fit_rubric_version = ?
+    fit_rubric_version = ?,
+    fit_patterns = ?, fit_pattern_count = ?, fit_tie_type = ?, fit_tie_strength = ?
   WHERE id = ?
 `;
 
@@ -66,6 +67,10 @@ function verdictOf(row) {
     // second copy of a receipt that can go stale against the profile it came from.
     why: JSON.stringify(f.why || []),
     markerCount: (f.markers || []).length,
+    patterns: JSON.stringify(f.patterns || {}),
+    patternCount: (f.patterns && f.patterns.count) || 0,
+    tieType: (f.tie && f.tie.type) || null,
+    tieStrength: f.tie && f.tie.strength != null ? f.tie.strength : null,
   };
 }
 
@@ -81,7 +86,7 @@ function rescore({ userId = 1, ids = null } = {}) {
   const tx = db.transaction((batch) => {
     for (const r of batch) {
       const v = verdictOf(r);
-      write.run(v.meet, v.tier, v.reason, v.priority, v.stage, v.stageLate, v.lifestyle, v.why, v.markerCount, RUBRIC_VERSION, r.id);
+      write.run(v.meet, v.tier, v.reason, v.priority, v.stage, v.stageLate, v.lifestyle, v.why, v.markerCount, RUBRIC_VERSION, v.patterns, v.patternCount, v.tieType, v.tieStrength, r.id);
     }
   });
   tx(rows);
@@ -113,7 +118,7 @@ function rescoreStale({ userId = 1, limit = 5000 } = {}) {
   const tx = db.transaction((batch) => {
     for (const r of batch) {
       const v = verdictOf(r);
-      write.run(v.meet, v.tier, v.reason, v.priority, v.stage, v.stageLate, v.lifestyle, v.why, v.markerCount, RUBRIC_VERSION, r.id);
+      write.run(v.meet, v.tier, v.reason, v.priority, v.stage, v.stageLate, v.lifestyle, v.why, v.markerCount, RUBRIC_VERSION, v.patterns, v.patternCount, v.tieType, v.tieStrength, r.id);
     }
   });
   tx(rows);

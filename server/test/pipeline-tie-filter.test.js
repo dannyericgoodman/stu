@@ -44,8 +44,11 @@ test('unclear / missing ties are hidden (none, null, empty, bogus)', () => {
 });
 
 test('VALID_TIE_TYPES is the canonical set and excludes none/empty', () => {
+  // Both vocabularies: the sweep's legacy one and lib/ilTie's (2026-11 inspection —
+  // connector rows typed worked/school/cofounder were invisible to TIE_CLAUSE).
   assert.deepStrictEqual([...VALID_TIE_TYPES].sort(),
-    ['chicago_company', 'current', 'hometown', 'school_alumni', 'working']);
+    ['chicago_company', 'cofounder', 'current', 'hometown', 'school', 'school_alumni', 'worked', 'working']);
+  assert.ok(!VALID_TIE_TYPES.includes('mention'), 'a bare "Illinois" mention is never a verified tie');
   assert.ok(!VALID_TIE_TYPES.includes('none'));
   assert.ok(!VALID_TIE_TYPES.includes(''));
 });

@@ -754,6 +754,11 @@ function Detail({ row, onClose, onTriage }) {
               <>
                 <div className="text-small text-ink">
                   {row.location_type === 'cofounder' ? 'Via a co-founder' : row.location_type}
+                  {row.fit && row.fit.tie && row.fit.tie.strength != null && (
+                    <span className="text-mini text-ink-3">
+                      {' · '}{['mention only', 'via co-founder', 'worked here', 'from here / school here', 'lives here now'][row.fit.tie.strength] || ''}
+                    </span>
+                  )}
                 </div>
                 {/* The evidence IS the tie. 55 of 85 rows once carried a fabricated
                     one, and it survived four months because nobody could read it. */}
@@ -765,6 +770,31 @@ function Detail({ row, onClose, onTriage }) {
               </p>
             )}
           </Section>
+
+          {(() => {
+            // The five judgment patterns (lib/founderPatterns). Recorded, NOT weighted:
+            // each one shown here carries the founder's own words, and a silent
+            // record shows nothing rather than a guess.
+            const p = row.fit && row.fit.patterns;
+            const LABELS = {
+              persistence: 'Kept building through a failure',
+              lived_problem: 'Lived the problem',
+              self_taught: 'Self-taught builder',
+              frontline: 'Does the frontline work',
+              trusted_complement: 'Trusted co-founder / mentor',
+            };
+            const hits = p ? Object.keys(LABELS).filter((k) => p[k] && p[k].quote) : [];
+            if (!hits.length) return null;
+            return (
+              <Section label="Judgment patterns (shown, not scored)">
+                {hits.map((k) => (
+                  <p key={k} className="text-mini text-ink-3 mt-1 leading-relaxed">
+                    <span className="text-ink">{LABELS[k]}</span> — “{p[k].quote}”
+                  </p>
+                ))}
+              </Section>
+            );
+          })()}
 
           {signalOf(row) && (
             <Section label="What their profile says">

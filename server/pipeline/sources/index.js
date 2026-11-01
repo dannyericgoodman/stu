@@ -239,5 +239,6 @@ register(require('./a16z-speedrun')); // directory-based (structured API), like 
 register(require('./il-school-discovery')); // highest-yield IL source: school-anchored search
 register(require('./pre-program-discovery')); // Breakout Radar: elite pedigree, no program tag yet
 for (const c of require('./cohort-rosters').connectors) register(c);
+register(require('./sec-form-d')); // new IL raises → founder leads (free, sworn, ≤15 days after first sale)
 
 module.exports = { register, get, list, ingest, ingestAll, REGISTRY };

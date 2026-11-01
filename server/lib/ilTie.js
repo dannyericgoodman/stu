@@ -261,16 +261,37 @@ function verifyIlTieOn(text, raw, stripped, trapRemoved) {
     ...(stripped.length ? { stripped } : {}),
     ...(trapRemoved ? { trap_removed: trapRemoved } : {}),
   });
+  const yes = (type, place, matched, extra = {}) => ({
+    verified: true, type, place, matched, evidence: evidenceAround(raw, matched),
+    strength: TIE_STRENGTH[type], ...extra,
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // THE HIERARCHY (2026-11 sourcing inspection). Danny's order, strongest first:
+  //
+  //   1. current  — lives in Illinois NOW
+  //   2. school / hometown — FROM Illinois, or went to school here (equal rank)
+  //   3. worked   — held a job in Illinois / at a Chicago-anchored employer
+  //   4. cofounder — borrowed from a co-founder (propagateCofounderTies)
+  //
+  // The checks used to run current > worked > school > hometown, and "current"
+  // fired on ANY "<word>, IL" — including a past job line ("Previously PM at
+  // Motorola, Schaumburg, IL"). So a former employee who now lives in Austin
+  // carried the strongest tie on the board, and "worked" outranked "went to
+  // UIUC". Both are fixed here; `strength` makes the order machine-readable so
+  // the ranking (lib/founderFit) can use it instead of treating every tie alike.
+  // ══════════════════════════════════════════════════════════════════════
 
   // ── (1) CURRENT — lives/based in Illinois ──
-  // Explicit state suffix is the strongest single signal a profile can carry.
-  const stateSuffix = /\b([a-z][a-z .'-]{2,28}?),\s*(il|illinois)\b/i;
-  const ms = text.match(stateSuffix);
-  if (ms) {
-    return {
-      verified: true, type: 'current', place: cityOf(ms[1]),
-      matched: ms[0], evidence: evidenceAround(raw, ms[0]),
-    };
+  // Explicit state suffix is the strongest single signal a profile can carry —
+  // UNLESS the clause it sits in is plainly about the past ("previously … at
+  // Motorola, Schaumburg, IL"). Then it is evidence of a job here, not a home.
+  const stateSuffix = /\b([a-z][a-z .'-]{2,28}?),\s*(il|illinois)\b/gi;
+  let pastSuffix = null;
+  let ms;
+  while ((ms = stateSuffix.exec(text))) {
+    if (PAST_CLAUSE.test(clauseBefore(text, ms.index))) { if (!pastSuffix) pastSuffix = ms; continue; }
+    return yes('current', cityOf(ms[1]), ms[0]);
   }
 
   for (const place of [...IL_PLACES].sort((a, b) => b.length - a.length)) {
@@ -281,20 +302,41 @@ function verifyIlTieOn(text, raw, stripped, trapRemoved) {
       new RegExp(`\\b(based|living|live|located|headquartered|hq)\\s+(in|out of)\\s+(the\\s+)?${esc(place)}\\b`, 'i'),
       new RegExp(`\\bgreater\\s+${esc(place)}\\s+(area|metro)\\b`, 'i'),
       new RegExp(`\\b${esc(place)}\\s+(metropolitan area|metro area|area)\\b`, 'i'),
-      new RegExp(`\\b(moved|relocated|moving)\\s+(to\\s+)?(the\\s+)?${esc(place)}\\b`, 'i'),
+      new RegExp(`\\b(moved|relocated|moving)\\s+(back\\s+)?(to\\s+)?(the\\s+)?${esc(place)}\\b`, 'i'),
     ];
     for (const p of patterns) {
       const m = text.match(p);
-      if (m) {
-        return {
-          verified: true, type: 'current', place: titleCase(place),
-          matched: m[0], evidence: evidenceAround(raw, m[0]),
-        };
-      }
+      if (m) return yes('current', titleCase(place), m[0]);
     }
   }
 
-  // ── (2) WORKED — a job held in Illinois ──
+  // An ambiguous place, but explicitly qualified as Illinois ("Normal, IL").
+  // Same past-clause rule as the state suffix above.
+  const amb = ambiguousPlaceTie(text);
+  if (amb && !PAST_CLAUSE.test(clauseBefore(text, text.indexOf(amb.matched)))) {
+    return yes('current', titleCase(amb.place), amb.matched);
+  }
+
+  // ── (2a) SCHOOL — attended an Illinois school ──
+  // "went to school here in some way" — Danny's words, so a bootcamp, a masters,
+  // or an accelerator at an IL institution all count.
+  for (const school of [...IL_SCHOOLS].sort((a, b) => b.length - a.length)) {
+    const m = text.match(word(school));
+    if (m) return yes('school', titleCase(school), m[0]);
+  }
+
+  // ── (2b) HOMETOWN — from / grew up in Illinois ──
+  for (const place of [...IL_PLACES].sort((a, b) => b.length - a.length)) {
+    const home = new RegExp(
+      `\\b(from|grew up in|born in|raised in|native of|hometown[:\\s]+)\\s*${esc(place)}\\b`,
+      'i'
+    );
+    const native = new RegExp(`\\b${esc(place)}\\s+(native|born|raised)\\b`, 'i');
+    const m = text.match(home) || text.match(native);
+    if (m) return yes('hometown', titleCase(place), m[0]);
+  }
+
+  // ── (3) WORKED — a job held in Illinois ──
   for (const place of [...IL_PLACES].sort((a, b) => b.length - a.length)) {
     // A role and an Illinois place inside one clause. The 40-char window is tight
     // on purpose: "CTO at Foo. Previously advised a Chicago nonprofit" should not
@@ -304,73 +346,28 @@ function verifyIlTieOn(text, raw, stripped, trapRemoved) {
       'i'
     );
     const m = text.match(role);
-    if (m) {
-      return {
-        verified: true, type: 'worked', place: titleCase(place),
-        matched: m[0], evidence: evidenceAround(raw, m[0]),
-      };
-    }
+    if (m) return yes('worked', titleCase(place), m[0]);
   }
 
   for (const co of [...IL_COMPANIES].sort((a, b) => b.length - a.length)) {
     const m = text.match(word(co));
-    if (m) {
-      return {
-        verified: true, type: 'worked', place: titleCase(co),
-        matched: m[0], evidence: evidenceAround(raw, m[0]),
-      };
-    }
+    if (!m) continue;
+    // Employer names that are ALSO ordinary words ("amount", "avant-garde",
+    // "catalytic", "cameo appearance") need an employment cue right in front.
+    // Bare "the amount of …" was establishing a Chicago work tie.
+    if (AMBIGUOUS_IL_COMPANIES.has(co) && !EMPLOYMENT_CUE.test(text.slice(Math.max(0, m.index - 30), m.index))) continue;
+    return yes('worked', titleCase(co), m[0]);
   }
 
-  // ── (3) SCHOOL — attended an Illinois school ──
-  // "went to school here in some way" — Danny's words, so a bootcamp, a masters,
-  // or an accelerator at an IL institution all count.
-  for (const school of [...IL_SCHOOLS].sort((a, b) => b.length - a.length)) {
-    const m = text.match(word(school));
-    if (m) {
-      return {
-        verified: true, type: 'school', place: titleCase(school),
-        matched: m[0], evidence: evidenceAround(raw, m[0]),
-      };
-    }
-  }
-
-  // ── (3b) An ambiguous place, but explicitly qualified as Illinois ──
-  // "Normal, IL" is a tie. "BEING SO NORMAL" is not. Checked after the
-  // unambiguous paths so a real Chicago address always wins the type.
-  const amb = ambiguousPlaceTie(text);
-  if (amb) {
-    return {
-      verified: true, type: 'current', place: titleCase(amb.place),
-      matched: amb.matched, evidence: evidenceAround(raw, amb.matched),
-    };
-  }
-
-  // ── (4) HOMETOWN — from / grew up in Illinois ──
-  for (const place of [...IL_PLACES].sort((a, b) => b.length - a.length)) {
-    const home = new RegExp(
-      `\\b(from|grew up in|born in|raised in|native of|hometown[:\\s]+)\\s*${esc(place)}\\b`,
-      'i'
-    );
-    const native = new RegExp(`\\b${esc(place)}\\s+(native|born|raised)\\b`, 'i');
-    const m = text.match(home) || text.match(native);
-    if (m) {
-      return {
-        verified: true, type: 'hometown', place: titleCase(place),
-        matched: m[0], evidence: evidenceAround(raw, m[0]),
-      };
-    }
-  }
+  if (pastSuffix) return yes('worked', cityOf(pastSuffix[1]), pastSuffix[0]);
 
   // Bare "illinois" anywhere, as a last resort, but ONLY as a state reference and
-  // never off the back of a stripped trap.
+  // never off the back of a stripped trap. This used to be typed `current` —
+  // the STRONGEST tie — for a profile that merely contains the word ("customers
+  // in Illinois"). It is a mention: verified so it can be read, ranked last.
   const bare = text.match(/\billinois\b/i);
   if (bare && !trapRemoved) {
-    return {
-      verified: true, type: 'current', place: 'Illinois',
-      matched: bare[0], evidence: evidenceAround(raw, bare[0]),
-      weak: true, // a mention, not a claim — surface it, don't trust it silently
-    };
+    return yes('mention', 'Illinois', bare[0], { weak: true });
   }
 
   return no(
@@ -380,14 +377,45 @@ function verifyIlTieOn(text, raw, stripped, trapRemoved) {
   );
 }
 
+// The clause in front of a match — back to the last sentence/bullet break. Used
+// to ask "is this ', IL' about a past job?"
+function clauseBefore(text, idx) {
+  const before = String(text).slice(0, Math.max(0, idx));
+  const cut = Math.max(before.lastIndexOf('.'), before.lastIndexOf('•'), before.lastIndexOf('|'),
+    before.lastIndexOf(';'), before.lastIndexOf('\n'));
+  return before.slice(cut + 1).slice(-90);
+}
+const PAST_CLAUSE = /\b(previously|formerly|former|ex-|prior(ly)?|used to|was (a|an|at|the)|worked (at|for)|spent \d+|interned|alumn|graduated|studied|(19|20)\d{2}\s*[-–]\s*(19|20)\d{2})\b/i;
+const EMPLOYMENT_CUE = /\b(at|@|ex-?|former(ly)?|joined|worked (at|for)|engineer|pm|manager|director|lead|analyst)\s*$/i;
+// IL_COMPANIES entries that collide with ordinary English or other entities.
+const AMBIGUOUS_IL_COMPANIES = new Set(['amount', 'avant', 'catalytic', 'sprocket', 'zoro', 'yello', 'aon', 'g2', 'cameo', 'relativity', 'discover financial', 'amount', 'enova', 'citadel']);
+
+// Machine-readable rank of a tie type, strongest first. Covers BOTH vocabularies
+// in the database: this file's (current/school/hometown/worked/cofounder/mention)
+// and the Exa sweep's legacy one (working/school_alumni/chicago_company).
+const TIE_STRENGTH = {
+  current: 4,
+  school: 3, hometown: 3, school_alumni: 3,
+  worked: 2, working: 2, chicago_company: 2,
+  cofounder: 1,
+  mention: 0,
+};
+function tieStrength(type) {
+  const s = TIE_STRENGTH[String(type || '').toLowerCase()];
+  return s == null ? null : s;
+}
+
 // "Based in Chicago, IL" → the regex captures "Based in Chicago", because it
 // matches at the earliest position it can. The place is what's left once the
 // leading preposition is gone; without this the board reads "current: Based IN
 // Chicago", and evidence that looks broken doesn't get trusted.
 function cityOf(captured) {
-  const cleaned = String(captured)
+  // Only the last clause: "Staff engineer. Based in Chicago" → "Based in Chicago"
+  // (the capture class allows '.' for "St. Charles", so it can run across a sentence).
+  const lastClause = String(captured).split(/(?<!\b(?:St|Mt|Ft))\.\s+|[•|;]\s+/).pop();
+  const cleaned = String(lastClause)
     .trim()
-    .replace(/^(?:i'?m\s+)?(?:currently\s+)?(?:based|living|live|located|headquartered|hq|working|from|now)\s+(?:in|out of|at)\s+/i, '')
+    .replace(/^(?:i'?m\s+)?(?:currently\s+)?(?:based|living|lives|live|located|headquartered|hq|working|from|now)\s+(?:in|out of|at)\s+/i, '')
     .replace(/^(?:in|at|from|near|the)\s+/i, '')
     .trim();
   return titleCase(cleaned || captured);
@@ -478,7 +506,7 @@ function propagateCofounderTies(rows, verdictOf) {
 
   // Presence beats pedigree here too: someone who LIVES in Illinois is a better
   // anchor for their company than someone who once went to school here.
-  const strength = { current: 4, worked: 3, hometown: 2, school: 1 };
+  const strength = TIE_STRENGTH;
 
   for (const [, members] of groups) {
     if (members.length < 2) continue;
@@ -521,4 +549,6 @@ module.exports = {
   IL_COMPANIES,
   IL_SCHOOL_TRAPS,
   FALSE_GEO,
+  TIE_STRENGTH,
+  tieStrength,
 };

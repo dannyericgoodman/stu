@@ -78,8 +78,10 @@ const ILLINOIS_LOCATIONS = [
 ];
 
 const ILLINOIS_SCHOOLS = [
+  // NOT bare 'iit' — overwhelmingly the Indian Institutes of Technology (see
+  // lib/ilTie IL_SCHOOL_TRAPS). It was tagging IIT Bombay grads as Illinois alumni.
   'university of illinois', 'uiuc', 'illinois institute of technology',
-  'iit', 'northwestern university', 'northwestern', 'kellogg',
+  'northwestern university', 'northwestern', 'kellogg',
   'university of chicago', 'uchicago', 'chicago booth', 'loyola chicago',
   'depaul university', 'illinois state', 'southern illinois'
 ];
@@ -397,12 +399,18 @@ function verifyTieEvidence(evidenceMap, text) {
 const TOP_PROGRAMS = [
   { re: /\by[- ]?combinator\b|\bycombinator\b|\byc\s?[wsf]\d{2}\b/i, label: 'YC' },
   { re: /a16z\s+speedrun|andreessen\s+speedrun|\bspeedrun\b/i, label: 'a16z Speedrun' },
+];
+// 2026-11 sourcing inspection — PRESTIGE DOWN-WEIGHT. Fellowships (Z Fellows, Thiel,
+// Neo, Emergent Ventures) used to sit in TOP_PROGRAMS, which alone earns caliber A and,
+// with traction, S. The investor's calibration from his pass history is to weight hard
+// technical pedigree and venture-scale ambition over fellowships, scholarships and
+// press. They are now a strong-but-second-tier signal, like Techstars.
+// Strong-but-second-tier programs: caliber signal, but not S-grade on their own.
+const STRONG_PROGRAMS = [
   { re: /\bz[- ]?fellows?\b|\bzfellows\b/i, label: 'ZFellows' },
   { re: /thiel\s+fellow/i, label: 'Thiel Fellow' },
   { re: /\bneo\s+(scholar|fellow|cohort|accelerator)\b/i, label: 'Neo' },
-];
-// Strong-but-second-tier programs: caliber signal, but not S-grade on their own.
-const STRONG_PROGRAMS = [
+  { re: /emergent\s+ventures/i, label: 'Emergent Ventures' },
   { re: /south\s+park\s+commons|\bspc\b/i, label: 'SPC' },
   { re: /techstars/i, label: 'Techstars' },
   { re: /\bon\s+deck\b|\bodf\b/i, label: 'On Deck' },
@@ -646,7 +654,13 @@ function founderGate(text, headline) {
 }
 
 // Tie types that count as a verified Chicago/IL connection.
-const VALID_TIE_TYPES = ['current', 'working', 'school_alumni', 'hometown', 'chicago_company'];
+// Both vocabularies in the table: the sweep's legacy one (working/school_alumni/
+// chicago_company) and lib/ilTie's canonical one (worked/school/cofounder), which the
+// connectors and — since the 2026-11 inspection — the sweep itself write. The queue's
+// TIE_CLAUSE and the MCP tools read this list, so a connector row typed 'worked' or
+// 'school' used to be invisible there. 'mention' (a bare "Illinois") is deliberately
+// absent: it is not a tie anyone should be shown as verified.
+const VALID_TIE_TYPES = ['current', 'working', 'school_alumni', 'hometown', 'chicago_company', 'worked', 'school', 'cofounder'];
 
 // ── Name normalization for dedup ──
 function normName(s) {
@@ -764,6 +778,37 @@ function extractCompanyInfo(text, headline) {
   return null;
 }
 
+// ── Recency tokens, computed — never typed ──
+// The query banks hard-coded "2025", "YC W25 / S25 / W26". By November 2026 that
+// asked Exa for last year's founders and skipped every batch since (YC now runs four:
+// Winter, Spring (X), Summer, Fall). The tokens are derived from the clock instead.
+function recentYcBatches(now = new Date(), n = 6) {
+  // Batch start months: W=Jan, X=Apr, S=Jul, F=Oct. Include the batch in progress.
+  const seasons = [['W', 0], ['X', 3], ['S', 6], ['F', 9]];
+  const out = [];
+  let y = now.getUTCFullYear();
+  let i = seasons.length - 1;
+  while (i >= 0 && seasons[i][1] > now.getUTCMonth()) i--;
+  while (out.length < n) {
+    if (i < 0) { i = seasons.length - 1; y--; }
+    out.push(`${seasons[i][0]}${String(y).slice(2)}`);
+    i--;
+  }
+  return out;
+}
+function recentYears(now = new Date()) {
+  const y = now.getUTCFullYear();
+  return `${y - 1} ${y}`;
+}
+function freshenQuery(q, now = new Date()) {
+  const y = now.getUTCFullYear();
+  const batches = recentYcBatches(now, 4).map((b) => `"YC ${b}"`).join(' OR ');
+  return String(q)
+    .replace(/"YC W25" OR "YC S25" OR "YC W26"(?: OR "Y Combinator 2025" OR "Y Combinator 2026")?/g, `${batches} OR "Y Combinator ${y}"`)
+    .replace(/\b2025 2026\b/g, recentYears(now))
+    .replace(/\b(2024 )?2025\b/g, String(y));
+}
+
 // ── Search Queries (ported from Claude Funnel v3, organized by daily theme) ──
 
 // R9: Tighter queries using site: operators, exact-phrase quotes, and negative filters.
@@ -871,7 +916,7 @@ function buildEliteCohortQueries(locations) {
     : '("Chicago" OR "Illinois" OR "Evanston")';
   return ELITE_COHORT_QUERY_TEMPLATES.map(q => ({
     name: q.name,
-    query: q.query.replace('{LOC}', locClause),
+    query: freshenQuery(q.query.replace('{LOC}', locClause)),
     cohort: true,
   }));
 }
@@ -949,7 +994,10 @@ async function searchGitHub(criteria, githubToken) {
     return allUsers.map(u => ({
       name: u.login,
       headline: `GitHub: ${u.login}${u.bio ? ' — ' + u.bio : ''}`,
-      text: `GitHub user ${u.login}. ${u.bio || ''} Location: ${u.location || 'Unknown'}. Repos: ${u.public_repos || 0}. Followers: ${u.followers || 0}.`,
+      // "Based in <location>." — a GitHub location field IS a statement of where the
+      // person is. Written as "Location: Chicago" it matched none of the tie
+      // patterns, so the GitHub arm of the sweep admitted almost nobody.
+      text: `GitHub user ${u.login}. ${u.bio || ''} ${u.location ? `Based in ${u.location}.` : ''} Repos: ${u.public_repos || 0}. Followers: ${u.followers || 0}.`,
       url: u.html_url,
       linkedin_url: null,
       github_url: u.html_url,
@@ -1028,7 +1076,7 @@ Location rules — CRITICAL:
 Recency rules — CRITICAL:
 - "Just left" / "recently departed" is only a 9-10 stage signal if the departure was WITHIN 6 MONTHS. Estimate months-since-departure from the text.
 - If the profile says "just left" but with no date, and no other freshness signals, assume 6+ months and score stage 5-6, not 9-10.
-- Explicitly named recent dates (2025, 2026) count as fresh if within the last 6 months.
+- Explicitly named dates in the current or previous calendar year count as fresh only if within the last 6 months of today's date.
 
 Stage & timing rubric (25% weight):
 - 9-10: Stealth, departed top company <=3 months ago, no funding
@@ -1038,7 +1086,8 @@ Stage & timing rubric (25% weight):
 - 1-2: Series A+ or established
 
 Founder caliber (35% weight):
-- 9-10: Previously exited. Serial founder. Staff+/VP/Director at target companies (Google/Meta/Stripe/OpenAI/Anthropic/Ramp/Anduril/Scale/Databricks). YC/TechStars/SPC alum. PhD from elite school commercializing.
+- 9-10: Previously exited. Serial founder. Staff+/VP/Director or research/engineering roles at frontier AI labs and hyperscalers (OpenAI/Anthropic/DeepMind/Google/Meta/Stripe/Ramp/Anduril/Scale/Databricks). YC/a16z Speedrun alum. PhD from elite school commercializing.
+- Fellowships, scholarships, "30 under 30" lists and press do NOT raise caliber above 6 on their own.
 - 7-8: Staff+ at notable co. Elite institution grad. Exceptional domain depth.
 - 5-6: Solid pro background. Good institution.
 - 3-4: Junior or unclear.
@@ -1068,8 +1117,9 @@ investor committed (pre-seed/seed/Series, "backed by", named funds/accelerators)
 S-TIER MUST MEAN IT. Reserve S for the rare, bona-fide unicorn-trajectory founder. Be stingy —
 when unsure between S and A, choose A. S requires HARD, VERBATIM-QUOTED evidence of ONE of these:
   • A meaningful prior EXIT — their company was acquired or IPO'd (not a tiny acqui-hire).
-  • A top-accelerator admit with their current OR a prior company — Y Combinator, a16z Speedrun,
-    ZFellows, Neo, Thiel Fellowship (the marquee programs only).
+  • A top-accelerator admit with their current OR a prior company — Y Combinator or a16z Speedrun
+    (programs that come with a venture check). Fellowships (Z Fellows, Thiel, Neo, Emergent
+    Ventures), scholarships and press are PRESTIGE, not caliber: at most a B-level signal.
   • A repeat / experienced founder whose PRIOR startup was notable or venture-backed, now building again.
   • A category-defining-company senior leader (founding/Staff+/VP at Google/Meta/Stripe/OpenAI/
     Anthropic/Ramp/Anduril/Scale/Databricks) now building, WITH real traction or top-fund backing.
@@ -1127,8 +1177,18 @@ Return ONLY valid JSON in this exact shape:
   "chicago_connection": "<one sentence; if no tie, write 'No verified tie'>",
   "pedigree_signals": ["<'Ex-Google Staff Eng', 'Northwestern Kellogg MBA', etc.>"],
   "builder_signals": ["<'Previous exit (acquired by X)', 'YC W24', etc.>"],
-  "company_one_liner": "<what they're building, or 'Stealth' or 'Exploring' if unclear>"
-}`;
+  "company_one_liner": "<what they're building, or 'Stealth' or 'Exploring' if unclear>",
+  "founder_patterns": {
+    "persistence": "<VERBATIM quote: a failure, firing or collapse they kept building through — or empty string>",
+    "lived_problem": "<VERBATIM quote: a problem they personally lived, usually from years inside the industry — or empty string>",
+    "self_taught": "<VERBATIM quote: core skill learned outside formal schooling — or empty string>",
+    "frontline": "<VERBATIM quote: support, deliveries, installs, customer interviews done personally — or empty string>",
+    "trusted_complement": "<VERBATIM quote: co-founder from a long-trusted circle, or a mentor who opened a decisive door — or empty string>"
+  }
+}
+
+founder_patterns is a RECORD, not part of any score. Fill a field only with words copied exactly
+from the profile about THIS person; if the profile is silent, use "". Never infer one.`;
 
 function emptyScore(rationale) {
   return {
@@ -1217,7 +1277,17 @@ async function scoreFounder(client, founder, scoringPrompt) {
       pedigree_signals: parsed.pedigree_signals || [],
       builder_signals: parsed.builder_signals || [],
       company_one_liner: parsed.company_one_liner || '',
-      evidence_map: parsed.evidence_map || {},
+      evidence_map: (() => {
+        const em = { ...(parsed.evidence_map || {}) };
+        const fp = parsed.founder_patterns || {};
+        const kept = {};
+        for (const k of ['persistence', 'lived_problem', 'self_taught', 'frontline', 'trusted_complement']) {
+          const q = typeof fp[k] === 'string' ? fp[k].trim() : '';
+          if (q && verbatimIn(q, (founder.headline || '') + ' ' + (founder.text || ''))) kept[k] = q.slice(0, 240);
+        }
+        if (Object.keys(kept).length) em.founder_patterns = kept;
+        return em;
+      })(),
       departure_recency_months: recency,
       anchor_schools_il: parsed.anchor_schools_il || [],
       elite_schools_national: eliteNational,
@@ -1228,7 +1298,15 @@ async function scoreFounder(client, founder, scoringPrompt) {
       caliber_rationale: caliberRationale,
     };
   } catch (err) {
-    return emptyScore('Scoring failed: ' + err.message);
+    const e = emptyScore('Scoring failed: ' + err.message);
+    // Distinguish "the scorer is down" (spend cap, credit exhausted, auth, model
+    // rejected) from "this one profile was weird". The run loop aborts on the first
+    // kind instead of silently counting every remaining candidate as "filtered".
+    e.outage = !!(err && (err.code === 'spend_cap_exceeded' || err.name === 'SpendCapError'
+      || [401, 402, 403, 404, 429, 529].includes(err.status)
+      || /credit balance|spend cap|rate.?limit|overloaded|invalid x-api-key|model/i.test(String(err.message || ''))));
+    e.error_message = String(err && err.message || err).slice(0, 200);
+    return e;
   }
 }
 
@@ -1290,6 +1368,27 @@ async function notifySlack(message) {
   } catch (err) {
     console.error('[Sourcing][Slack] Failed:', err.message);
   }
+}
+
+// One tie check for the sweep. Illinois users go through lib/geoFilter →
+// lib/ilTie (canonical, non-configurable); anyone else keeps verifyLocation.
+function checkTie(text, headline, criteria) {
+  const { checkLocation } = require('../lib/geoFilter');
+  const t = checkLocation({ headline, bio: text }, criteria);
+  // A bare "Illinois" mention is not a tie the sweep should admit on its own.
+  if (t.verified && t.type === 'mention') return { verified: false, type: null, location: null };
+  return t;
+}
+
+// Claude scoring is the sweep's real cost (Exa is ~$0.005/query). With the curated
+// banks back in daily mode, recall goes up; this cap keeps the twice-weekly scout
+// inside the monthly API budget by scoring the strongest pre-signals first.
+const MAX_SCORED_PER_RUN = parseInt(process.env.SOURCING_MAX_SCORED_PER_RUN || '80', 10);
+function preScore(c) {
+  const il = require('../lib/ilTie');
+  const cal = computeCaliber(c.text, c.headline, c.elite_schools_national || []);
+  const rank = { S: 4, A: 3, B: 2, C: 1 }[cal.tier] || 1;
+  return rank * 10 + (il.tieStrength(c.location_type) || 0);
 }
 
 // ── Main Engine ──
@@ -1367,25 +1466,27 @@ function buildUserSearchQueries(criteria, fullSweep) {
   const stageStr = stage === 'Any' ? '' : stage;
 
   const queries = [];
+  const YRS = recentYears();
+  const YR = String(new Date().getUTCFullYear());
 
   if (hasLocs) {
     // Location-specific stealth founder queries
     for (const loc of locs.slice(0, 3)) {
-      queries.push({ name: `Stealth founder ${loc}`, query: `stealth mode founder ${loc} building something new just left 2025 2026` });
+      queries.push({ name: `Stealth founder ${loc}`, query: `stealth mode founder ${loc} building something new just left ${YRS}` });
       queries.push({ name: `LinkedIn stealth ${loc}`, query: `site:linkedin.com/in "stealth" "${loc}" founder building` });
       queries.push({ name: `Building new ${loc}`, query: `site:linkedin.com/in "building something new" ${loc} founder engineer` });
     }
   } else {
     // Broad stealth founder queries (no location filter)
-    queries.push({ name: 'Stealth founder broad', query: `stealth mode founder building something new just left 2025 2026 startup` });
-    queries.push({ name: 'LinkedIn stealth broad', query: `site:linkedin.com/in "stealth" founder building startup 2025` });
+    queries.push({ name: 'Stealth founder broad', query: `stealth mode founder building something new just left ${YRS} startup` });
+    queries.push({ name: 'LinkedIn stealth broad', query: `site:linkedin.com/in "stealth" founder building startup ${YR}` });
     queries.push({ name: 'Building new broad', query: `site:linkedin.com/in "building something new" founder engineer startup` });
   }
 
   // Ex-company queries
   const locSuffix = hasLocs ? ` ${locs[0]}` : '';
   for (const co of companies.slice(0, 5)) {
-    queries.push({ name: `Ex-${co} stealth`, query: `left ${co} stealth new startup${locSuffix} founder ${stageStr} 2025`.trim() });
+    queries.push({ name: `Ex-${co} stealth`, query: `left ${co} stealth new startup${locSuffix} founder ${stageStr} ${YR}`.trim() });
   }
 
   // School alumni queries
@@ -1395,28 +1496,50 @@ function buildUserSearchQueries(criteria, fullSweep) {
 
   // Domain queries
   for (const domain of domains.slice(0, 4)) {
-    queries.push({ name: `${domain} stealth`, query: `${domain} stealth founder${locSuffix} new startup ${stageStr} 2025`.trim() });
+    queries.push({ name: `${domain} stealth`, query: `${domain} stealth founder${locSuffix} new startup ${stageStr} ${YR}`.trim() });
   }
 
   // Generic high-signal queries
-  queries.push({ name: 'Serial founder stealth', query: `serial founder exited previous company building new startup${locSuffix} stealth ${stageStr} 2025`.trim() });
+  queries.push({ name: 'Serial founder stealth', query: `serial founder exited previous company building new startup${locSuffix} stealth ${stageStr} ${YR}`.trim() });
   if (stageStr) {
     queries.push({ name: `${stageStr} founders`, query: `site:linkedin.com/in "${stageStr}" founder building startup${locSuffix}`.trim() });
   }
   queries.push({ name: 'YC alum new', query: `Y Combinator YC alumni starting new company${locSuffix} stealth exploring`.trim() });
-  queries.push({ name: 'Just quit to build', query: `just quit left job to start build company${locSuffix} founder stealth 2025 2026`.trim() });
+  queries.push({ name: 'Just quit to build', query: `just quit left job to start build company${locSuffix} founder stealth ${YRS}`.trim() });
 
   // Custom queries from user
   for (const cq of (criteria.customQueries || [])) {
-    if (cq.query) queries.push({ name: cq.name || 'Custom query', query: cq.query });
+    if (cq.query) queries.push({ name: cq.name || 'Custom query', query: cq.query, custom: true });
   }
 
   // ELITE COHORT — always run these high-precision authoritative-list queries,
   // even in daily mode. They are the highest-yield-per-call source of S/A caliber.
   const cohortQueries = buildEliteCohortQueries(criteria.locations);
 
-  if (!fullSweep) return [...cohortQueries, ...queries.slice(0, 20)];
-  return [...cohortQueries, ...queries];
+  // ══════════════════════════════════════════════════════════════════════
+  // THE CURATED BANKS WERE DEAD CODE (2026-11 sourcing inspection).
+  //
+  // SEARCH_GROUPS (40 day-themed vectors: ex-OpenAI/Anthropic/Stripe Chicago,
+  // Argonne/Fermilab spinouts, "just left Google", Citadel/DRW/Jump alumni…) and
+  // DAILY_STEALTH_QUERIES (16 evergreen stealth/departure vectors) were only ever
+  // referenced by getAllSearchQueries(), which nothing calls. The scheduled scout
+  // runs daily mode, which was 7 cohort queries + the first 20 generic ones — and
+  // the slice(0, 20) also cut the user's own custom queries, which sit last.
+  //
+  // Now: custom queries first (the investor asked for them), then cohort, then
+  // today's themed group + the evergreen stealth bank, then the generic rest.
+  // Exa calls are ~$0.005; the cost that matters is Claude scoring, which is now
+  // capped per run (MAX_SCORED_PER_RUN) with the strongest pre-signals first.
+  // ══════════════════════════════════════════════════════════════════════
+  const custom = queries.filter((q) => q.custom);
+  const generic = queries.filter((q) => !q.custom);
+  const curated = [...(getTodaySearchGroup() || []), ...DAILY_STEALTH_QUERIES]
+    .map((q) => ({ ...q, query: freshenQuery(q.query) }));
+  const seenQ = new Set();
+  const uniq = (arr) => arr.filter((q) => { const k = q.query; if (seenQ.has(k)) return false; seenQ.add(k); return true; });
+
+  if (!fullSweep) return uniq([...custom, ...cohortQueries, ...curated, ...generic.slice(0, 12)]);
+  return uniq([...custom, ...cohortQueries, ...getAllSearchQueries().map((q) => ({ ...q, query: freshenQuery(q.query) })), ...generic]);
 }
 
 // R4: User-customized prompt reuses the base SCORING_PROMPT's extract-then-score
@@ -1462,6 +1585,16 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
     criteria.schools = ILLINOIS_SCHOOLS.slice();
   }
   const apiKeys = loadUserApiKeys(userId);
+
+  // Preflight the spend cap. Without this the sweep spent its Exa budget, then every
+  // Claude call threw SpendCapError inside scoreFounder and the run reported +0, ok.
+  try { require('../lib/providerKeys').assertWithinBudget(userId); }
+  catch (e) {
+    if (e && e.code === 'spend_cap_exceeded') {
+      return { totalFound: 0, totalAdded: 0, totalDeduped: 0, totalFiltered: 0, errors: [{ source: 'budget', error: e.message }] };
+    }
+    throw e;
+  }
 
   // Require at minimum an Exa key to run sourcing
   if (!apiKeys.exa) {
@@ -1525,8 +1658,12 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
         continue;
       }
 
-      // Verify location connection using user's target locations (on cleaned text)
-      const il = verifyLocation(text, headline, criteria);
+      // Verify the location connection. For an Illinois user this is lib/ilTie — the
+      // SAME gate every connector uses (via lib/geoFilter). The sweep used to call
+      // verifyLocation() against the user's `sourcing_schools` setting, the exact
+      // config-driven path that once made Stanford a Chicago tie, and it typed ties
+      // in a different vocabulary than the rest of the table.
+      const il = checkTie(text, headline, criteria);
       if (!il.verified) {
         totalFiltered++;
         continue;
@@ -1569,7 +1706,7 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
 
   // Process GitHub results through IL verification
   for (const gh of githubResults) {
-    const il = verifyLocation(gh.text, gh.headline, criteria);
+    const il = checkTie(gh.text, gh.headline, criteria);
     if (il.verified) {
       exaCandidates.push({
         ...gh,
@@ -1636,7 +1773,14 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
+  // Strongest pre-signals first, so the scoring cap spends on the likeliest wins.
+  uniqueCandidates.sort((a, b) => preScore(b) - preScore(a));
+  let scoredThisRun = 0;
+  let scorerDown = null;
+  let deferred = 0;
+
   for (const candidate of uniqueCandidates) {
+    if (scorerDown) { deferred++; continue; }
     // TIE GATE: a verified Chicago/IL tie is mandatory. Intake verification sets a
     // tie type (current/working/school_alumni/hometown/chicago_company); anything
     // else (e.g. 'broad') means no real local tie — drop it.
@@ -1672,7 +1816,19 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
       totalFiltered++;
       continue;
     }
+    if (scoredThisRun >= MAX_SCORED_PER_RUN) { deferred++; continue; }
+    scoredThisRun++;
     const score = await scoreFounder(anthropic, candidate, userScoringPrompt);
+    if (!score.scored && score.outage) {
+      // FAIL LOUDLY. A spend cap or an exhausted credit balance used to turn every
+      // remaining candidate into "filtered" and the run into a clean-looking +0 —
+      // the queue sat unchanged with an 'ok' ledger row.
+      scorerDown = score.error_message || 'scorer unavailable';
+      errors.push({ source: 'anthropic', error: `scoring stopped: ${scorerDown}` });
+      console.error(`[Sourcing] ✋ scoring stopped — ${scorerDown}. Remaining candidates left for the next run.`);
+      deferred++;
+      continue;
+    }
     if (!score.scored) {
       console.log(`[Sourcing] ⏭️ ${candidate.name} — skipped: not verified (${score.confidence_rationale})`);
       totalFiltered++;
@@ -1692,6 +1848,7 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
     // ANTI-HALLUCINATION TIE GATE: if this founder's only tie is being an IL-school alum but
     // that school didn't survive verification (not actually in the profile), the tie is fake —
     // drop it so they're filtered out. Prevents "from MIT & IIT" inventing a Chicago tie.
+    // (lib/ilTie's 'school' type is a deterministic verbatim match, not an LLM claim.)
     if (candidate.location_type === 'school_alumni' && allAnchorIl.length === 0) {
       console.log(`[Sourcing] 🚫 ${candidate.name} — school-based tie unverified (claimed school not in profile)`);
       totalFiltered++;
@@ -1752,6 +1909,10 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
       console.error(`[Sourcing] Insert error for ${candidate.name}: ${err.message}`);
       errors.push({ source: candidate.source, name: candidate.name, error: err.message });
     }
+  }
+
+  if (deferred) {
+    console.log(`[Sourcing] ${deferred} candidate(s) not scored this run (${scorerDown ? 'scorer down' : `cap ${MAX_SCORED_PER_RUN}`}) — they are not marked seen and will be re-found.`);
   }
 
   // ── Phase 5: EnrichLayer for top scorers ──
@@ -1826,7 +1987,7 @@ async function runSourcingEngine({ fullSweep = false, userId = 1 } = {}) {
   await notifySlack(slackMsg);
 
   console.log(`[Sourcing] ✅ Complete: ${totalFound} found → ${totalAdded} added, ${totalDeduped} deduped, ${totalFiltered} filtered, ${errors.length} errors`);
-  return { totalFound, totalAdded, totalDeduped, totalFiltered, errors };
+  return { totalFound, totalAdded, totalDeduped, totalFiltered, deferred, scorerDown, errors };
 }
 
 module.exports = {
@@ -1852,4 +2013,9 @@ module.exports = {
   verbatimIn,
   verifyTieEvidence,
   loadUserCriteria,
+  buildUserSearchQueries,
+  recentYcBatches,
+  freshenQuery,
+  checkTie,
+  MAX_SCORED_PER_RUN,
 };

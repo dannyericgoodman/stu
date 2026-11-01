@@ -198,13 +198,22 @@ function classifyStage(text) {
   }
 
   // Seed-with-traction on the current company (and not merely pre-seed).
+  //
+  // 2026-11 sourcing inspection: this used to set tooLate — a hard exclusion —
+  // on the Cargado case. The target definition is "pre-seed, seed, or stealth",
+  // and the ledger agrees: all 7 Invested rows in the Pipeline base are at Seed.
+  // Excluding seed-with-traction was cutting exactly the stage the fund writes
+  // checks into. It is now its own stage, `seed`, which stays meet-worthy but
+  // ranks below an otherwise-identical earliest-stage founder (see evaluate()),
+  // so Danny's "see them before they're underway" preference still orders the list.
+  let seedStage = false;
   if (!tooLate) {
     const seed = t.match(CURRENT_SEED);
     if (seed && !PRESEED.test(t) && TRACTION.test(t)) {
       const idx = seed.index || 0;
       const before = t.slice(Math.max(0, idx - 60), idx);
       if (!PRIOR_CUES.test(before)) {
-        tooLate = true;
+        seedStage = true;
         evidence.push(`seed + traction on current co: "${seed[0].trim()}"`);
       }
     }
@@ -212,9 +221,10 @@ function classifyStage(text) {
 
   let stage;
   if (tooLate) stage = 'past-earliest';
+  else if (seedStage) stage = 'seed';
   else if (earliest > 0) stage = 'earliest';
   else stage = 'unknown';
-  return { stage, tooLate, earliestMarkers: earliest, evidence };
+  return { stage, tooLate, seedStage, earliestMarkers: earliest, evidence };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -231,6 +241,19 @@ const HYPERSCALERS = [
   'palantir', 'tesla', 'spacex', 'uber', 'airbnb', 'coinbase', 'ramp', 'figma',
   'deepmind', 'salesforce', 'linkedin', 'doordash', 'instacart', 'robinhood',
 ];
+// Frontier AI labs — the hard technical pedigree the investor's pass history says
+// to weight ABOVE general prestige. Checked before HYPERSCALERS so an OpenAI
+// alum reads as a lab alum, not a generic big-tech one.
+const FRONTIER_LABS = [
+  'openai', 'anthropic', 'deepmind', 'google deepmind', 'google brain', 'xai',
+  'mistral', 'cohere', 'scale ai', 'perplexity', 'character ai', 'inflection ai',
+  'adept', 'hugging face', 'meta ai', 'fair', 'nvidia research', 'thinking machines',
+  'safe superintelligence', 'midjourney', 'runway', 'stability ai',
+];
+// A technical role at a hyperscaler is worth more than a sales or ops one at the
+// same company — the "hard technical pedigree" half of the calibration note.
+const TECH_TITLE = /\b(engineer|engineering|swe|sde|developer|scientist|research(er)?|architect|ml|machine learning|infrastructure|staff|principal|cto|tech lead|technical)\b/i;
+
 // National elite schools. Kept SEPARATE from the IL list and scored lower, because
 // they do a different job: an IL school is both a graduation signal and a live
 // network for Danny, a national one is only the former.
@@ -545,19 +568,35 @@ const MARKERS = [
     detect(t) { return firstMatch(t, /\by[- ]?combinator\b|\bycombinator\b|\byc\s?[wsf]?\d{2}\b|\(yc[ .)]|\byc\s+(alum|backed|founder|company|s\d|w\d)|\bbacked by yc\b/i); },
   },
   {
-    key: 'speedrun_zfellows',
-    label: 'a16z Speedrun / Z Fellows',
-    // 6, not 8. These are real filters run by serious people, but neither has
-    // published graduation or outcome data. Weighting an unmeasured program equal to
-    // YC asserts a lift nobody has demonstrated. Strong signal, honest weight.
+    key: 'speedrun_zfellows', // key kept for stored-verdict compatibility; now Speedrun only
+    label: 'a16z Speedrun',
+    // 6, not 8. A real filter that comes WITH a venture check, but no published
+    // graduation or outcome data. Weighting an unmeasured program equal to YC
+    // asserts a lift nobody has demonstrated. Strong signal, honest weight.
     weight: 6,
-    detect(t) { return firstMatch(t, /a16z\s+speedrun|andreessen\s+speedrun|\bspeedrun\b|\bz[- ]?fellows?\b|\bzfellows\b/i); },
+    detect(t) { return firstMatch(t, /a16z\s+speedrun|andreessen\s+speedrun|\bspeedrun\b/i); },
+  },
+  {
+    key: 'fellowship',
+    label: 'Fellowship (Z Fellows / Thiel / Neo / Emergent)',
+    // ── PRESTIGE DOWN-WEIGHT (2026-11 sourcing inspection) ──
+    // Z Fellows used to share Speedrun's core weight of 6. The investor's own
+    // calibration from his pass history: weight hard technical pedigree and
+    // venture-scale ambition OVER general prestige signals such as fellowships,
+    // scholarships and press. The ledger has no counter-evidence (11 Speedrun/Z
+    // rows in the Feb-2026 lists, 0 engaged). A fellowship is now a MODIFIER: it can
+    // lift a founder who already qualifies, never qualify one on its own.
+    weight: 3,
+    modifier: true,
+    graduation: true,
+    detect(t) { return firstMatch(t, /\bz[- ]?fellows?\b|\bzfellows\b|thiel\s+fellow(ship)?|\bneo\s+(scholar|fellow)s?\b|emergent\s+ventures\s+(grant(ee)?|fellow)/i); },
   },
   {
     key: 'spc',
     label: 'South Park Commons',
-    weight: 6, // same reasoning as Speedrun/Z — no published outcome data.
-
+    // 6 → 4. SPC is a community/fellowship before it is a check; same calibration
+    // note as above. Still core (a real, selective builder community), lower weight.
+    weight: 4,
     detect(t) { return firstMatch(t, /south\s+park\s+commons|\bspc\b/i); },
   },
   {
@@ -586,6 +625,22 @@ const MARKERS = [
     // then free text, and only with an employment cue beside the company name.
     structured: true,
     detect(t, ctx = {}) {
+      // 0) Frontier AI lab — weight 8 (investor calibration: hard technical
+      //    pedigree over general prestige). Structured history first, then prose.
+      for (const emp of ctx.employers || []) {
+        const lc = normText(emp.company);
+        for (const lab of FRONTIER_LABS) {
+          if (reWord(lab).test(lc) && !INTERN_TITLE.test(emp.title || '')) {
+            const title = emp.title ? `${emp.title} at ${emp.company}` : emp.company;
+            return { quote: title, label: `Frontier AI lab: ${cap(lab)}`, structured: true, weight: 8 };
+          }
+        }
+      }
+      for (const lab of FRONTIER_LABS) {
+        if (lab === 'fair' || lab === 'runway' || lab === 'adept') continue; // ordinary words in prose
+        const phrase = employedAtInText(lab, t);
+        if (phrase && !INTERN_TITLE.test(phrase)) return { quote: phrase, label: `Frontier AI lab: ${cap(lab)}`, weight: 8 };
+      }
       // 1) Real employment history. A hyperscaler in experiences[].company is a fact.
       for (const emp of ctx.employers || []) {
         const lc = normText(emp.company);
@@ -594,14 +649,18 @@ const MARKERS = [
           // "Amazon Web Services Partner Co" — reWord on the normalized company name.
           if (reWord(co).test(lc)) {
             const title = emp.title ? `${emp.title} at ${emp.company}` : emp.company;
-            return { quote: title, label: `Hyperscaler: ${cap(co)}`, structured: true };
+            const technical = TECH_TITLE.test(emp.title || '') && !INTERN_TITLE.test(emp.title || '');
+            return { quote: title, label: `Hyperscaler: ${cap(co)}${technical ? ' (technical)' : ''}`, structured: true, weight: technical ? 7 : 6 };
           }
         }
       }
       // 2) No structured history — demand an employment cue in the prose.
       for (const co of HYPERSCALERS) {
         const phrase = employedAtInText(co, t);
-        if (phrase) return { quote: phrase, label: `Hyperscaler: ${cap(co)}` };
+        if (phrase) {
+          const technical = TECH_TITLE.test(phrase) && !INTERN_TITLE.test(phrase);
+          return { quote: phrase, label: `Hyperscaler: ${cap(co)}${technical ? ' (technical)' : ''}`, weight: technical ? 7 : 6 };
+        }
       }
       return null;
     },
@@ -642,7 +701,7 @@ const MARKERS = [
   {
     key: 'nat_elite_school',
     label: 'Elite school',
-    weight: 3,
+    weight: 2, // 3 → 2: general prestige, per the investor's calibration note.
     modifier: true,
     graduation: true,
     structured: true,
@@ -735,7 +794,7 @@ function markersFor(row) {
     const isStructured = typeof hit === 'object' && hit.structured;
     if (!isStructured && !verbatimIn(quote, text)) continue; // the receipt has to be real
     out.push({
-      key: m.key, label, weight: m.weight, evidence: quote,
+      key: m.key, label, weight: (typeof hit === 'object' && hit.weight) || m.weight, evidence: quote,
       modifier: !!m.modifier, structured: !!isStructured,
       // Kind is carried so the UI can say WHY a marker counts. A graduation signal
       // ("the Series A market likes this") and a quality signal ("this person has
@@ -812,6 +871,47 @@ function markersFor(row) {
 // so YC-alone or Speedrun-alone is a Strong signal, not a Must-meet one. A repeat
 // founder who ALSO did time at a hyperscaler is the profile that earns the top tier.
 const PEDIGREE_KEYS = new Set(['hyperscale', 'yc', 'speedrun_zfellows', 'spc', 'prior_raise']);
+const PROGRAM_KEYS = new Set(['yc', 'speedrun_zfellows', 'spc']);
+
+// ══════════════════════════════════════════════════════════════════════════
+// ILLINOIS TIE STRENGTH IN THE RANKING (2026-11 sourcing inspection).
+//
+// The tie used to be a pure gate: once a row was on the IL board, "lives in
+// Chicago" and "borrowed from a co-founder" or "the word Illinois appears" ranked
+// identically. Danny's hierarchy is lives here now > from here / school here >
+// worked here > via co-founder, and the Pipeline base backs it: Illinois-HQ rows
+// are 6 of 7 investments and advance 57% vs 36% for non-IL. So the tie now adds a
+// small, ordered bonus — enough to order otherwise-equal founders, never enough to
+// outrank a stronger founder (a single YC marker is 8).
+// ══════════════════════════════════════════════════════════════════════════
+const TIE_BONUS = { 4: 4, 3: 2, 2: 1, 1: 0, 0: 0 };
+function structuredLocation(row = {}) {
+  const parts = [];
+  if (row.location_state && row.location_city) parts.push(`Based in ${row.location_city}, ${row.location_state}.`);
+  for (const blob of [row.linkedin_data, row.enriched_data]) {
+    if (typeof blob !== 'string' || !blob) continue;
+    try {
+      const o = JSON.parse(blob);
+      const city = o.city || (o.location && o.location.city) || null;
+      const state = o.state || (o.location && o.location.state) || null;
+      if (city && state) parts.push(`Based in ${city}, ${state}.`);
+    } catch { /* not JSON */ }
+  }
+  return parts.join(' ');
+}
+function tieOf(row = {}, text = '') {
+  const il = require('./ilTie');
+  // Re-derive from the profile itself (ilTie never reads chicago_connection), so a
+  // tie written by an older, looser gate cannot keep its old rank. Fall back to the
+  // stored type when the text is silent (e.g. a tie from structured LinkedIn location).
+  const fresh = il.verifyIlTie(String(text || '').replace(/\s•\s/g, '. '));
+  const storedType = row.location_type || null;
+  if (fresh.verified && !fresh.weak) return { type: fresh.type, strength: fresh.strength, evidence: fresh.evidence };
+  const storedStrength = il.tieStrength(storedType);
+  if (storedStrength != null) return { type: storedType, strength: storedStrength, evidence: null };
+  if (fresh.verified) return { type: fresh.type, strength: fresh.strength, evidence: fresh.evidence };
+  return { type: null, strength: null, evidence: null };
+}
 
 function tierOf(coreMarkers) {
   const keys = new Set(coreMarkers.map((m) => m.key));
@@ -831,8 +931,11 @@ function tierOf(coreMarkers) {
     const p = coreMarkers.find((m) => PEDIGREE_KEYS.has(m.key));
     return { tier: 'must-meet', reason: `Repeat founder + ${p.label.replace(/^Hyperscaler: /, '')}` };
   }
-  // Corroboration: two independent signals. Slope + anything counts strongly here.
-  if (coreMarkers.length >= 2) return { tier: 'must-meet', reason: `${coreMarkers.length} independent signals` };
+  // Corroboration: two INDEPENDENT signals. Two program badges (YC + SPC) are one
+  // kind of evidence — a selection committee said yes — so they count once. Before
+  // this, YC + SPC alone was "2 independent signals" and must-meet.
+  const classes = new Set(coreMarkers.map((m) => (PROGRAM_KEYS.has(m.key) ? 'program' : m.key)));
+  if (classes.size >= 2) return { tier: 'must-meet', reason: `${classes.size} independent signals` };
   return { tier: 'strong', reason: coreMarkers[0] ? coreMarkers[0].label : 'One signal' };
 }
 
@@ -869,10 +972,45 @@ function evaluate(row) {
   // still show them, sorted below), but they can never sit among the earliest-stage
   // names Danny is hunting for. Multiply, don't zero, so ranking within the excluded
   // set is stable.
-  const priority = (stage.tooLate || disq.disqualified) ? Math.round(markerScore * 0.1) : markerScore;
+  // Tie text: the profile WITHOUT chicago_connection (the field the tie gate writes).
+  // Plus STRUCTURED location only: a row's own location_state (founders/seed rows),
+  // or the city/state fields of the LinkedIn enrichment blob. sourced_founders.
+  // location_city alone is NOT used — the sweep writes it FROM the tie ("Ex-Grubhub",
+  // a school name), so reading it back would let a tie vouch for itself.
+  const tie = tieOf(row, [structuredLocation(row), profileText({ ...row, chicago_connection: null })].filter(Boolean).join(' • '));
+  const tieBonus = tie.strength != null ? (TIE_BONUS[tie.strength] || 0) : 0;
+  // Seed-with-traction ranks below earliest-stage, but stays on the list.
+  const stageFactor = stage.seedStage ? 0.75 : 1;
+  const priority = (stage.tooLate || disq.disqualified)
+    ? Math.round(markerScore * 0.1)
+    : Math.round((markerScore + tieBonus) * stageFactor);
 
   // Tier only applies to meet-worthy founders — the gates come first.
-  const { tier, reason } = meetWorthy ? tierOf(coreMarkers) : { tier: null, reason: null };
+  let { tier, reason } = meetWorthy ? tierOf(coreMarkers) : { tier: null, reason: null };
+  // A weak tie (a co-founder's, or a bare "Illinois" mention) cannot carry a founder
+  // to the top tier on its own — the board's top row must be someone who is
+  // actually ours to be first to.
+  if (tier === 'must-meet' && tie.strength != null && tie.strength <= 1) {
+    tier = 'strong';
+    reason = `${reason} (weak Illinois tie: ${tie.type})`;
+  }
+
+  // The five judgment patterns — recorded and shown, NOT weighted (see
+  // lib/founderPatterns for why). Extracted from the founder's own prose only.
+  const patterns = require('./founderPatterns').extractPatterns(text);
+  // The sweep's scoring LLM may have quoted a pattern the regexes missed. It counts
+  // only if the quote is verbatim in this row's own profile text — same receipt rule
+  // as every marker.
+  try {
+    const em = typeof row.evidence_map === 'string' ? JSON.parse(row.evidence_map || '{}') : (row.evidence_map || {});
+    const fp = (em && em.founder_patterns) || {};
+    for (const k of Object.keys(fp)) {
+      if (patterns[k] === null && typeof fp[k] === 'string' && verbatimIn(fp[k], text)) {
+        patterns[k] = { quote: fp[k].slice(0, 200), by: 'sweep' };
+        patterns.count++;
+      }
+    }
+  } catch { /* malformed evidence_map — regex patterns stand alone */ }
 
   return {
     meetWorthy,
@@ -889,6 +1027,9 @@ function evaluate(row) {
     disqualified: disq.disqualified,
     disqualifiedEvidence: disq.evidence || null,
     markers,
+    tie,
+    tieBonus,
+    patterns,
     coreMarkerCount: coreMarkers.length,
     why: markers.map((m) => m.label),
     markerScore,
@@ -906,11 +1047,11 @@ function evaluate(row) {
 // re-scores anything carried at an older version, so a rubric edit self-heals on the
 // next nightly scout instead of needing someone to remember.
 // ══════════════════════════════════════════════════════════════════════════
-const RUBRIC_VERSION = '2026-08-31.red-flag-gate.1';
+const RUBRIC_VERSION = '2026-11-01.parity-plus.1';
 
 module.exports = {
   RUBRIC_VERSION,
   evaluate, markersFor, classifyStage, tierOf, profileText, verbatimIn, assessMarketFit,
   assessAcademic, assessVentureScale, assessDisqualifyingFlags,
-  MARKERS, HYPERSCALERS, IL_ELITE_SCHOOLS, PEDIGREE_KEYS, DOMAINS,
+  MARKERS, HYPERSCALERS, FRONTIER_LABS, IL_ELITE_SCHOOLS, PEDIGREE_KEYS, PROGRAM_KEYS, DOMAINS, tieOf,
 };
