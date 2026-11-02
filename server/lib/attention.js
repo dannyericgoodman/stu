@@ -576,9 +576,15 @@ function checks(uid = 1) {
   // would be worse than counting eight. So a generic name falls back to the
   // founder id, which is the only identity those rows actually have.
   // ══════════════════════════════════════════════════════════════════════
+  // The read backlog (considering_never_assessed) is a FACT, not a task — reading all
+  // of it is one Opus run per deal, which is why Home splits it into the footer
+  // ("N live deals with no read") and keeps it OUT of the Needs You panel. The header
+  // count has to agree with that: it counts actionable gaps, not the backlog, or it
+  // reads "94 companies need you" while the panel it sits above says "all clean".
+  const BACKLOG_KEYS = new Set(['considering_never_assessed']);
   const distinct = new Set();
   for (const c of all) {
-    if (c.blocked) continue;
+    if (c.blocked || BACKLOG_KEYS.has(c.key)) continue;
     for (const r of c.rows) {
       const key = companyKey({ company: r.company });
       distinct.add(key ? `c:${key}` : r.founder_id ? `f${r.founder_id}` : `${c.key}:${r.id}`);
