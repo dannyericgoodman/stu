@@ -28,7 +28,11 @@ const CHECK_SCENARIOS = [150_000, 250_000, 400_000]; // the three checks the mem
 
 // Coerce a loosely-typed money field (number, "$5M", "5m", "$20,000,000", "5000000")
 // into a number of dollars. Returns null when there's nothing usable — never a guess.
-function toUsd(v) {
+// `promoteSmall` turns a bare small number into millions — right for a VALUATION field (a
+// cap is written "20" meaning $20M) but WRONG for a check (a "$400K" check typed as "400"
+// must not become $400M, a 1000x error through the whole table). Callers pass false for the
+// check/investment field.
+function toUsd(v, { promoteSmall = true } = {}) {
   if (v == null) return null;
   if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;
   const s = String(v).trim().toLowerCase().replace(/[$,\s]/g, '');
@@ -41,9 +45,9 @@ function toUsd(v) {
   let n = parseFloat(m[1]);
   if (m[2] === 'k') n *= 1_000;
   else if (m[2] === 'm') n *= 1_000_000;
-  // A bare "20" in a valuation field means $20M, not $20 — the memos write caps in
-  // millions. Only promote when there was no magnitude suffix and the number is small.
-  else if (n > 0 && n < 1000) n *= 1_000_000;
+  // A bare "20" in a VALUATION field means $20M (the memos write caps in millions). Only
+  // promote when there's no magnitude suffix, the number is small, and the caller allows it.
+  else if (promoteSmall && n > 0 && n < 1000) n *= 1_000_000;
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
@@ -112,7 +116,7 @@ function computeReturns({
 
   // The scenario table: our actual check (if we've set one) always appears, plus the
   // three standard checks for comparison — deduped so our check isn't listed twice.
-  const ourCheck = toUsd(investmentAmount);
+  const ourCheck = toUsd(investmentAmount, { promoteSmall: false });
   const checks = [...new Set([...(ourCheck ? [ourCheck] : []), ...checkScenarios])].sort((a, b) => a - b);
   const scenarios = checks.map(row);
 

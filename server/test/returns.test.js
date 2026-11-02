@@ -59,6 +59,17 @@ test('the scenario table always includes our check plus the three standard check
   assert.deepEqual(r2.scenarios.map((s) => s.check), [150_000, 250_000, 300_000, 400_000]);
 });
 
+test('a bare check is NOT promoted to millions — "$400K" typed as 400 stays $400K-scale, not $400M', () => {
+  // The valuation field promotes a bare "20" to $20M (memo convention); the check field must
+  // not, or a 400 (meaning $400K) becomes $400M — a 1000x blow-up through the whole table.
+  assert.equal(toUsd('400', { promoteSmall: false }), 400);
+  assert.equal(toUsd('400'), 400_000_000); // valuation default still promotes
+  // End to end: a check entered as a plain number doesn't explode ownership.
+  const r = computeReturns({ valuation: '$5M', investmentAmount: 250000 });
+  assert.equal(r.our_check, 250_000);
+  assert.ok(Math.abs(r.entry.entry_ownership - 250_000 / 5_000_000) < 1e-9); // 5%, not 5000%
+});
+
 test('a smaller post-money means more ownership and a smaller exit to return the fund', () => {
   const low = computeReturns({ valuation: '$12M', investmentAmount: '$400K' }).entry;
   const high = computeReturns({ valuation: '$30M', investmentAmount: '$400K' }).entry;

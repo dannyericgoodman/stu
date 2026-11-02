@@ -217,7 +217,7 @@ router.get('/agents', (req, res) => {
       {
         kind: 'read',
         label: 'Evaluate a Founder',
-        detail: 'Put one company through the nine-lens panel',
+        detail: 'Run a full investment read on one company',
         needs_target: true,
         running: runningReads.map((r) => ({
           id: r.id, target_id: r.founder_id, label: r.company || r.founder_name || `#${r.founder_id}`,

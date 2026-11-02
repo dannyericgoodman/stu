@@ -153,6 +153,11 @@ function unsupportedNumbers(text, index) {
     if (mantissaSet.has(mantissa(n))) return false;
     // Small integers are usually counts of things said in prose, not claims.
     if (/^\d$/.test(bare)) return false;
+    // A bare 4-digit year ("2026", "by 2027") is house/world knowledge an analyst
+    // reasonably writes, not a fabricated figure from the materials. Flagging it made the
+    // trust badge cry wolf on almost every read. (A year attached to a unit — "$2026k" —
+    // is not exempted; only a standalone year.)
+    if (/^(19|20)\d{2}$/.test(bare)) return false;
     return true;
   });
 }

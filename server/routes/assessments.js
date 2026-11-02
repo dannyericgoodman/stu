@@ -1175,7 +1175,10 @@ async function runAssessmentAgents(assessmentId, founderId) {
         research = { status: gathered?.status || 'not_run', findings: { comps: [], market_size: [], why_now: [], valuation_benchmarks: [] }, sources: [], queries: gathered?.queries || [] };
       }
     } catch (e) {
-      console.warn(`[Assessment ${assessmentId}] market research skipped: ${e.message}`);
+      // The gather may have succeeded and only the extraction threw — don't leave research
+      // reading 'not_run' (which tells the reader we never looked) when we did.
+      console.warn(`[Assessment ${assessmentId}] market research extraction failed: ${e.message}`);
+      research = { ...research, status: 'error' };
     }
 
     // The Bear is the ninth voice in the room AND the risk pass that feeds the score.
@@ -1307,14 +1310,17 @@ async function runAssessmentAgents(assessmentId, founderId) {
       // Conditions section and the UI's "start here" both read agenda.top_priorities and
       // silently get nothing.
       const rawAgenda = synthesis.agenda && typeof synthesis.agenda === 'object' ? synthesis.agenda : null;
+      const siblingPriorities = Array.isArray(synthesis.top_priorities) ? synthesis.top_priorities : [];
       const agenda = rawAgenda
         ? {
             ...rawAgenda,
             top_priorities: (Array.isArray(rawAgenda.top_priorities) && rawAgenda.top_priorities.length)
               ? rawAgenda.top_priorities
-              : (Array.isArray(synthesis.top_priorities) ? synthesis.top_priorities : []),
+              : siblingPriorities,
           }
-        : null;
+        // The model sometimes emits top_priorities as a sibling and omits the agenda object
+        // entirely — keep the priorities rather than dropping "start here" on the floor.
+        : (siblingPriorities.length ? { top_priorities: siblingPriorities } : null);
 
       // A synthesis that couldn't be parsed (returns {error} without throwing) has no
       // summary and no agenda — it must not read as a clean 'complete'. Treat it like a
@@ -1690,40 +1696,44 @@ const SYNTHESIS_MAX_TOKENS = 16000;
 
 // Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
 // lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
-async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns, retries = 1) {
-  // The chair is the single heaviest call in the run — the full context plus the nine
-  // lens cards plus research/claims/returns, generating a 16K-token report. On a rich
-  // deal (three transcripts, a technical review) a one-off garbled or dropped response
-  // used to fail the whole synthesis and leave the POV sections blank. The per-agent
-  // calls already retry once; the chair did not. It does now — on a thrown error AND on
-  // an unparseable response — which is exactly the content-rich deal that matters most.
+async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns, retries = 1, maxTokens = SYNTHESIS_MAX_TOKENS) {
+  // The chair is the single heaviest call in the run — the full context + the lens cards +
+  // research/claims/returns, generating the longest JSON in the pipeline. On a content-rich
+  // deal (three transcripts, a technical review) the real failure was TRUNCATION: the output
+  // hit max_tokens, the JSON got cut mid-object, and the POV came back blank (status partial).
+  //
+  // So the retry here is truncation-AWARE, not a blind re-run: a plain retry at temperature 0
+  // regenerates the identical cutoff and fails the same way (the lesson the Bear already
+  // learned at 4096 tokens). Instead, on a clean max_tokens stop we retry with MORE room; on a
+  // garbled-but-complete response we retry once as-is. Thrown errors are NOT re-entered here —
+  // anthropicCreateWithRetry already made 3 attempts, so a throw is genuinely persistent and
+  // stacking another 3×2 full generations would just burn minutes and the owner's key.
   const args = [client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns];
-  let text;
-  try {
-    const response = await anthropicCreateWithRetry(client, {
-      model: ASSESSMENT_MODEL,
-      max_tokens: SYNTHESIS_MAX_TOKENS,
-      temperature: SCORING_TEMPERATURE,
-      system: prompt.system,
-      messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric, research, claims, returns) }],
-    });
-    text = response.content[0].text.trim();
-  } catch (e) {
-    if (retries > 0) {
-      console.warn(`[Assessment] panel synthesis call failed (${e.message}) — retrying once`);
-      return runPanelSynthesis(...args, retries - 1);
-    }
-    throw e;
-  }
+  const response = await anthropicCreateWithRetry(client, {
+    model: ASSESSMENT_MODEL,
+    max_tokens: maxTokens,
+    temperature: SCORING_TEMPERATURE,
+    system: prompt.system,
+    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric, research, claims, returns) }],
+  });
+  const text = (response.content?.[0]?.text ?? '').trim();
+  const truncated = response.stop_reason === 'max_tokens';
 
   const parsed = robustJsonParse(text);
-  if (parsed && !parsed.error) return parsed;
+  if (parsed && !parsed.error && !truncated) return parsed;
+
   if (retries > 0) {
-    console.warn('[Assessment] panel synthesis JSON parse failed — retrying once');
-    return runPanelSynthesis(...args, retries - 1);
+    // A truncation needs a bigger budget to not cut off at the same place; a parse failure on a
+    // complete response just needs one more sample. Cap the budget so a runaway can't blow the
+    // response timeout entirely.
+    const nextMax = truncated ? Math.min(maxTokens + 8000, 32000) : maxTokens;
+    console.warn(`[Assessment] panel synthesis ${truncated ? `truncated at ${maxTokens} tokens` : 'JSON parse failed'} — retrying (max_tokens ${nextMax})`);
+    return runPanelSynthesis(...args, retries - 1, nextMax);
   }
+
+  if (parsed && !parsed.error) return parsed; // a truncated-but-parseable blob beats nothing
   if (parsed) return parsed;
-  return { raw: text, error: 'Could not parse panel synthesis' };
+  return { raw: text, error: truncated ? 'Panel synthesis truncated at max_tokens' : 'Could not parse panel synthesis' };
 }
 
 // ── POST /api/assessments/:id/push-to-notion — push assessment to Strider Notion ──
