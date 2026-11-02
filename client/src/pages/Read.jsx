@@ -489,14 +489,30 @@ function Returns({ returns: r }) {
 }
 
 // $ formatting that tolerates both raw dollars (15000000) and shorthand millions (15).
+// Coerce the loose shapes a valuation/round field actually holds — a number, or free
+// text like "5M", "$5M", "250k", "$20,000,000", "5" — into dollars. Mirrors the server's
+// returns.toUsd so the header can't show "null" for a value the returns math reads fine.
+function coerceMoney(n) {
+  if (n == null) return null;
+  if (typeof n === 'number') return Number.isFinite(n) && n > 0 ? n : null;
+  const s = String(n).trim().toLowerCase().replace(/[$,\s]/g, '');
+  if (!s) return null;
+  const m = s.match(/^(-?\d*\.?\d+)([kmb]?)$/);
+  if (!m) { const x = Number(s.replace(/[^\d.]/g, '')); return Number.isFinite(x) && x > 0 ? x : null; }
+  let x = parseFloat(m[1]);
+  if (m[2] === 'k') x *= 1e3;
+  else if (m[2] === 'm') x *= 1e6;
+  else if (m[2] === 'b') x *= 1e9;
+  else if (x > 0 && x < 1000) x *= 1e6; // a bare small figure is entered in millions
+  return Number.isFinite(x) && x > 0 ? x : null;
+}
 function fmtMoney(n) {
-  if (n == null || isNaN(Number(n))) return null;
-  const v = Number(n);
+  const v = coerceMoney(n);
+  if (v == null) return null;
   if (v >= 1e9) return `$${(v / 1e9).toFixed(v % 1e9 ? 1 : 0)}B`;
   if (v >= 1e6) return `$${(v / 1e6).toFixed(v % 1e6 ? 1 : 0)}M`;
   if (v >= 1e3) return `$${Math.round(v / 1e3)}K`;
-  if (v > 0) return `$${v}M`; // a small figure is almost always entered in millions
-  return null;
+  return `$${v}`;
 }
 const extUrl = (u) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
 const cleanUrl = (u) => String(u).replace(/^https?:\/\//i, '').replace(/\/$/, '');
