@@ -1632,6 +1632,15 @@ addColumn('opportunity_assessments', 'assessment_type', "TEXT DEFAULT 'assessmen
 addColumn('opportunity_assessments', 'panel_output', 'TEXT');   // JSON array of nine named-lens cards
 addColumn('opportunity_assessments', 'agenda_output', 'TEXT');  // JSON: diligence agenda bucketed by owner
 
+// The memo-parity layer (Nov 2026): the cited web-research findings, the claims-vs-
+// documents reconciliation, and the deterministic returns math (ownership + exit-to-
+// return-fund). These turn the materials-only read into the grounded memo the fund
+// actually carries into IC. research is honesty-gated on real retrieved URLs; returns
+// is computed in code (lib/returns.js), never by a model.
+addColumn('opportunity_assessments', 'research_output', 'TEXT'); // JSON: gated market-research findings + sources
+addColumn('opportunity_assessments', 'claims_output', 'TEXT');   // JSON: claims-vs-documents reconciliation
+addColumn('opportunity_assessments', 'returns_output', 'TEXT');  // JSON from lib/returns.computeReturns
+
 // Thesis Update (Ask Stu, ?topic=thesis): a place to save a thesis reflection/conclusion
 // worked through in chat. Saved IN STU today, not vault-synced — that's a deliberately
 // separate, not-yet-built path (see vault-sync's assessment_type filter + its comment on

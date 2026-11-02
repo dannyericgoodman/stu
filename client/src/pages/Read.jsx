@@ -187,18 +187,22 @@ function ReadBody({ a, conv }) {
         </div>
       )}
       <Section title="Key takeaways" body={syn.key_takeaways} lead />
+      <FounderQuestions agenda={a.agenda} />
+      <ClaimsTable claims={a.claims} />
       <Section title="The founders" body={syn.founders} lenses="Founder Edge · Hard Problems · Long Game" />
       <Section title="The product" body={syn.product} lenses="Monopoly · Deep-Tech · Networks" />
       <MarketSection market={syn.market} />
+      <Research research={a.research} />
       <Section title="Right to win" body={syn.right_to_win} lenses="Founder Edge · Monopoly · Hard Problems" />
       <Section title="Moat & defensibility" body={syn.moat} lenses="Monopoly · Deep-Tech · Networks" />
       <Defensibility parts={a.defensibility} />
       <BearSection bear={a.bear} />
+      <Returns returns={a.returns} />
       <Section title="Where this goes" body={syn.where_this_goes} />
       <Disagreements items={syn.room_disagreements} />
       {conv?.determinate && <Movements conv={conv} />}
       {conv?.determinate && <Docks conv={conv} />}
-      <Agenda agenda={a.agenda} />
+      <Agenda agenda={a.agenda} skip={['founder']} />
       <RoomAppendix panel={a.panel} bear={a.bear} />
       <Memo a={a} />
       {conv?.calibration && (
@@ -313,6 +317,173 @@ function Disagreements({ items }) {
       <div className="space-y-1">
         {items.map((d, i) => <p key={i} className="text-small text-ink-2 leading-relaxed">{typeof d === 'string' ? d : d?.point || ''}</p>)}
       </div>
+    </div>
+  );
+}
+
+// What to ask them, surfaced up top — the founder bucket of the agenda, prominent so it's
+// the thing you carry into the meeting. The full bucketed agenda still renders lower.
+function FounderQuestions({ agenda }) {
+  const items = agenda && Array.isArray(agenda.founder) ? agenda.founder : [];
+  if (!items.length) return null;
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-small font-semibold uppercase text-ink mb-1.5">Questions to ask the founder</div>
+      <div className="space-y-1.5">
+        {items.map((it, i) => (
+          <div key={i}>
+            <p className="text-regular text-ink leading-relaxed">{typeof it === 'string' ? it : it?.q}</p>
+            {it?.why && <p className="text-mini text-ink-4 leading-relaxed">{it.why}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Claims vs. documents — the house memo's reconciliation. What the founder says against
+// what the SAME materials substantiate, with the gap named. Honest when there's no data
+// room: it says the claims are unverified.
+function ClaimsTable({ claims }) {
+  const items = claims && Array.isArray(claims.claims) ? claims.claims : [];
+  if (!items.length && !claims?.headline) return null;
+  const sev = (s) => {
+    const t = String(s || '').toLowerCase();
+    if (t === 'high') return 'text-danger bg-danger/5';
+    return 'text-ink-3 bg-ground-3';
+  };
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-1.5">Claims vs. documents</div>
+      {claims.headline && <p className="text-small text-ink-2 leading-relaxed mb-2">{claims.headline}</p>}
+      <div className="space-y-2.5">
+        {items.map((c, i) => (
+          <div key={i} className="grid gap-x-3 gap-y-1 sm:grid-cols-2 border-t border-line pt-2 first:border-0 first:pt-0">
+            <div>
+              <div className="text-micro text-ink-4 uppercase">They say</div>
+              <p className="text-small text-ink leading-relaxed">{c.claim}</p>
+            </div>
+            <div>
+              <div className="text-micro text-ink-4 uppercase">Documents show</div>
+              <p className="text-small text-ink-2 leading-relaxed">{c.what_docs_show}</p>
+              {c.gap && (
+                <p className="text-mini text-ink-3 leading-relaxed mt-0.5">
+                  Gap: {c.gap}
+                  {c.severity && <span className={`ml-1 rounded px-1 ${sev(c.severity)}`}>{c.severity}</span>}
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Market research — the cited web layer. Every finding links the page it came from; the
+// server already dropped any finding whose source wasn't a page it actually retrieved.
+function Research({ research: r }) {
+  if (!r || r.status !== 'ok') return null;
+  const f = r.findings || {};
+  const any = (f.comps?.length || 0) + (f.market_size?.length || 0) + (f.why_now?.length || 0) + (f.valuation_benchmarks?.length || 0);
+  if (!any) return null;
+  const Src = ({ url }) => url ? (
+    <a href={extUrl(url)} target="_blank" rel="noreferrer" className="text-micro text-ink-4 hover:text-ink underline">{cleanUrl(url).split('/')[0]}</a>
+  ) : null;
+  return (
+    <div className="border-t border-line pt-3 space-y-3">
+      <div className="text-micro font-semibold uppercase text-ink-4">Market research <span className="normal-case font-normal">· retrieved + cited</span></div>
+      {f.why_now?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Why now</div>
+          <div className="space-y-1.5">
+            {f.why_now.map((x, i) => (
+              <p key={i} className="text-small text-ink-2 leading-relaxed"><span className="text-ink font-medium">{x.event}{x.date ? ` (${x.date})` : ''}</span> — {x.point} <Src url={x.source_url} /></p>
+            ))}
+          </div>
+        </div>
+      )}
+      {f.comps?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Comps &amp; funding</div>
+          <div className="space-y-1.5">
+            {f.comps.map((x, i) => (
+              <div key={i} className="flex gap-2">
+                <span className="text-small font-medium text-ink w-40 flex-shrink-0">{x.name}{x.funding ? <span className="block text-micro text-ink-4">{x.funding}</span> : null}</span>
+                <span className="text-small text-ink-2 leading-relaxed flex-1">{x.point} <Src url={x.source_url} /></span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {f.market_size?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Market size</div>
+          <div className="space-y-1.5">
+            {f.market_size.map((x, i) => (
+              <p key={i} className="text-small text-ink-2 leading-relaxed"><span className="text-ink font-medium">{x.figure}</span> — {x.point} <Src url={x.source_url} /></p>
+            ))}
+          </div>
+        </div>
+      )}
+      {f.valuation_benchmarks?.length > 0 && (
+        <div>
+          <div className="text-mini text-ink-3 mb-1">Valuation benchmark</div>
+          <div className="space-y-1.5">
+            {f.valuation_benchmarks.map((x, i) => (
+              <p key={i} className="text-small text-ink-2 leading-relaxed"><span className="text-ink font-medium">{x.figure}</span> — {x.point} <Src url={x.source_url} /></p>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Returns — ownership and the exit that returns the fund, computed in code. A one-line
+// prompt when the round isn't priced yet rather than a fabricated table.
+function Returns({ returns: r }) {
+  if (!r) return null;
+  if (r.status !== 'ok') {
+    if (r.status === 'need_inputs') {
+      return (
+        <div className="border-t border-line pt-3">
+          <div className="text-micro font-semibold uppercase text-ink-4 mb-1">Returns</div>
+          <p className="text-small text-ink-3 leading-relaxed">{r.note || 'Add the round terms (valuation / SAFE cap) to size ownership and the exit that returns the fund.'}</p>
+        </div>
+      );
+    }
+    return null;
+  }
+  const rows = Array.isArray(r.scenarios) ? r.scenarios : [];
+  return (
+    <div className="border-t border-line pt-3">
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-1.5">
+        Returns <span className="normal-case font-normal">· {r.inputs?.post_money_label} post · {r.inputs?.fund_size_label} fund</span>
+      </div>
+      <table className="w-full text-small">
+        <thead>
+          <tr className="text-micro text-ink-4 text-left">
+            <th className="font-normal pb-1">Check</th>
+            <th className="font-normal pb-1">Own · entry</th>
+            <th className="font-normal pb-1">Own · exit</th>
+            <th className="font-normal pb-1">Exit to return fund</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s, i) => (
+            <tr key={i} className={`border-t border-line ${r.our_check === s.check ? 'text-ink font-medium' : 'text-ink-2'}`}>
+              <td className="py-1">{s.check_label}{r.our_check === s.check ? <span className="text-micro text-ink-4"> · ours</span> : ''}</td>
+              <td className="py-1">{s.entry_ownership_label}</td>
+              <td className="py-1">{s.exit_ownership_label}</td>
+              <td className="py-1">{s.exit_to_return_fund_label}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {Array.isArray(r.assumptions) && r.assumptions.length > 0 && (
+        <p className="text-micro text-ink-4 leading-relaxed mt-1.5">{r.assumptions.join(' ')}</p>
+      )}
     </div>
   );
 }
@@ -703,6 +874,20 @@ function memoMarkdown(a) {
     }
   }
 
+  // ── Claims vs. documents ──
+  if (a.claims && (Array.isArray(a.claims.claims) ? a.claims.claims.length : a.claims.headline)) {
+    L.push('## Claims vs. documents', '');
+    if (a.claims.headline) L.push(a.claims.headline, '');
+    if (Array.isArray(a.claims.claims) && a.claims.claims.length) {
+      L.push('| What they say | What the documents show | Gap |', '|---|---|---|');
+      a.claims.claims.forEach((cl) => {
+        const g = [(cl.gap || '').replace(/\|/g, '\\|'), cl.severity ? `(${cl.severity})` : ''].filter(Boolean).join(' ');
+        L.push(`| ${(cl.claim || '').replace(/\|/g, '\\|')} | ${(cl.what_docs_show || '').replace(/\|/g, '\\|')} | ${g} |`);
+      });
+      L.push('');
+    }
+  }
+
   // ── The POV report (new-format assessments) ──
   if (syn.key_takeaways) {
     const sec = (h, body) => { if (body && String(body).trim()) L.push(`## ${h}`, '', body, ''); };
@@ -739,6 +924,29 @@ function memoMarkdown(a) {
     // ── Legacy fallback: pre-report assessments (the old 7-M) ──
     if (a.defensibility?.length) { L.push('## Defensibility', ''); for (const p of a.defensibility) L.push(`**${p.label}.** ${p.body}`, ''); }
     for (const s of (a.memo_7m || [])) { L.push(`## ${s.title}`, ''); if (s.note) L.push(`*${s.note}*`, ''); L.push(s.body, ''); }
+  }
+
+  // ── Market research (cited) ──
+  const rf = a.research && a.research.status === 'ok' ? a.research.findings : null;
+  if (rf && ((rf.comps?.length || 0) + (rf.market_size?.length || 0) + (rf.why_now?.length || 0) + (rf.valuation_benchmarks?.length || 0)) > 0) {
+    const tag = (u) => (u ? ` ([${cleanUrl(u).split('/')[0]}](${extUrl(u)}))` : '');
+    L.push('## Market research', '', '*Retrieved from the web and cited.*', '');
+    if (rf.why_now?.length) { L.push('**Why now:**'); rf.why_now.forEach((x) => L.push(`- ${[x.event, x.date].filter(Boolean).join(', ')} — ${x.point}${tag(x.source_url)}`)); L.push(''); }
+    if (rf.comps?.length) { L.push('**Comps & funding:**'); rf.comps.forEach((x) => L.push(`- ${x.name}${x.funding ? ` (${x.funding})` : ''} — ${x.point}${tag(x.source_url)}`)); L.push(''); }
+    if (rf.market_size?.length) { L.push('**Market size:**'); rf.market_size.forEach((x) => L.push(`- ${x.figure} — ${x.point}${tag(x.source_url)}`)); L.push(''); }
+    if (rf.valuation_benchmarks?.length) { L.push('**Valuation benchmark:**'); rf.valuation_benchmarks.forEach((x) => L.push(`- ${x.figure} — ${x.point}${tag(x.source_url)}`)); L.push(''); }
+  }
+
+  // ── Returns ──
+  const R = a.returns;
+  if (R && R.status === 'ok' && Array.isArray(R.scenarios) && R.scenarios.length) {
+    L.push('## Returns', '', `*${R.inputs?.post_money_label} post · ${R.inputs?.fund_size_label} fund.*`, '');
+    L.push('| Check | Ownership (entry) | Ownership (exit) | Exit to return fund |', '|---|---|---|---|');
+    R.scenarios.forEach((s) => L.push(`| ${s.check_label}${R.our_check === s.check ? ' (ours)' : ''} | ${s.entry_ownership_label} | ${s.exit_ownership_label} | ${s.exit_to_return_fund_label} |`));
+    L.push('');
+    if (Array.isArray(R.assumptions) && R.assumptions.length) L.push(`_${R.assumptions.join(' ')}_`, '');
+  } else if (R && R.status === 'need_inputs') {
+    L.push('## Returns', '', `*${R.note || 'Add the round terms to size ownership and the exit that returns the fund.'}*`, '');
   }
 
   if (a.agenda) {
@@ -1020,10 +1228,11 @@ const AGENDA_BUCKETS = [
   ['desktop', 'Desktop research'],
 ];
 
-function Agenda({ agenda }) {
+function Agenda({ agenda, skip = [] }) {
   if (!agenda || typeof agenda !== 'object') return null;
   const priorities = Array.isArray(agenda.top_priorities) ? agenda.top_priorities : [];
-  const hasBuckets = AGENDA_BUCKETS.some(([k]) => Array.isArray(agenda[k]) && agenda[k].length);
+  const buckets = AGENDA_BUCKETS.filter(([k]) => !skip.includes(k));
+  const hasBuckets = buckets.some(([k]) => Array.isArray(agenda[k]) && agenda[k].length);
   if (!priorities.length && !hasBuckets) return null;
 
   return (
@@ -1042,7 +1251,7 @@ function Agenda({ agenda }) {
       )}
 
       <div className="space-y-3">
-        {AGENDA_BUCKETS.map(([k, label]) => {
+        {buckets.map(([k, label]) => {
           const items = Array.isArray(agenda[k]) ? agenda[k] : [];
           if (!items.length) return null;
           return (

@@ -190,6 +190,11 @@ router.get('/:id', (req, res) => {
     panel: parseJsonColumn(assessment.panel_output),
     agenda: parseJsonColumn(assessment.agenda_output),
     bear: parseJsonColumn(assessment.bear_agent_output),
+    // The memo-parity layer: cited market research, the claims-vs-documents table, and
+    // the computed returns math. Null on assessments run before this shipped.
+    research: parseJsonColumn(assessment.research_output),
+    claims: parseJsonColumn(assessment.claims_output),
+    returns: parseJsonColumn(assessment.returns_output),
     // The headline facts, one tidy object. Any field may be null (a just-typed founder
     // has almost nothing yet) — the UI shows only what's present.
     company: {
@@ -1062,6 +1067,30 @@ async function runAssessmentAgents(assessmentId, founderId) {
       ? AGENT_PROMPTS.founderRubric
       : AGENT_PROMPTS.buildRubricPrompt(rubric);
 
+    // ── Returns math (deterministic) + market-research kickoff ──
+    // Returns is arithmetic from the round terms on the founder record — computed in
+    // code, never by a model, same law as conviction. Market research is the cited web
+    // layer: we start the Exa GATHER now (network-only, no Anthropic contention) so it
+    // overlaps the room's LLM work; the single extraction call happens after the room,
+    // when the rate limit is free. Both are additive — a failure never blocks the run.
+    let returns = { status: 'need_inputs' };
+    let researchCompany = null;
+    if (founderId && ownerId) {
+      const f = db.prepare('SELECT company, domain, company_one_liner, round_size, valuation, security_type, investment_amount FROM founders WHERE id = ? AND created_by = ?').get(founderId, ownerId);
+      if (f) {
+        const { computeReturns } = require('../lib/returns');
+        returns = computeReturns({ roundSize: f.round_size, valuation: f.valuation, securityType: f.security_type, investmentAmount: f.investment_amount });
+        researchCompany = { name: f.company, domain: f.domain, one_liner: f.company_one_liner };
+      }
+    }
+    db.prepare('UPDATE opportunity_assessments SET returns_output = ? WHERE id = ?').run(JSON.stringify(returns), assessmentId);
+
+    const { gatherDealResearch, gateResearch } = require('../pipeline/deal-research');
+    const researchGather = researchCompany
+      ? gatherDealResearch({ userId: ownerId, company: researchCompany })
+          .catch((e) => ({ status: 'error', sources: [], urlSet: new Set(), queries: [], asContext: '', _err: e.message }))
+      : Promise.resolve({ status: 'no_subject', sources: [], urlSet: new Set(), queries: [], asContext: '' });
+
     // ── The rubric runs FIRST, alone. Then the depth layer fans out. ──
     //
     // The rubric agent is the ONLY input to the conviction score. (It used to be a
@@ -1100,9 +1129,13 @@ async function runAssessmentAgents(assessmentId, founderId) {
     // supplies bear_adjustment into conviction. They inform the reader; they do not
     // decide the number. Run under a bounded pool so nine concurrent calls don't lose
     // the rate-limit fight (the same lesson that isolated the rubric above).
+    // The claims-vs-documents pass rides in the same bounded pool as the room (another
+    // materials-only LLM call), so it respects the concurrency cap rather than firing a
+    // tenth request outside it. It's appended AFTER The Bear so the bear index is stable.
     const roomThunks = [
       ...AGENT_PROMPTS.LENSES.map((lens) => () => runAgent(client, lens.prompt, cappedContext, signal)),
       () => runAgent(client, AGENT_PROMPTS.bear, cappedContext, signal),
+      () => runAgent(client, AGENT_PROMPTS.claimsCheck, cappedContext, signal),
     ];
     const roomResults = await runPool(roomThunks, 4);
 
@@ -1119,6 +1152,31 @@ async function runAssessmentAgents(assessmentId, founderId) {
       return { key: lens.key, label: lens.label, weighs: lens.weighs, ...card };
     });
     const bearOut = settle(roomResults[AGENT_PROMPTS.LENSES.length], 'The Bear');
+    const claimsOut = settle(roomResults[AGENT_PROMPTS.LENSES.length + 1], 'Claims Check');
+
+    // ── Finalize market research ──
+    // The Exa gather (started before the rubric) is awaited here, then ONE extraction
+    // call turns the retrieved pages into cited findings. gateResearch drops any finding
+    // whose source_url isn't a page we actually retrieved, so an invented citation can't
+    // survive. The room's LLM calls are done, so this extraction isn't fighting them.
+    let research = { status: 'not_run', findings: { comps: [], market_size: [], why_now: [], valuation_benchmarks: [] }, sources: [] };
+    try {
+      const gathered = await researchGather;
+      if (gathered && gathered.status === 'ok' && gathered.asContext) {
+        const header = `COMPANY: ${researchCompany?.name || 'Unknown'}\nDOMAIN: ${researchCompany?.domain || researchCompany?.one_liner || ''}\n`;
+        const extracted = await runAgent(client, AGENT_PROMPTS.marketResearch, header + gathered.asContext, signal);
+        research = {
+          ...gateResearch(extracted, gathered.urlSet),
+          queries: gathered.queries,
+          source_list: gathered.sources.map((s) => ({ url: s.url, title: s.title })),
+        };
+        console.log(`[Assessment ${assessmentId}] market research: ${gathered.sources.length} pages, ${research.dropped || 0} finding(s) dropped (uncited)`);
+      } else {
+        research = { status: gathered?.status || 'not_run', findings: { comps: [], market_size: [], why_now: [], valuation_benchmarks: [] }, sources: [], queries: gathered?.queries || [] };
+      }
+    } catch (e) {
+      console.warn(`[Assessment ${assessmentId}] market research skipped: ${e.message}`);
+    }
 
     // The Bear is the ninth voice in the room AND the risk pass that feeds the score.
     // agentOutputs carries only what conviction + the tested arithmetic touch (bear,
@@ -1170,6 +1228,11 @@ async function runAssessmentAgents(assessmentId, founderId) {
       pattern_agent_output = NULL, status = 'synthesizing'
       WHERE id = ?
     `).run(JSON.stringify(panel), JSON.stringify(bearOut), JSON.stringify(rubricOut), assessmentId);
+
+    // The cited research + the claims-vs-documents reconciliation get their own columns,
+    // so the Read page and the memo export render them as first-class sections.
+    db.prepare('UPDATE opportunity_assessments SET research_output = ?, claims_output = ? WHERE id = ?')
+      .run(JSON.stringify(research), JSON.stringify(claimsOut), assessmentId);
 
     if (signal.aborted) return;
 
@@ -1229,7 +1292,7 @@ async function runAssessmentAgents(assessmentId, founderId) {
     // already-decided conviction; it cannot move the number (correctSynthesisScores
     // stamps the code's verdict over anything the model emitted).
     try {
-      const synthesis = await runPanelSynthesis(client, AGENT_PROMPTS.panelSynthesis, panel, bearOut, cappedContext, signal, conviction, rubric);
+      const synthesis = await runPanelSynthesis(client, AGENT_PROMPTS.panelSynthesis, panel, bearOut, cappedContext, signal, conviction, rubric, research, claimsOut, returns);
       if (signal.aborted) return;
 
       // Override synthesis scores with deterministic computation. agentOutputs has no
@@ -1627,13 +1690,13 @@ const SYNTHESIS_MAX_TOKENS = 16000;
 
 // Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
 // lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
-async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric) {
+async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns) {
   const response = await anthropicCreateWithRetry(client, {
     model: ASSESSMENT_MODEL,
     max_tokens: SYNTHESIS_MAX_TOKENS,
     temperature: SCORING_TEMPERATURE,
     system: prompt.system,
-    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric) }],
+    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric, research, claims, returns) }],
   });
 
   const text = response.content[0].text.trim();

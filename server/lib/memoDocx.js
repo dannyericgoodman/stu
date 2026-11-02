@@ -133,6 +133,29 @@ const money = (n) => (n == null || n === '' ? null
   : (Number(n) >= 1e6 ? `$${(Number(n) / 1e6).toFixed(Number(n) % 1e6 ? 2 : 0)}M`
     : `$${Number(n).toLocaleString()}`));
 
+// A bordered table with a bold header row and arbitrary columns. Used for the
+// claims-vs-documents reconciliation and the returns scenarios.
+const gridTable = (header, rows, widths) => new Table({
+  width: { size: 100, type: WidthType.PERCENTAGE },
+  borders: {
+    top: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+    bottom: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+    left: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+    right: { style: BorderStyle.SINGLE, size: 1, color: 'BFBFBF' },
+    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: 'D9D9D9' },
+    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: 'D9D9D9' },
+  },
+  rows: [
+    new TableRow({
+      tableHeader: true,
+      children: header.map((h, i) => cell(h, { bold: true, width: widths[i] })),
+    }),
+    ...rows.map((r) => new TableRow({
+      children: r.map((v, i) => cell(v == null ? '' : String(v), { width: widths[i] })),
+    })),
+  ],
+});
+
 // ══════════════════════════════════════════════════════════════════════════
 // buildMemoDoc(assessment, { memo7m, defensibility, sources })
 // Returns a docx Document. Pure — no DB, no network, no model.
@@ -143,6 +166,9 @@ function buildMemoDoc(a, { memo7m = [], defensibility = null, sources = [] } = {
   const panel = j(a.panel_output) || [];
   const agenda = j(a.agenda_output) || {};
   const bear = j(a.bear_agent_output) || {};
+  const returns = j(a.returns_output) || null;
+  const claims = j(a.claims_output) || null;
+  const research = j(a.research_output) || null;
 
   const company = a.founder_company || 'Untitled company';
   const today = new Date().toISOString().slice(0, 10);
@@ -164,11 +190,23 @@ function buildMemoDoc(a, { memo7m = [], defensibility = null, sources = [] } = {
   // Danny's. They ship as explicit blanks rather than as a machine's guess.
   kids.push(H('Decision Header', HeadingLevel.HEADING_2));
   const band = conv.band || {};
+  // Entry terms: filled from the computed returns math when the round is priced, left as
+  // a [DANNY] blank when it isn't. Ownership is arithmetic, so Stu can supply it; the
+  // Invest/Pass call and the exit shape stay his.
+  const entryVal = (returns && returns.status === 'ok' && returns.entry)
+    ? [
+        money(a.round_size) && `${money(a.round_size)} round`,
+        `${returns.inputs.post_money_label} post`,
+        `${returns.entry.check_label} check`,
+      ].filter(Boolean).join(' · ') +
+      ` → ${returns.entry.entry_ownership_label} entry` +
+      (returns.entry.exit_to_return_fund_label !== '—' ? ` · ${returns.entry.exit_to_return_fund_label} exit returns the fund` : '')
+    : '[DANNY: round · valuation · our check → ownership]';
   kids.push(factTable([
     ['Recommendation', '[DANNY: Invest / Pass / Watch · $ amount · resulting ownership]'],
     ['The bet, in one falsifiable sentence',
       '[DANNY: We believe X. Right if [measurable Y] by [date Z]; wrong if not.]'],
-    ['Entry', '[DANNY: round · valuation · our check → ownership]'],
+    ['Entry', entryVal],
     ['Stu conviction',
       conv.determinate === false || conv.score == null
         ? 'Indeterminate — not enough evidence to score. See Calibration below.'
@@ -200,6 +238,26 @@ function buildMemoDoc(a, { memo7m = [], defensibility = null, sources = [] } = {
     kids.push(factTable(facts));
   }
 
+  // ── Claims vs. documents ─────────────────────────────────────────────
+  // The house memo's reconciliation: what the founder says against what the SAME
+  // materials substantiate, with the gap named. Built materials-only by claimsCheck.
+  const claimRows = claims && Array.isArray(claims.claims) ? claims.claims : [];
+  if (claimRows.length || (claims && claims.headline)) {
+    kids.push(H('Claims vs. documents', HeadingLevel.HEADING_2));
+    if (claims.headline) kids.push(P(claims.headline, { italics: true, color: GREY, size: 19 }));
+    if (claimRows.length) {
+      kids.push(gridTable(
+        ['What they say', 'What the documents show', 'Gap'],
+        claimRows.map((c) => [
+          flat(c.claim),
+          flat(c.what_docs_show),
+          [flat(c.gap), c.severity ? `(${c.severity})` : ''].filter(Boolean).join(' '),
+        ]),
+        [30, 44, 26],
+      ));
+    }
+  }
+
   // ── The 7-M body ─────────────────────────────────────────────────────
   // Recommendation · Management · Model · Market · Momentum · Malfeasance ·
   // Conditions. Exactly the order the house memo uses.
@@ -207,6 +265,56 @@ function buildMemoDoc(a, { memo7m = [], defensibility = null, sources = [] } = {
     kids.push(H(s.title, HeadingLevel.HEADING_2));
     if (s.note) kids.push(P(s.note, { italics: true, color: GREY, size: 19 }));
     kids.push(...prose(s.body));
+  }
+
+  // ── Market research (cited) ──────────────────────────────────────────
+  // The retrieved web layer: funded comps, market size, why-now, valuation benchmark.
+  // Every finding carries the URL it came from; the run already dropped any finding
+  // whose source wasn't a page it actually retrieved.
+  const rf = research && research.status === 'ok' ? (research.findings || {}) : null;
+  if (rf && ((rf.comps?.length || 0) + (rf.market_size?.length || 0) + (rf.why_now?.length || 0) + (rf.valuation_benchmarks?.length || 0)) > 0) {
+    kids.push(H('Market research', HeadingLevel.HEADING_2));
+    kids.push(P('Retrieved from the web and cited. Figures come from the linked pages, not from the model.', { italics: true, color: GREY, size: 19 }));
+    const srcTag = (u) => (u ? ` (${String(u).replace(/^https?:\/\//i, '').replace(/\/$/, '').split('/')[0]})` : '');
+    if (rf.why_now?.length) {
+      kids.push(P('Why now', { bold: true, after: 60 }));
+      kids.push(...prose(rf.why_now.map((x) => `- ${[x.event, x.date].filter(Boolean).join(', ')} — ${x.point}${srcTag(x.source_url)}`).join('\n')));
+    }
+    if (rf.comps?.length) {
+      kids.push(P('Comps & funding', { bold: true, after: 60 }));
+      kids.push(...prose(rf.comps.map((x) => `- ${x.name}${x.funding ? ` (${x.funding})` : ''} — ${x.point}${srcTag(x.source_url)}`).join('\n')));
+    }
+    if (rf.market_size?.length) {
+      kids.push(P('Market size', { bold: true, after: 60 }));
+      kids.push(...prose(rf.market_size.map((x) => `- ${x.figure} — ${x.point}${srcTag(x.source_url)}`).join('\n')));
+    }
+    if (rf.valuation_benchmarks?.length) {
+      kids.push(P('Valuation benchmark', { bold: true, after: 60 }));
+      kids.push(...prose(rf.valuation_benchmarks.map((x) => `- ${x.figure} — ${x.point}${srcTag(x.source_url)}`).join('\n')));
+    }
+  }
+
+  // ── Returns ──────────────────────────────────────────────────────────
+  // Ownership and the exit that returns the fund, computed in code (lib/returns.js).
+  if (returns && returns.status === 'ok' && Array.isArray(returns.scenarios) && returns.scenarios.length) {
+    kids.push(H('Returns', HeadingLevel.HEADING_2));
+    kids.push(P(`${returns.inputs.post_money_label} post-money · ${returns.inputs.fund_size_label} fund.`, { italics: true, color: GREY, size: 19 }));
+    kids.push(gridTable(
+      ['Check', 'Ownership (entry)', 'Ownership (exit)', 'Exit to return the fund'],
+      returns.scenarios.map((s) => [
+        s.check_label + (returns.our_check === s.check ? ' (ours)' : ''),
+        s.entry_ownership_label,
+        s.exit_ownership_label,
+        s.exit_to_return_fund_label,
+      ]),
+      [22, 26, 26, 26],
+    ));
+    if (Array.isArray(returns.assumptions) && returns.assumptions.length) {
+      kids.push(P(returns.assumptions.join(' '), { color: GREY, size: 18 }));
+    }
+  } else if (returns && returns.status === 'need_inputs') {
+    kids.push(H('Returns', HeadingLevel.HEADING_2));
+    kids.push(P(returns.note || 'Add the round terms to size ownership and the exit that returns the fund.', { italics: true, color: GREY, size: 19 }));
   }
 
   // ── Defensibility ────────────────────────────────────────────────────

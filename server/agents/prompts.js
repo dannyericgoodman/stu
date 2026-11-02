@@ -1432,7 +1432,9 @@ Every lens filed questions, each tagged with an owner (Founder / SME / Expert ca
 This is a comprehensive POV, not a summary. Cover team, product, and market in depth. Rules for every section:
 - Ground every claim in a lens card or the source materials, and cite it inline: (Founder Edge), (deck), (data room: X), (founder call). Flag holes as [GAP: ...]. A flagged gap beats a confident guess.
 - Where a lens runs point on a section, let its read carry the section and name it where it sharpens the point.
-- MARKET DATA HONESTY: the comps, market map, and sizing come ONLY from the provided materials (you have no web access). Do not invent a comparable, a competitor, or a number. If the materials name comps (like a deck or a data room often does), use them and cite them. If they don't, say the map is thin and put it on the agenda. Never fabricate a market.
+- MARKET DATA HONESTY: the comps, market map, why-now, and sizing come from two places only — the provided materials AND the MARKET RESEARCH block (cited web findings retrieved for this deal, each already checked against the page it came from). Use both, and cite which: (deck), (data room: X), or the source name/URL from a research finding. Do NOT invent a comparable, a competitor, a market size, or a valuation. If neither the materials nor the research supports a point, say the map is thin and put it on the agenda. A cited research finding is evidence; your training-data memory of a company is not.
+- VALUATION AND RETURNS: the RETURNS block gives the computed ownership and exit-to-return-fund math, and the research may give current seed/pre-seed valuation medians. Use them to say plainly whether this round is priced ahead of, at, or below the market, and what exit returns the fund — the way the house memos do. Do not recompute the ownership math; it's decided in code.
+- CLAIMS VS DOCUMENTS: the CLAIMS block reconciles what the founder says against what the materials show. Where a claim is softer than stated, let that calibrate the momentum/traction read — don't repeat the founder's number as fact if the documents don't support it.
 - Do not eliminate a section. If a section is thin because the inputs are thin, say so plainly in one line rather than padding.
 - Write it in Danny's voice (see above). This is the whole point of the exercise.
 
@@ -1465,11 +1467,13 @@ Return JSON (no markdown wrapping). Every string value is prose in Danny's voice
   },
   "top_priorities": ["The 3-5 questions from the agenda that most change the decision, highest first, each one line."]
 }`,
-  // The panel array, The Bear, the decided conviction, and the rubric that judged
-  // this run (name + dimensions so the chair explains the actual yardstick, not
-  // a hard-coded "four movements"). Kept the same argument shape spirit as the
-  // old synthesis so the orchestrator call site stays legible.
-  user: (panel, bear, conviction, context, rubric) => `Chair the room. The verdict below is already decided — explain it, do not re-derive it.
+  // The panel array, The Bear, the decided conviction, the source context, the rubric
+  // that judged this run (name + dimensions, so the chair explains the actual yardstick
+  // rather than a hard-coded "four movements"), plus the cited market research, the claims
+  // reconciliation, and the computed returns math. The three new blocks are what let the
+  // chair write the research the memo is made of. Same argument-shape spirit as the old
+  // synthesis so the orchestrator call site stays legible.
+  user: (panel, bear, conviction, context, rubric, research, claims, returns) => `Chair the room. The verdict below is already decided — explain it, do not re-derive it.
 
 ════════ THE RUBRIC THAT JUDGED THIS RUN ════════
 "${(rubric && rubric.name) || 'Founder Rubric'}": ${((rubric && rubric.blurb) || 'The evaluation framework this run was scored against.').trim()}
@@ -1489,7 +1493,107 @@ ${JSON.stringify(panel, null, 2)}
 ════════ THE BEAR (the ninth voice; also the risk pass that fed the score) ════════
 ${JSON.stringify(bear, null, 2)}
 
+════════ MARKET RESEARCH (cited web findings retrieved for this deal; each already checked against its source page) ════════
+${research && (research.status === 'ok')
+  ? JSON.stringify(research.findings, null, 2)
+  : `>>> No market research available (${research?.status || 'not run'}). Comps, market map, and why-now must come from the materials only; flag what's thin. <<<`}
+
+════════ CLAIMS vs DOCUMENTS (what the founder says against what the materials show) ════════
+${claims && !claims.error && Array.isArray(claims.claims)
+  ? JSON.stringify(claims, null, 2)
+  : `>>> No claims reconciliation available. Read founder numbers with appropriate caution. <<<`}
+
+════════ RETURNS (ownership + exit-to-return-fund, computed in code — a fact, do not recompute) ════════
+${returns && returns.status === 'ok'
+  ? JSON.stringify({ inputs: returns.inputs, entry: returns.entry, scenarios: returns.scenarios, assumptions: returns.assumptions }, null, 2)
+  : `>>> Returns math not computed (${returns?.status || 'no priced round'}). Say the round terms are needed to size ownership. <<<`}
+
 ════════ ORIGINAL OPPORTUNITY DATA ════════
+${context}`,
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// MARKET RESEARCH — the cited research layer (extraction half).
+//
+// Given REAL web pages retrieved for the deal (server/pipeline/deal-research.js runs
+// the Exa search), extract the structured findings a house memo needs: funded comps,
+// market-size anchors, a dated why-now, a valuation benchmark. This is the one place
+// in the assessment with web evidence, so the honesty rule is inverted from HOUSE: use
+// the pages, but cite each finding with a source_url copied from a [SOURCE] block — and
+// the orchestrator DROPS any finding whose url isn't one we actually retrieved
+// (gateResearch), so a made-up citation can't survive. Do NOT include HOUSE's
+// materials-only block here; the pages ARE the materials.
+// ══════════════════════════════════════════════════════════════════════════
+const marketResearch = {
+  system: `You extract cited market research from REAL web pages retrieved for one deal. Another step already searched the web; your only job is to read the pages below and pull out what a Superior Studios memo needs, citing each finding.
+
+${VOICE}
+
+WHAT TO EXTRACT (only what the pages actually support):
+- comps: competitors and comparable companies/deals named in the pages, with their funding/round/valuation IF the page states it.
+- market_size: TAM/market-size figures with the year and who published them.
+- why_now: dated shocks and shifts in the last ~18 months (a launch, a regulation, an acquisition, a cost curve crossing) that the pages document.
+- valuation_benchmarks: current seed/pre-seed median valuations or round sizes (PitchBook, Carta, NVCA) that the pages state.
+
+THE CITATION RULE — this is the whole point:
+- Every finding MUST carry a source_url copied EXACTLY from the "URL:" line of the [SOURCE] block it came from. Do not shorten, guess, or synthesize a URL.
+- If the pages do not support a category, return an empty array for it. An empty array is the correct, honest answer — never pad a category with something the pages don't say.
+- Do not use anything you "know" from training. Only what is on these pages.
+
+${JSON_RULES}
+
+Return JSON (no markdown). The "point"/"event" fields are prose in Danny's voice; keep each to one or two plain sentences:
+{
+  "comps": [ { "name": "company/deal", "funding": "round + amount + valuation if stated, else empty string", "point": "what it tells us about THIS deal", "source_url": "exact URL from a [SOURCE] block" } ],
+  "market_size": [ { "figure": "the number with units and year", "point": "what it means for this market", "source_url": "..." } ],
+  "why_now": [ { "event": "the dated shock/shift", "date": "when, if the page states it, else empty string", "point": "why it matters now", "source_url": "..." } ],
+  "valuation_benchmarks": [ { "figure": "e.g. $18.3M median US seed pre-money 2026", "point": "how this deal's ask compares, if you can tell", "source_url": "..." } ]
+}`,
+  user: (context) => `Extract cited findings from the web pages below. Every finding needs a source_url copied exactly from a [SOURCE] block. If a category isn't supported, return [].
+
+${context}`,
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// CLAIMS vs DOCUMENTS — the Permute crown jewel, as an agent.
+//
+// The most distinctive thing in the house memos is the reconciliation table: what the
+// founder SAYS against what the data room actually SHOWS, with the gap named. This
+// extracts the founder's checkable claims from the materials and, for each, states what
+// the SAME materials substantiate and where the gap is. Materials-only and honesty-
+// gated: "what the documents show" either cites the material or says the materials carry
+// no support. It never reaches outside the provided inputs.
+// ══════════════════════════════════════════════════════════════════════════
+const claimsCheck = {
+  system: `You build the claims-versus-documents reconciliation for a Superior Studios memo — the table that separates what the founder SAYS from what the materials actually SHOW.
+
+${HOUSE}
+
+${VOICE}
+
+HOW TO DO IT:
+- Pull the founder's checkable, material claims from the inputs: traction, revenue/ARR, customer counts, retention, pipeline, growth, round/valuation, team size, margins. Prefer the claims that would most change the decision if they were softer than stated.
+- For each claim, state what the SAME materials substantiate. If a deck claims "$400K ARR" but the only support is one invoice and a cash figure, say exactly that. If nothing in the materials supports the claim, say "No support in the materials" — do not go find support elsewhere; you have none.
+- Name the gap precisely and rate how much it matters.
+- If the materials and the claim agree, say so plainly — a confirmed claim is a useful row too.
+- Do NOT invent numbers. Every figure in "what_docs_show" must come from the materials. This is the one rule that makes the table worth anything.
+
+${JSON_RULES}
+
+Return JSON (no markdown). Prose fields in Danny's voice, one or two plain sentences each:
+{
+  "claims": [
+    {
+      "claim": "what the founder/deck says, quoted or tightly paraphrased",
+      "what_docs_show": "what the SAME materials actually substantiate, with the specific number/document — or 'No support in the materials'",
+      "gap": "the delta, named precisely (e.g. 'counts a one-time pilot payment as recurring')",
+      "severity": "high | medium | low | confirmed"
+    }
+  ],
+  "headline": "One sentence: do the numbers the founder is raising on match what the documents support? If there's no data room, say the claims are unverified and that's the finding."
+}`,
+  user: (context) => `Build the claims-versus-documents reconciliation from the materials below. Only the materials — never reach outside them. Name the gap for each checkable claim.
+
 ${context}`,
 };
 
@@ -1500,6 +1604,9 @@ module.exports = {
   // Danny's default preset; every other rubric (presets and user-built) goes
   // through the builder so dimensions are defined by the investor, not the code.
   buildRubricPrompt,
+  // The cited research layer (extraction) and the claims-vs-documents reconciliation.
+  // marketResearch reads retrieved web pages; claimsCheck reads only the deal materials.
+  marketResearch, claimsCheck,
   // The expert panel — nine named lenses that ARE the depth layer. Eight named
   // traditions here + The Bear (below) make the room of nine. Each writes the
   // shared lens schema; The Bear keeps its own schema because it alone feeds
