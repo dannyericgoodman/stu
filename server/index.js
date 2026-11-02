@@ -1133,46 +1133,51 @@ app.listen(PORT, () => {
 
     console.log('Scout scheduled (10:00 PM CT Mon & Fri — sweep twice weekly, rosters Mondays, then enrich + score)');
 
-    // Daily talent sourcing — source EACH open role against its own function + JD, so
-    // marketing/product/CS roles get fresh candidates automatically (not just engineering).
-    const { runTalentEngine } = require('./pipeline/talent-engine');
-    // 6:30 AM CT, declared. This read `30 12 * * *` with no timezone while claiming
-    // "6:30 AM CT" below: 12:30 UTC is 7:30 AM CDT, not 6:30 CT, and it moved with
-    // daylight saving because nothing pinned it.
+    // Daily hiring sourcing — refresh EACH open hiring role against its JD, so portfolio
+    // roles get fresh, graded candidates automatically. This REPLACED the old talent-
+    // engine job, which sourced the retired talent_* tables (that whole wing is gone) and
+    // never touched the live hiring_* pillar. The new engine (pipeline/hiring-source.js)
+    // is what the UI's "Source" button runs; the cron just runs it unattended per role.
+    const { runSourcing } = require('./pipeline/hiring-source');
+    // 6:30 AM CT, declared and pinned to the timezone (the old job ran `30 12 * * *` with
+    // no timezone while claiming CT, so it walked an hour with daylight saving).
     cron.schedule('30 6 * * *', async () => {
       const dbi = require('./db');
-      const roles = dbi.prepare(`SELECT id, user_id, title FROM talent_roles
+      // Owner (user 1) always, plus any paid user — the same cost guard the other crons
+      // use, so a free account's open role can't spend on the nightly engine.
+      const roles = dbi.prepare(`SELECT id, user_id, title FROM hiring_roles
         WHERE is_deleted = 0 AND status = 'open'
-          AND user_id IN (SELECT id FROM users WHERE has_paid = 1)
+          AND (user_id = 1 OR user_id IN (SELECT id FROM users WHERE has_paid = 1))
         ORDER BY user_id, updated_at DESC LIMIT 25`).all();
-      console.log(`[Cron] Daily talent sourcing across ${roles.length} open role(s)`);
+      console.log(`[Cron] Daily hiring sourcing across ${roles.length} open role(s)`);
       const { recordJobRun } = require('./services/health');
       if (!roles.length) {
-        // `nothing` is a first-class outcome. A ledger that only fills on success
-        // is the bug it was built to fix — silence must mean "I looked".
-        recordJobRun('talent_sourcing', 'nothing', 'no open roles', 1);
+        // `nothing` is a first-class outcome. A ledger that only fills on success is the
+        // bug it was built to fix — silence must mean "I looked".
+        recordJobRun('hiring_sourcing', 'nothing', 'no open roles', 1);
         return;
       }
-      let added = 0, failed = 0;
+      let shortlisted = 0, failed = 0;
       for (const role of roles) {
         try {
-          const r = await runTalentEngine({ userId: role.user_id, roleId: role.id });
-          added += r.candidatesAdded || 0;
-          console.log(`[Cron][Talent] role ${role.id} "${role.title}": found ${r.candidatesFound}, added ${r.candidatesAdded}, ${r.matchesCreated} matches`);
+          const runId = dbi.prepare("INSERT INTO hiring_runs (user_id, role_id, kind, status, found) VALUES (?, ?, 'source', 'running', 0)").run(role.user_id, role.id).lastInsertRowid;
+          await runSourcing(runId, role.user_id, role.id);
+          const r = dbi.prepare('SELECT found, shortlisted FROM hiring_runs WHERE id = ?').get(runId);
+          shortlisted += (r && r.shortlisted) || 0;
+          console.log(`[Cron][Hiring] role ${role.id} "${role.title}": found ${r?.found || 0}, shortlisted ${r?.shortlisted || 0}`);
         } catch (err) {
           failed++;
-          console.error(`[Cron][Talent] role ${role.id} failed:`, err.message);
+          console.error(`[Cron][Hiring] role ${role.id} failed:`, err.message);
         }
       }
-      // This fans out one full engine run PER ROLE, up to 25. One open role today,
-      // so it's ~free — but the cost is linear in roles and nothing recorded it,
-      // so a day with 12 open reqs would have been a surprise on the invoice.
+      // One full sourcing run PER ROLE, up to 25. Cost is linear in open roles, and it's
+      // recorded so a day with a dozen reqs isn't a surprise on the invoice.
       recordJobRun(
-        'talent_sourcing', failed ? 'partial' : 'ok',
-        `${roles.length} role(s), +${added} candidates${failed ? `, ${failed} failed` : ''}`, 1
+        'hiring_sourcing', failed ? 'partial' : 'ok',
+        `${roles.length} role(s), ${shortlisted} shortlisted${failed ? `, ${failed} failed` : ''}`, 1
       );
     }, { timezone: 'America/Chicago' });
-    console.log('Daily talent sourcing engine scheduled (6:30 AM CT, per open role)');
+    console.log('Daily hiring sourcing engine scheduled (6:30 AM CT, per open role)');
 
     // ── Daily SEC Form D IL filings pull — 3:45 AM CT, ahead of the scout ──
     //
