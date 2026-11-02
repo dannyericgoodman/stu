@@ -201,8 +201,22 @@ export function ConvictionBadge({ assessment, score, size = 'sm' }) {
   const value = score !== undefined ? score : assessment.conviction_score;
   const pad = size === 'xs' ? 'px-1.5 py-0.5 text-2xs' : 'px-2 py-0.5 text-xs';
 
-  // Legacy row scored under the old ladder — say so rather than dressing it as a band.
+  // No band. First separate a CURRENT run that failed or is still going from a genuine
+  // legacy row — a run that errored today must not be dressed as a retired-ladder score.
   if (!band) {
+    const st = assessment.status;
+    if (st === 'error' || st === 'partial' || st === 'running' || st === 'processing_inputs' || st === 'synthesizing') {
+      const label = st === 'error' ? 'failed' : st === 'partial' ? 'partial' : 'running';
+      const tip = st === 'error' ? "This run didn't finish — re-run it"
+        : st === 'partial' ? 'Finished with gaps — re-run to complete the write-up'
+        : 'Still running';
+      return (
+        <span title={tip} className={`inline-flex items-center rounded-full border ${pad} border-gray-200 bg-white text-gray-400 font-normal`}>
+          {label}
+        </span>
+      );
+    }
+    // Genuine legacy row scored under the old ladder — say so rather than dressing it as a band.
     const legacy = assessment.overall_signal || assessment.status;
     if (!legacy) return null;
     return (

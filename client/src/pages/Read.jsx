@@ -75,6 +75,25 @@ export default function Read() {
     return () => clearTimeout(timer);
   }, [load]);
 
+  // Re-run and cancel, the live page's own. These used to live only on the orphaned
+  // /full detail page, so a run that failed or stalled here had no recovery — the exact
+  // dead end a content-rich deal hits when the write-up doesn't land.
+  const [rerunning, setRerunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  async function handleRerun() {
+    if (rerunning) return;
+    setRerunning(true);
+    try { const r = await api.rerunAssessment(id, { inputs: {} }); nav(`/assess/${r.id}`); }
+    catch (e) { setErr(e.message); setRerunning(false); }
+  }
+  async function handleCancel() {
+    if (cancelling) return;
+    setCancelling(true);
+    try { await api.cancelAssessment(id); await load(); }
+    catch (e) { setErr(e.message); }
+    finally { setCancelling(false); }
+  }
+
   if (err) return <div className="p-4 text-small text-danger">{err}</div>;
   if (!a) return <ReadSkeleton />;
 
@@ -98,6 +117,15 @@ export default function Read() {
         )}
         <span className="text-mini text-ink-4">{String(a.created_at).slice(0, 10)}</span>
         <div className="flex-1" />
+        {running ? (
+          <button onClick={handleCancel} disabled={cancelling} className="text-mini text-ink-4 hover:text-ink disabled:opacity-40">
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        ) : (
+          <button onClick={handleRerun} disabled={rerunning} className="text-mini text-ink-4 hover:text-ink disabled:opacity-40" title="Re-run from the same inputs">
+            {rerunning ? 'Starting…' : 'Re-run'}
+          </button>
+        )}
         <Status a={a} />
       </div>
 
@@ -105,6 +133,7 @@ export default function Read() {
           facts + verdict up top; your own call is an optional annotation, not a gate. */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-4 space-y-5">
+          <RunBanner a={a} onRerun={handleRerun} rerunning={rerunning} />
           <Headline a={a} conv={conv} running={running} />
           {!running && (
             <>
@@ -114,6 +143,34 @@ export default function Read() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// A recovery banner for the two states where the page would otherwise look broken:
+// a run that errored out, and a 'partial' run where the write-up didn't generate but
+// the score/claims/room/memo did. Both get a plain explanation and a Re-run, so a
+// content-rich deal that drops its narrative is never a dead end.
+function RunBanner({ a, onRerun, rerunning }) {
+  const syn = parse(a.synthesis_output) || {};
+  const povMissing = a.status === 'partial' && !String(syn.key_takeaways || '').trim();
+  if (a.status !== 'error' && !povMissing) return null;
+  const danger = a.status === 'error';
+  return (
+    <div className={`rounded border p-3 flex items-start gap-3 ${danger ? 'border-danger/40 bg-danger/5' : 'border-attention/40 bg-attention/5'}`}>
+      <div className="flex-1">
+        <div className={`text-small font-semibold ${danger ? 'text-danger' : 'text-ink'}`}>
+          {danger ? "This run didn't finish" : 'The written POV didn’t generate on this run'}
+        </div>
+        <p className="text-mini text-ink-3 leading-relaxed mt-0.5">
+          {danger
+            ? 'Nothing below is a judgment about the company. Re-run it from the same inputs.'
+            : 'The score, claims, the detailed analysis and the memo below still stand — re-run to regenerate the narrative.'}
+        </p>
+      </div>
+      <button onClick={onRerun} disabled={rerunning} className="btn-secondary h-6 text-mini flex-none disabled:opacity-40">
+        {rerunning ? 'Starting…' : 'Re-run'}
+      </button>
     </div>
   );
 }
@@ -144,6 +201,12 @@ function Headline({ a, conv, running }) {
       {/* The verdict, front and center. */}
       <div className="mt-4 rounded border border-line-2 bg-ground-2 p-3">
         {running ? <StillReading a={a} />
+          : a.status === 'error' ? (
+            <div>
+              <div className="text-large font-semibold text-ink">No score</div>
+              <p className="text-small text-ink-2 mt-1 leading-relaxed max-w-md">This run didn't finish, so nothing here is a judgment about the company. Use Re-run above to try again from the same inputs.</p>
+            </div>
+          )
           : !a.conviction_output ? <PredatesEngine a={a} />
           : !conv?.determinate ? <Held conv={conv} a={a} />
           : <Verdict conv={conv} />}
@@ -189,12 +252,12 @@ function ReadBody({ a, conv }) {
       <Section title="Key takeaways" body={syn.key_takeaways} lead />
       <FounderQuestions agenda={a.agenda} />
       <ClaimsTable claims={a.claims} />
-      <Section title="The founders" body={syn.founders} lenses="Founder Edge · Hard Problems · Long Game" />
-      <Section title="The product" body={syn.product} lenses="Monopoly · Deep-Tech · Networks" />
+      <Section title="The founders" body={syn.founders} />
+      <Section title="The product" body={syn.product} />
       <MarketSection market={syn.market} />
       <Research research={a.research} />
-      <Section title="Right to win" body={syn.right_to_win} lenses="Founder Edge · Monopoly · Hard Problems" />
-      <Section title="Moat & defensibility" body={syn.moat} lenses="Monopoly · Deep-Tech · Networks" />
+      <Section title="Right to win" body={syn.right_to_win} />
+      <Section title="Moat & defensibility" body={syn.moat} />
       <Defensibility parts={a.defensibility} />
       <BearSection bear={a.bear} />
       <Returns returns={a.returns} />
@@ -238,7 +301,7 @@ function MarketSection({ market: m }) {
     <div className="border-t border-line pt-3 space-y-3">
       <div className="text-micro font-semibold uppercase text-ink-4">The market</div>
 
-      {m.why_now && <SubBlock label="Why now" lens="Inflection" body={m.why_now} />}
+      {m.why_now && <SubBlock label="Why now" body={m.why_now} />}
       {m.market_map && <SubBlock label="Market map" body={m.market_map} />}
 
       {m.comps?.length > 0 && (
@@ -272,7 +335,7 @@ function MarketSection({ market: m }) {
         </div>
       )}
 
-      {m.sizing_and_unit_economics && <SubBlock label="Sizing & unit economics" lens="Gurley" body={m.sizing_and_unit_economics} />}
+      {m.sizing_and_unit_economics && <SubBlock label="Sizing & unit economics" body={m.sizing_and_unit_economics} />}
     </div>
   );
 }
@@ -313,7 +376,7 @@ function Disagreements({ items }) {
   if (!items?.length) return null;
   return (
     <div className="border-t border-line pt-3">
-      <div className="text-micro font-semibold uppercase text-ink-4 mb-1.5">Where the room splits</div>
+      <div className="text-micro font-semibold uppercase text-ink-4 mb-1.5">Where the analysis splits</div>
       <div className="space-y-1">
         {items.map((d, i) => <p key={i} className="text-small text-ink-2 leading-relaxed">{typeof d === 'string' ? d : d?.point || ''}</p>)}
       </div>
@@ -932,7 +995,7 @@ function memoMarkdown(a) {
     if (a.bear && !a.bear.error) sec('The bear — what kills it', [a.bear.kill_shot_risk, a.bear.narrative].filter(Boolean).join('\n\n'));
     sec('Where this goes', syn.where_this_goes);
     if (syn.room_disagreements?.length) {
-      L.push('## Where the room splits', '');
+      L.push('## Where the analysis splits', '');
       syn.room_disagreements.forEach((x) => L.push(`- ${typeof x === 'string' ? x : x?.point || ''}`));
       L.push('');
     }
@@ -989,12 +1052,12 @@ function memoMarkdown(a) {
 }
 
 function StillReading({ a }) {
-  const stage = a.status === 'synthesizing' ? 'Chairing the room — writing the diligence agenda' : 'Convening the room — nine lenses on the deal';
+  const stage = a.status === 'synthesizing' ? 'Writing up the read' : 'Reading the deal from every angle';
   return (
     <div className="space-y-2">
       <div className="text-large font-semibold text-ink">Reading…</div>
       <p className="text-small text-ink-2 leading-relaxed max-w-md">
-        {stage}. A full read runs the Founder Rubric plus nine investor lenses on the strong model — it takes about five minutes. This updates on its own.
+        {stage}. A full read works through the deal from every angle on the strong model — about five minutes. This updates on its own.
       </p>
       <div className="space-y-1.5 pt-1">
         {Array.from({ length: 5 }).map((_, i) => (
@@ -1066,13 +1129,12 @@ function RoomAppendix({ panel, bear }) {
   const abstained = panel.filter((l) => l && l.applies === false && !l.error);
   const dark = panel.filter((l) => l && l.error);
   const bearSpoke = bear && !bear.error;
-  const count = spoke.length + (bearSpoke ? 1 : 0);
 
   return (
     <div className="border-t border-line pt-3">
       <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 text-left">
-        <span className="text-micro font-semibold uppercase text-ink-4">{open ? '▾' : '▸'} The room</span>
-        <span className="text-micro text-ink-4">{count} lens read{count === 1 ? '' : 's'} in full{abstained.length ? ` · ${abstained.length} abstained` : ''}</span>
+        <span className="text-micro font-semibold uppercase text-ink-4">{open ? '▾' : '▸'} The full read</span>
+        <span className="text-micro text-ink-4">{open ? 'collapse' : 'every angle, expanded'}</span>
       </button>
 
       {!open ? null : (
@@ -1328,13 +1390,9 @@ function MemoBody({ a }) {
 
 function ReadSkeleton() {
   return (
-    <div className="grid grid-cols-2 h-full divide-x divide-line-2">
-      {[0, 1].map((c) => (
-        <div key={c} className="p-4 space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-2 bg-ground-3 rounded-sm" style={{ width: `${[45, 80, 60, 70, 40, 65][i]}%` }} />
-          ))}
-        </div>
+    <div className="max-w-4xl mx-auto p-4 space-y-3">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="h-2 bg-ground-3 rounded-sm" style={{ width: `${[40, 80, 60, 70, 45, 85, 55, 65][i]}%` }} />
       ))}
     </div>
   );

@@ -220,7 +220,7 @@ export default function Assess() {
         if (rerunGroupId) payload.group_id = rerunGroupId;
         result = await api.createAssessment(payload);
       }
-      navigate(`/assess/${result.id}${isMemoTask ? '?tab=memo' : ''}`);
+      navigate(`/assess/${result.id}`);
     } catch (err) {
       console.error(err);
       alert('Failed to start assessment: ' + err.message);
@@ -256,9 +256,9 @@ export default function Assess() {
         subtitle={
           rerunMode ? 'Add new materials and re-evaluate'
           : showNew && isAssessmentTask ? 'Score a founder against your framework. A call transcript is what makes the questions answerable — a deck or a website alone cannot evidence most of them.'
-          : showNew && isMemoTask ? 'Run the full multi-agent eval and get it formatted as your Recommendation › Management › Model › Market › Momentum › Malfeasance › Conditions memo.'
+          : showNew && isMemoTask ? 'Run the full read and get it formatted as your Recommendation › Management › Model › Market › Momentum › Malfeasance › Conditions memo.'
           : showNew && isPrepTask ? 'Founder, company, website, and any materials → a pre-meeting briefing: founder profile, thesis fit, questions to ask, and what to watch for.'
-          : 'Multi-agent evaluations of your pipeline founders'
+          : 'A full investment read on your pipeline founders'
         }
         actions={
           <div className="flex items-center gap-2">
@@ -470,7 +470,7 @@ export default function Assess() {
             <div className="card p-4">
               <h3 className="text-sm font-semibold text-gray-700 mb-3">{isPrepTask ? 'Upload Materials' : 'Pitch Decks & Files'}</h3>
               <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center hover:border-blue-400 transition-colors cursor-pointer">
-                <input type="file" accept=".pdf,.txt,.doc,.docx" multiple onChange={handleFileUpload} className="hidden" id="file-upload" />
+                <input type="file" accept=".pdf,.txt" multiple onChange={handleFileUpload} className="hidden" id="file-upload" />
                 <label htmlFor="file-upload" className="cursor-pointer">
                   <svg className="w-6 h-6 text-gray-400 mx-auto mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -572,25 +572,19 @@ export default function Assess() {
                 </>
               ) : (
                 <>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Evaluation Agents</h3>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">How it reads the deal</h3>
                   <ul className="text-xs text-gray-500 space-y-2">
-                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Founder Evaluator</span> — team, DNA, traits, stage</li>
-                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Product Evaluator</span> — instincts, execution, defensibility</li>
-                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Market Analyst</span> — TAM, timing, why now</li>
-                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-gray-700 font-medium">The Bear</span> — adversarial risk analysis</li>
+                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Reads the deal from every angle</span> — team, product, market, timing</li>
+                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Grounds every claim</span> — sourced to the materials, or flagged</li>
+                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /><span className="text-gray-700 font-medium">Writes an IC-ready POV</span> — in your voice, with a diligence agenda</li>
+                    <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-gray-700 font-medium">Stress-tests the downside</span> — the case for passing</li>
                   </ul>
-                  {/* This used to read "All 4 agents run in parallel (Team 45% /
-                      Product 25% / Market 30%, then a Bear risk adjustment)".
-                      That weighting was RETIRED — correctSynthesisScores()
-                      documents killing it, because a flat weighted mean inverted
-                      the rubric: 10,10,1,1 scored 6.4 "Monitor" while 5,5,10,10
-                      scored 7.0 "write a memo". The intake page was describing an
-                      engine that no longer exists, which is worse than describing
-                      nothing: it tells Danny the score means something it doesn't. */}
+                  {/* Deliberately describes the activity, not the internal method — the
+                      scoring framework and the multi-angle read are not put in front of
+                      the user. */}
                   <p className="text-[11px] text-gray-400 mt-3 pt-3 border-t border-gray-100">
-                    The rubric agent runs first and alone — it sets the score from the four movements.
-                    Team, Product, Market and the Bear then run in parallel; their job is commentary and
-                    risk, and they can only ever dock the score, never raise it.
+                    The score comes from one evaluation framework, run first and alone. Everything else is
+                    commentary and risk — it can only ever dock the score, never raise it.
                   </p>
                 </>
               )}

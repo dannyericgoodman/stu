@@ -224,7 +224,7 @@ export default function AssessmentDetail() {
               ) : (
                 <button onClick={handlePushToNotion} disabled={notionState.status === 'pushing'}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                  title={notionState.error || 'Send this assessment to your Strider Notion'}>
+                  title={notionState.error || "Send this assessment to the fund's Notion"}>
                   {notionState.status === 'pushing' ? 'Sending…' : notionState.status === 'error' ? 'Retry → Notion' : 'Send to Notion'}
                 </button>
               )
