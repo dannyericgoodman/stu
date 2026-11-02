@@ -1690,17 +1690,38 @@ const SYNTHESIS_MAX_TOKENS = 16000;
 
 // Panel synthesis — same call shape as runSynthesis, but the prompt reads the nine
 // lens cards + The Bear + the decided conviction (see prompts.js panelSynthesis).
-async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns) {
-  const response = await anthropicCreateWithRetry(client, {
-    model: ASSESSMENT_MODEL,
-    max_tokens: SYNTHESIS_MAX_TOKENS,
-    temperature: SCORING_TEMPERATURE,
-    system: prompt.system,
-    messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric, research, claims, returns) }],
-  });
+async function runPanelSynthesis(client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns, retries = 1) {
+  // The chair is the single heaviest call in the run — the full context plus the nine
+  // lens cards plus research/claims/returns, generating a 16K-token report. On a rich
+  // deal (three transcripts, a technical review) a one-off garbled or dropped response
+  // used to fail the whole synthesis and leave the POV sections blank. The per-agent
+  // calls already retry once; the chair did not. It does now — on a thrown error AND on
+  // an unparseable response — which is exactly the content-rich deal that matters most.
+  const args = [client, prompt, panel, bear, context, signal, conviction, rubric, research, claims, returns];
+  let text;
+  try {
+    const response = await anthropicCreateWithRetry(client, {
+      model: ASSESSMENT_MODEL,
+      max_tokens: SYNTHESIS_MAX_TOKENS,
+      temperature: SCORING_TEMPERATURE,
+      system: prompt.system,
+      messages: [{ role: 'user', content: prompt.user(panel, bear, conviction, context, rubric, research, claims, returns) }],
+    });
+    text = response.content[0].text.trim();
+  } catch (e) {
+    if (retries > 0) {
+      console.warn(`[Assessment] panel synthesis call failed (${e.message}) — retrying once`);
+      return runPanelSynthesis(...args, retries - 1);
+    }
+    throw e;
+  }
 
-  const text = response.content[0].text.trim();
   const parsed = robustJsonParse(text);
+  if (parsed && !parsed.error) return parsed;
+  if (retries > 0) {
+    console.warn('[Assessment] panel synthesis JSON parse failed — retrying once');
+    return runPanelSynthesis(...args, retries - 1);
+  }
   if (parsed) return parsed;
   return { raw: text, error: 'Could not parse panel synthesis' };
 }
